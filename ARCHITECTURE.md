@@ -1,6 +1,6 @@
 # Architecture
 
-This lane is the contract and the scoring core. It does not load V-JEPA 2 or pi0.5, it does not open a viewer, and it does not talk to a database.
+This lane is the contract and the scoring core. It loads a model only through an adapter. The adapters here are `fake` and `vjepa2`. It does not open a viewer, and it does not talk to a database.
 
 ## Pipeline
 
@@ -28,6 +28,8 @@ Thresholds are constants in `src/physint/thresholds.py`. Changing them changes t
 | `predict_masked(clip, window, edit=None)` | `(pred, target)` on masked cells, row-major `(t, h, w)`. |
 | `mask(window)` | Bool grid of those cells. |
 | `grid()` | `{t, h, w, tubelet, patch_px}`. |
+| `raw_activations(clip, window)` | Layer residual before hooks, `[t, h, w, d_model]`. The straight-through estimate reads it. |
+| `visible_mean_baseline(clip, window)` | Masked-token guess equal to the mean of the visible patches. Same order as `predict_masked`. |
 
 The scorer only talks to this surface. It does not know whether the model is a world model or a policy.
 
@@ -45,7 +47,7 @@ The reference run (`--layer 16 --seed 0 --heldout-frac 0.2`, 30 clips) is the ac
 
 ## Next lanes
 
-1. **Real adapters.** Implement the protocol for V-JEPA 2 and pi0.5. They must run on MPS and CPU. They replace `fake`; they do not change the run folder or the gates.
+1. **pi0.5.** V-JEPA 2 is `src/physint/adapters/vjepa2`. The remaining real adapter is pi0.5. It must run on MPS and CPU. It does not change the run folder or the gates.
 2. **Clip-first viewer.** A local web UI that opens a run folder: video on the left, the feature list from `features.jsonl` and `scoreboard.json` on the right, activation maps from `feature_acts.parquet`. It only reads the contract.
 3. **Hosted ingest.** Upload a run folder into Postgres plus object storage. Shards and weights go to objects; manifest, scoreboard, and feature rows go to tables. Ingest reuses `physint validate` and refuses a folder that fails it.
 4. **Failed-clip API.** `upload a clip that the policy missed, return the features that drove it`. The response may cite only features with `real: true`, and only effects with `effect_kind: "ablation"`. Estimates are a ranking aid inside a run, not something the API serves as evidence.

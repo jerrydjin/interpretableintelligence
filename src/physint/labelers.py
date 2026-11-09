@@ -78,6 +78,25 @@ class FakeCueLabeller:
         }
 
 
+class NullLabeller:
+    """No label. Used when the clip has no planted cue channels."""
+
+    name = "none"
+
+    def label_feature(
+        self,
+        activation: np.ndarray,
+        train_mask: np.ndarray,
+        heldout_mask: np.ndarray,
+    ) -> dict:
+        del activation, train_mask, heldout_mask
+        return {
+            "label": "",
+            "label_model": self.name,
+            "label_holds_heldout": False,
+        }
+
+
 class LLMLabeller:
     """Stub for a future VLM/LLM labeller. Not called on the fake path."""
 

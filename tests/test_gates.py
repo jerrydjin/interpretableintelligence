@@ -2,13 +2,21 @@
 
 import pytest
 
-from physint.stats import feature_is_real, loss_recovered
+from physint.stats import feature_is_real, is_usable, loss_recovered
 
 
 def test_loss_recovered_scale():
     assert loss_recovered(loss_zero=10.0, loss_sae=10.0, loss_clean=0.0) == pytest.approx(0.0)
     assert loss_recovered(loss_zero=10.0, loss_sae=0.0, loss_clean=0.0) == pytest.approx(1.0)
     assert loss_recovered(loss_zero=10.0, loss_sae=3.0, loss_clean=0.0) == pytest.approx(0.7)
+
+
+def test_visible_mean_floor_blocks_usable_regardless_of_loss_recovered():
+    assert is_usable(1.0, loss_sae=0.2, loss_visible_mean=0.5) is True
+    assert is_usable(0.70, loss_sae=0.2, loss_visible_mean=0.5) is True
+    assert is_usable(1.0, loss_sae=0.5, loss_visible_mean=0.5) is False
+    assert is_usable(1.0, loss_sae=0.8, loss_visible_mean=0.5) is False
+    assert is_usable(0.699, loss_sae=0.1, loss_visible_mean=1.0) is False
 
 
 def test_loss_recovered_rejects_a_flat_scale():

@@ -42,8 +42,16 @@ def loss_recovered(loss_zero: float, loss_sae: float, loss_clean: float) -> floa
     return float(value)
 
 
-def is_usable(loss_recovered_value: float) -> bool:
-    return bool(loss_recovered_value >= USABLE_LOSS_RECOVERED)
+def is_usable(loss_recovered_value: float, loss_sae: float, loss_visible_mean: float) -> bool:
+    """Usable when the splice recovers enough loss and beats the visible-mean floor.
+
+    ``USABLE_LOSS_RECOVERED`` is unchanged. ``loss_sae < loss_visible_mean`` is an
+    additional requirement: a patched predictor that does not beat the mean of
+    the visible patches is not usable, regardless of ``loss_recovered``.
+    """
+    return bool(
+        loss_recovered_value >= USABLE_LOSS_RECOVERED and loss_sae < loss_visible_mean
+    )
 
 
 def percentile_le(value: float, samples: np.ndarray) -> float:

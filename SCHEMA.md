@@ -144,6 +144,8 @@ One record per run. No extra keys.
   "sae": {
     "ev_heldout": 0.0,
     "loss_recovered": 0.0,
+    "loss_sae": 0.0,
+    "loss_visible_mean": 0.0,
     "dead_frac": 0.0,
     "usable": false
   },
@@ -169,7 +171,9 @@ One record per run. No extra keys.
 
 - `ev_heldout`: explained variance of the SAE reconstruction on held-out activations, `1 - ||x - x_hat||^2 / ||x - mean(x)||^2`.
 - `loss_recovered`: splice `x_hat` in place of the layer and measure mean squared error of `predict_masked` on held-out clips. Scale is 0 when the layer is zeroed and 1 when the layer is untouched: `(loss_zero - loss_sae) / (loss_zero - loss_clean)`.
-- `usable`: `loss_recovered >= 0.70`.
+- `loss_sae`: that spliced mean squared error, on the same held-out clips. The reduction is the sum of squares over the feature axis, averaged over masked tokens.
+- `loss_visible_mean`: mean squared error of predicting every masked token as the mean of the visible patches, on the same held-out clips and the same reduction. This is the floor a trained V-JEPA predictor has to beat.
+- `usable`: `loss_recovered >= 0.70` and `loss_sae < loss_visible_mean`. The 0.70 threshold is unchanged. A splice that is not below the mean-of-visible-patches baseline is not usable, regardless of `loss_recovered`.
 - `dead_frac`: share of features that never fire on the captured tokens.
 
 ### Feature block

@@ -1,4 +1,4 @@
-"""Load a directory of ``.npy`` clips."""
+"""Load a directory of ``.npy`` clips or video files."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 
 from physint.adapters.base import Clip
+
+VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 
 
 def file_sha256(path: Path) -> str:
@@ -31,7 +33,7 @@ def load_clips(path: Path) -> list[Clip]:
     else:
         entries = None
     if not entries:
-        files = sorted(path.glob("*.npy"))
+        files = _clip_files(path)
         entries = [{"clip_id": file.stem, "file": file.name, "fps": default_fps} for file in files]
     clips: list[Clip] = []
     seen: set[str] = set()
@@ -43,14 +45,19 @@ def load_clips(path: Path) -> list[Clip]:
         file_path = path / str(entry["file"])
         if not file_path.is_file():
             raise FileNotFoundError(f"missing clip file {file_path}")
-        frames = np.load(file_path)
-        frames = np.ascontiguousarray(frames, dtype=np.float32)
+        if file_path.suffix.lower() in VIDEO_SUFFIXES:
+            decoded, video_fps = decode_video(file_path)
+            frames = np.ascontiguousarray(decoded, dtype=np.float32)
+            fps = float(video_fps)
+        else:
+            frames = np.ascontiguousarray(np.load(file_path), dtype=np.float32)
+            fps = float(entry.get("fps", default_fps))
         clips.append(
             Clip(
                 clip_id=clip_id,
                 path=file_path,
                 frames=frames,
-                fps=float(entry.get("fps", default_fps)),
+                fps=fps,
                 sha256=file_sha256(file_path),
             )
         )
@@ -58,3 +65,44 @@ def load_clips(path: Path) -> list[Clip]:
     if not clips:
         raise ValueError(f"no clips in {path}")
     return clips
+
+
+def _clip_files(path: Path) -> list[Path]:
+    files = [
+        item
+        for item in path.iterdir()
+        if item.is_file() and (item.suffix.lower() == ".npy" or item.suffix.lower() in VIDEO_SUFFIXES)
+    ]
+    return sorted(files, key=lambda item: item.name)
+
+
+def decode_video(path: Path, short_edge: int = 292) -> tuple[np.ndarray, float]:
+    """Decode a video to uint8 ``[T, H, W, 3]``, downscaled at decode time.
+
+    Applies container rotation (phone portrait). The short edge is reduced
+    before the frames are materialised so a 4K clip is not held raw.
+    """
+    try:
+        import av
+    except ImportError as exc:
+        raise RuntimeError("reading video clips requires the 'av' package") from exc
+    frames: list[np.ndarray] = []
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        rate = stream.average_rate or 30
+        fps = float(rate)
+        for frame in container.decode(stream):
+            scale = short_edge / min(frame.width, frame.height)
+            image = frame.to_ndarray(
+                format="rgb24",
+                width=max(1, round(frame.width * scale)),
+                height=max(1, round(frame.height * scale)),
+            )
+            rotation = getattr(frame, "rotation", 0) or 0
+            if rotation:
+                image = np.rot90(image, k=int(round(rotation / 90)) % 4).copy()
+            frames.append(image)
+    if not frames:
+        raise ValueError(f"no frames decoded from {path}")
+    return np.stack(frames), fps

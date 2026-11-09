@@ -14,7 +14,7 @@ from physint.adapters import get_adapter
 from physint.artifacts import write_activation_shards, write_clip_effects, write_feature_acts, write_json, write_jsonl
 from physint.clips import load_clips
 from physint.device import pick_device
-from physint.labelers import FakeCueLabeller, cue_patterns
+from physint.labelers import FakeCueLabeller, NullLabeller, cue_patterns
 from physint.sae import SAEConfig, save_sae, train_sae
 from physint.score import (
     Token,
@@ -28,6 +28,7 @@ from physint.score import (
     estimate_effects,
     explained_variance,
     mean_predictor_loss,
+    mean_visible_baseline_loss,
     random_percentile,
     splice_edit,
     top_examples,
@@ -52,6 +53,7 @@ def execute_run(
     layer: int = DEFAULT_LAYER,
     seed: int = DEFAULT_SEED,
     heldout_frac: float = DEFAULT_HELDOUT_FRAC,
+    tiny: bool = False,
     log=print,
 ) -> dict:
     started = time.perf_counter()
@@ -71,11 +73,11 @@ def execute_run(
         f"clips={len(clips)}  train={len(split.train)}  heldout={len(split.heldout)}"
     )
 
+    if tiny and adapter_name != "vjepa2":
+        raise ValueError("--tiny is only supported for the vjepa2 adapter")
     adapter_cls = get_adapter(adapter_name)
-    adapter = adapter_cls(layer=layer, device=device)
+    adapter = adapter_cls(layer=layer, device=device, tiny=tiny)
     adapter.load(random_init=False)
-    if adapter.name != "fake":
-        raise ValueError("only the fake labeller is implemented in this lane")
 
     tokens, acts = capture_activations(adapter, clips, membership)
     if acts.shape[1] != adapter.d_model:
@@ -98,20 +100,25 @@ def execute_run(
     loss_clean = mean_predictor_loss(adapter, heldout_clips)
     loss_zero = mean_predictor_loss(adapter, heldout_clips, zero=True)
     loss_sae = mean_predictor_loss(adapter, heldout_clips, edit=splice_edit(sae))
+    loss_visible_mean = mean_visible_baseline_loss(adapter, heldout_clips)
     recovered = loss_recovered(loss_zero, loss_sae, loss_clean)
-    usable = is_usable(recovered)
+    usable = is_usable(recovered, loss_sae, loss_visible_mean)
     log(
         f"ev_heldout={ev:.4f}  loss_clean={loss_clean:.6f}  loss_zero={loss_zero:.6f}  "
-        f"loss_sae={loss_sae:.6f}  loss_recovered={recovered:.4f}  dead_frac={dead:.3f}  usable={usable}"
+        f"loss_sae={loss_sae:.6f}  loss_visible_mean={loss_visible_mean:.6f}  "
+        f"loss_recovered={recovered:.4f}  dead_frac={dead:.3f}  usable={usable}"
     )
 
     log("labelling and attributing")
-    labeller = FakeCueLabeller(cue_patterns(clips, tokens))
+    if adapter.name == "fake":
+        labeller = FakeCueLabeller(cue_patterns(clips, tokens))
+    else:
+        labeller = NullLabeller()
     clean = clean_predictions(adapter, clips)
     estimate_rows, rank_scores = _collect_estimates(adapter, sae, clips, features.shape[1])
 
     log("random-init control")
-    control = adapter_cls(layer=layer, device=device)
+    control = adapter_cls(layer=layer, device=device, tiny=tiny)
     control.load(random_init=True)
     control_tokens, control_acts = capture_activations(control, clips, membership)
     if not _same_layout(tokens, control_tokens):
@@ -212,7 +219,7 @@ def execute_run(
         "tool_version": __version__,
         "model": {
             "adapter": adapter.name,
-            "name": adapter.name,
+            "name": getattr(adapter, "model_name", adapter.name),
             "sha": model_sha,
             "random_init": False,
         },
@@ -243,6 +250,8 @@ def execute_run(
         "sae": {
             "ev_heldout": ev,
             "loss_recovered": recovered,
+            "loss_sae": loss_sae,
+            "loss_visible_mean": loss_visible_mean,
             "dead_frac": dead,
             "usable": usable,
         },

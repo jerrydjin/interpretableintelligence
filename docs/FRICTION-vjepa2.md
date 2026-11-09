@@ -1,0 +1,34 @@
+# FRICTION.md — V-JEPA 2 mech-interp setup log (spec for `physint`)
+
+Times are UK time (GMT), Mon 9 Nov 2026. Machine: Jerry's MacBook Pro M2 Pro, 16 GB, macOS (Darwin 27.3), MPS.
+
+| time (GMT) | step | took | friction / note |
+|---|---|---|---|
+| 17:53 | Env survey | 2 s | System python3.13 has torch 2.11 + transformers 5.15 but **no torchvision, no av** → can't decode video without installing into the user site. Chose a project uv venv instead. |
+| 17:54 | `uv venv` + `uv pip install torch torchvision transformers av numpy safetensors huggingface_hub` | **7 s** (wheels cached) | uv resolved **newer** versions than system: torch 2.15.0, torchvision 0.29.2, transformers 5.22.2, av 19.0.2. Read the transformers source in the venv, not the system one (VJEPA2 modeling identical apart from docstrings). |
+| 17:54 | Model download | — | **Trap:** `snapshot_download('facebook/vjepa2-vitl-fpc64-256')` also pulls `original/model.pth` (**5.1 GB**, the raw Meta checkpoint) besides the 1.3 GB `model.safetensors`. Killed and restricted with `allow_patterns=['*.json','model.safetensors','README.md']`. Tool must default to safetensors-only. |
+| 17:55 | Model download (safetensors only, 1.30 GB) | **32 s** | Fine. Unauthenticated HF warning, harmless. |
+| 17:55 | ViT-Prisma check | ~5 min | Not usable: only registry entry is `vjepa_v1_vit_huge` (V-JEPA **v1**), weights from Meta-internal paths `/checkpoint/soniajoseph/...` (paths_cw.yaml); no V-JEPA 2 / HF `facebook/vjepa2-*` support, no predictor in its weight conversion. Did not install. Hand-rolled path on raw HF transformers instead. Gap for `physint`: nobody ships hooked V-JEPA 2 + predictor. |
+| 17:56 | Sample clips | 10 s | 5 Kinetics-mini val clips (archery, bowling, flying_kite, high_jump, marching), 1.1–5.8 MB each, 10 s, 24–30 fps, 480×360 to 1280×720. |
+| 17:57 | API reading | ~5 min | No real docs for the internals; had to read `modeling_vjepa2.py`. Key facts: tokens are (t,h,w) row-major from a Conv3d tubelet (2 frames) → 16 frames = 8×16×16 = 2048 tokens; `encoder.layer[i](x, position_mask)` takes token ids for 3D RoPE; `model(pv, context_mask, target_mask)` runs the encoder on **all** tokens and only then gathers context → context tokens have already attended to the target region (leaky vs training, where the context encoder only sees visible tokens). Built `encode_context()` to re-run blocks on context tokens with RoPE ids. |
+| 17:58 | Layer indexing | — | "block 16" is ambiguous. Defined `layer=16` = output of `encoder.layer[15]` (16 of 24 blocks applied, 67% depth). Verified equal (max diff 0) to `output_hidden_states[16]` (index 0 = patch embeddings). |
+| 17:59 | **Jerry's Mac slowdown** | — | Jerry reported the MacBook felt slow while we ran jobs. Since then: `nice -n 15`, `OMP_NUM_THREADS=4`, `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.5` + `PYTORCH_MPS_LOW_WATERMARK_RATIO=0.4`, sample-clip smoke tests only, no lingering background jobs. Tool should ship a "laptop-polite" mode with these defaults. |
+| 18:01 | **MPS OOM at 20 GiB** | 108 s wall, then crash | `checks.py` called `model(...)` outside `torch.no_grad()` → autograd graph kept for 24 ViT-L blocks + predictor → MPS allocated 19.96 GiB of 20.13 GiB max, pushed the 16 GB Mac into swap (also a likely cause of the slowdown). Fix: `torch.set_grad_enabled(False)` globally. Tool must make inference no-grad by default. |
+| 18:03 | MPS watermark env | 4 s crash | Setting only `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.5` errors with `invalid low watermark ratio 1.4`; you must also set LOW ≤ HIGH. |
+| 18:04 | Checks (after fixes) | ~20 s total | Model load **2.9–3.9 s** (from cache). Encoder forward, 16 frames 256px, MPS fp32: **0.56–0.95 s/window**. `predict_masked` (target encoder + context encoder + predictor): **0.91 s**. MPS driver alloc 2.08 GiB, RSS 0.76 GiB. |
+| 18:05 | **Predictor target-space gotcha** | ~10 min | Predictor L1 vs HF's `predictor_output.target_hidden_state` was 1.823, basically the same as just predicting the context mean (1.826), and worse on bowling (2.00 vs 1.96). Cause: V-JEPA 2 training regresses onto `F.layer_norm(target_encoder(x))` (extra no-affine LN on top of the encoder's own final norm); HF's `target_hidden_state` skips it. With the extra LN: pred L1 0.56 vs context-mean 0.68, cosine 0.61 vs 0.49. `predict_masked` now returns LN'd `target` (+ `target_raw`). Tool must get this right or every causal number is noise. |
+| 18:08–18:26 | **Mac offline** | ~18 min | Grok Bot desktop app disconnected mid-run. Continued on the box (Linux CPU, same torch 2.15 / transformers 5.22): checks green, identical numbers to MPS (L1 0.5617). A laptop-hosted pipeline needs resumable shards. |
+| 18:21 | Schema v0 (Michael) | ~5 min | Rewrote output to `runs/<run_id>/manifest.json` + `acts/shard-NNNNN.safetensors` (acts f16 + clip_idx i32, window/t/h/w i16). |
+| 18:24 | Box CPU timings (8 vCPU, OMP 4, nice 15) | — | load 2.3–5.9 s; encoder 3.75 s/window; predict_masked 6.8 s; capture with `--save-predictor` 10.4 s/window; checks.py 94 s wall; peak RSS 2.0–2.1 GiB. |
+| 18:24 | Activation outliers | — | Block-16 residual: std 5.6 but min −208.8 / max 69.4, mean token norm 178. A few massive-activation dims, so the SAE needs input normalisation (per-dim or norm scaling). Still well inside fp16 range. |
+| 18:24 | Leaky vs faithful | — | HF-default `mode=full` gives a *worse* masked L1 (0.586) than context-only (0.562). The context-only path is in-distribution for the predictor, so it's the default. |
+| 18:27 | Mac smoke rerun | stalled | With Jerry using the Mac: **10.1 GB of 11.3 GB swap used**, 43% memory free, our process at 2.9 GB RSS. The encoder forward that took 0.56 s earlier stalled for over 60 s, then the Mac dropped offline again. Running interp jobs while the laptop is in use on 16 GB is the main friction. The tool should check memory pressure and swap before starting, and refuse or queue the job. |
+| — | Clip length vs token target | — | At stride 2, a 16-frame window spans 32 source frames (1.07 s at 30 fps). A 2 s phone clip yields **1** window and a 3.2 s+ clip yields 3. 200 clips × 3 windows = 1.23M rows / 2.34 GiB fp16 only if clips are ≥3.2 s; 2 s clips give ~410k. |
+
+## Asks for the tool (from this log)
+1. Safetensors-only model fetch; never pull `original/*.pth`.
+2. Hooked V-JEPA 2 with a named residual point (`blocks.16.out`), capture + edit (incl. `'zero'`), and an identity-check built in.
+3. Faithful masked prediction: context-only encoder with RoPE ids, LN'd target. Make the HF-default leaky path opt-in and labelled.
+4. No-grad by default, MPS memory caps, `nice`/thread limits for laptop use.
+5. Phone-video ingest: decode-time downscale (4K would be GBs as raw frames), rotation metadata, short-clip fallback (stride 1, then last-frame padding).
+6. Shards keyed (clip, window, t, h, w, frame_start) + stable clip-level split with a hash; resumable writes.
