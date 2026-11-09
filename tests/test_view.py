@@ -279,6 +279,138 @@ def test_playwright_heatmap_covers_the_centre_square(tmp_path: Path):
         browser.close()
 
 
+def test_nearest_token_keeps_frame_65_when_the_window_starts_at_55():
+    """Stride 2, tubelet 2: frame 65 is t=(65-55)//4 = 2, anchor 63, not the window start."""
+    grid = {"t": 8, "h": 16, "w": 16, "tubelet": 2}
+    assert frame_to_token(65, [55], grid, 2) == (0, 2)
+    assert token_to_frame(0, 2, [55], grid, 2) == 63
+    assert token_to_frame(0, 0, [55], grid, 2) == 55
+    assert frame_to_token(20, [55], grid, 2) == (0, None)
+
+    starts, stride = sampled_window_starts(167, 3, frames=16, stride=2)
+    assert starts == [0, 68, 135]
+    assert stride == 2
+    assert frame_to_token(20, starts, grid, stride) == (0, 5)
+    assert frame_to_token(40, starts, grid, stride) == (0, 7)
+    assert frame_to_token(65, starts, grid, stride) == (1, 0)
+    assert token_to_frame(1, 0, starts, grid, stride) == 68
+
+
+def test_playwright_url_feature_and_same_clip_frames(tmp_path: Path):
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    run = tmp_path / "run"
+    grid = {"t": 8, "h": 2, "w": 2, "tubelet": 2}
+    (run / "features").mkdir(parents=True)
+    write_json(
+        run / "manifest.json",
+        {
+            "run_id": "droid-url",
+            "model": {"adapter": "vjepa2", "name": "vjepa2", "sha": "ab" * 32},
+            "layer": 24,
+            "grid": grid,
+            "extra": {"frames": 16, "stride": 2, "windows": 3},
+            "clips": [
+                {"clip_id": 49, "fps": 8.0, "n_frames": 167, "n_windows": 3, "split": "train"},
+                {
+                    "clip_id": 55,
+                    "fps": 8.0,
+                    "n_frames": 120,
+                    "n_windows": 1,
+                    "split": "train",
+                    "window_starts": [55],
+                    "stride": 2,
+                },
+            ],
+        },
+    )
+    write_jsonl(
+        run / "features" / "features.jsonl",
+        [{"id": 7, "label": "top"}, {"id": 3, "label": "asked"}, {"id": 270, "label": "quiet"}],
+    )
+    write_feature_acts(
+        run / "features" / "feature_acts.parquet",
+        {
+            "feature_id": [7, 3, 3, 3, 3],
+            "clip_id": ["49", "49", "49", "49", "55"],
+            "window": [0, 0, 0, 0, 0],
+            "t": [0, 0, 5, 7, 2],
+            "h": [0, 0, 0, 0, 1],
+            "w": [0, 1, 0, 0, 0],
+            "value": [5.0, 1.0, 2.5, 4.0, 9.0],
+        },
+    )
+    from playwright.sync_api import expect, sync_playwright
+
+    with _view_server(run, clips) as url, sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=_chrome(),
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        page = browser.new_page(viewport={"width": 1280, "height": 800})
+        page.goto(url + "#/clips/49?frame=0&feature=3", wait_until="domcontentloaded")
+        page.wait_for_selector("[data-testid=heatmap][data-feature-id='3']")
+        expect(page.locator("[data-testid=frame-feature][data-feature-id='3']")).to_have_attribute("data-selected", "true")
+        expect(page.locator("[data-testid=frame-feature][data-feature-id='7']")).to_have_attribute("data-selected", "false")
+        page.wait_for_function(
+            """() => {
+                const cell = document.querySelector("[data-testid=heat-cell][data-h='0'][data-w='1']");
+                return cell && cell.dataset.value === "1";
+            }"""
+        )
+
+        page.goto(url + "#/clips/49?frame=0&feature=270", wait_until="domcontentloaded")
+        expect(page.locator("[data-testid=heatmap-label]")).to_have_text("feature 270 not active at this frame")
+        expect(page.locator("[data-testid=heatmap]")).to_have_attribute("data-feature-id", "270")
+        expect(page.locator("[data-testid=frame-feature][data-selected='true']")).to_have_count(0)
+        page.wait_for_function(
+            """() => document.querySelectorAll("[data-testid=heat-cell]").length === 4
+                && [...document.querySelectorAll("[data-testid=heat-cell]")].every((cell) => Number(cell.dataset.value) === 0)"""
+        )
+
+        page.evaluate("() => { location.hash = '#/clips/49?frame=20&feature=3'; }")
+        page.wait_for_function(
+            """() => document.querySelector("[data-testid=frame-readout]")?.dataset.frame === "20"
+                && document.querySelector("[data-testid=frame-readout]")?.dataset.t === "5" """
+        )
+        page.wait_for_function(
+            """() => {
+                const cell = document.querySelector("[data-testid=heat-cell][data-h='0'][data-w='0']");
+                return cell && cell.dataset.value === "2.5";
+            }"""
+        )
+
+        page.evaluate("() => { location.hash = '#/clips/49?frame=40&feature=3'; }")
+        page.wait_for_function(
+            """() => document.querySelector("[data-testid=frame-readout]")?.dataset.frame === "40"
+                && document.querySelector("[data-testid=frame-readout]")?.dataset.t === "7" """
+        )
+        page.wait_for_function(
+            """() => document.querySelectorAll("[data-testid=heat-cell]").length === 4"""
+        )
+        page.wait_for_function(
+            """() => {
+                const cell = document.querySelector("[data-testid=heat-cell][data-h='0'][data-w='0']");
+                return cell && cell.dataset.value === "4";
+            }"""
+        )
+
+        page.evaluate("() => { location.hash = '#/clips/55?frame=65&feature=3'; }")
+        page.wait_for_function(
+            """() => document.querySelector("[data-testid=frame-readout]")?.dataset.frame === "65"
+                && document.querySelector("[data-testid=frame-readout]")?.dataset.t === "2"
+                && document.querySelector("[data-testid=frame-readout]")?.textContent.startsWith("frame 65")"""
+        )
+        page.wait_for_function(
+            """() => {
+                const cell = document.querySelector("[data-testid=heat-cell][data-h='1'][data-w='0']");
+                return cell && cell.dataset.value === "9";
+            }"""
+        )
+        browser.close()
+
+
 def test_viewer_source_does_not_import_adapters():
     source = Path(inspect_view_path()).read_text(encoding="utf-8")
     tree = ast.parse(source)

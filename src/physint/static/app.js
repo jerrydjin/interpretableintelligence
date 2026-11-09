@@ -274,7 +274,8 @@ function scoreVersus(feature) {
 
 async function showClip(clipId, frame, featureParam) {
   const token = ++state.token;
-  if (!state.clip || state.clipId !== clipId) {
+  const same = Boolean(state.clip && state.clipId === clipId);
+  if (!same) {
     const response = await fetch(`/api/clips/${encodeURIComponent(clipId)}`, { cache: "no-store" });
     if (token !== state.token) return;
     if (!response.ok) {
@@ -287,6 +288,10 @@ async function showClip(clipId, frame, featureParam) {
   if (token !== state.token) return;
   state.featureId = featureParam === null || featureParam === "" ? null : Number(featureParam);
   state.frame = clampFrame(frame);
+  if (same && document.querySelector("[data-testid=stage]")) {
+    renderFrame();
+    return;
+  }
   renderClip();
 }
 
@@ -407,6 +412,9 @@ function renderFrame(options) {
   const tubelet = frame.t === null || frame.t === undefined ? "—" : String(frame.t);
   scrubber.value = String(state.frame);
   readout.textContent = `frame ${state.frame} · t ${tubelet} · window ${frame.window}`;
+  readout.dataset.frame = String(state.frame);
+  readout.dataset.t = tubelet;
+  readout.dataset.window = String(frame.window);
   list.dataset.frame = String(state.frame);
   image.alt = `${clip.clip_id} frame ${state.frame}`;
 
@@ -453,19 +461,36 @@ function renderFrame(options) {
     message.textContent = clip.message || "Clip pixels are not available.";
   }
 
-  const active = frame.features.find((feature) => feature.id === state.featureId) || frame.features[0] || null;
+  const requested = Number.isInteger(state.featureId) ? state.featureId : null;
+  const listed = requested === null ? null : frame.features.find((feature) => Number(feature.id) === requested);
+  let active = listed;
+  if (requested !== null && !listed) {
+    active = { id: requested, label: "", badge: "unverified", activation: 0, effects: [], inactive: true };
+  } else if (requested === null) {
+    active = frame.features[0] || null;
+  }
+  list.dataset.feature = active ? String(active.id) : "";
   list.replaceChildren(...(frame.features.length ? frame.features.map((feature) => renderFeatureRow(feature, active)) : [
     el("li", { class: "empty" }, "No feature fired on this frame."),
   ]));
+  paintCaption(active);
   renderHeat(active);
-  const caption = document.querySelector("[data-testid=heatmap-label]");
-  caption.replaceChildren();
-  if (active) {
-    caption.append("heatmap · ", el("strong", {}, displayLabel(active)));
-  } else {
-    caption.textContent = "Nothing fired on this frame.";
-  }
   document.title = `${clip.clip_id} · frame ${state.frame} · physint`;
+}
+
+function paintCaption(feature) {
+  const caption = document.querySelector("[data-testid=heatmap-label]");
+  if (!caption) return;
+  caption.replaceChildren();
+  if (!feature) {
+    caption.textContent = "Nothing fired on this frame.";
+    return;
+  }
+  if (feature.inactive) {
+    caption.textContent = `feature ${feature.id} not active at this frame`;
+    return;
+  }
+  caption.append("heatmap · ", el("strong", {}, displayLabel(feature)));
 }
 
 function renderFeatureRow(feature, active) {
@@ -556,21 +581,36 @@ async function renderHeat(feature) {
   const grid = document.querySelector("[data-testid=heatmap]");
   if (!grid) return;
   const token = ++state.heatToken;
+  const frame = state.frame;
   grid.replaceChildren();
+  if (feature) grid.dataset.featureId = String(feature.id);
+  else delete grid.dataset.featureId;
   if (!feature) return;
+  if (feature.inactive) drawHeat(emptyHeat(state.clip));
   const response = await fetch(
-    `/api/clips/${encodeURIComponent(state.clipId)}/heatmap?frame=${state.frame}&feature=${feature.id}`,
+    `/api/clips/${encodeURIComponent(state.clipId)}/heatmap?frame=${frame}&feature=${feature.id}`,
     { cache: "no-store" },
   );
   if (token !== state.heatToken || !response.ok) return;
   const payload = await response.json();
   if (token !== state.heatToken) return;
-  drawHeat(payload.heatmap || []);
+  const rows = payload.heatmap || [];
+  drawHeat(rows);
+  const hot = rows.some((row) => row.some((value) => value > 0));
+  if (feature.inactive && hot) paintCaption({ ...feature, inactive: false });
+}
+
+function emptyHeat(clip) {
+  const height = clip?.grid?.h || 0;
+  const width = clip?.grid?.w || 0;
+  if (height <= 0 || width <= 0) return [];
+  return Array.from({ length: height }, () => Array.from({ length: width }, () => 0));
 }
 
 function drawHeat(rows) {
   const grid = document.querySelector("[data-testid=heatmap]");
   if (!grid || !rows.length) return;
+  grid.replaceChildren();
   const height = rows.length;
   const width = rows[0].length;
   let max = 0;

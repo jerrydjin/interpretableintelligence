@@ -224,13 +224,44 @@ def _extend_starts(starts: list[int], n_windows: int, step: int) -> list[int]:
     return extended
 
 
+def _starts_covering(clip: dict, grid: dict, extra: dict | None, frame: int) -> tuple[list[int], int]:
+    """Window starts that reach ``frame``.
+
+    Recorded windows (Jeff's placement, or an explicit list) are kept as they
+    are. A clip that tiles from frame 0 is extended one window at a time until
+    ``frame`` falls inside a window, which is what a single recorded start at 0
+    needs.
+    """
+    hint = int(clip["n_windows"]) - 1 if _is_int(clip.get("n_windows")) else 0
+    starts, stride = clip_sampling(clip, grid, max(hint, 0), extra)
+    if _sampling_spec(extra) is not None or _explicit_window_starts(clip, grid) is not None:
+        return starts, stride
+    step = tubelet_of(grid) * max(int(stride), 1)
+    span = max(int(grid.get("t") or 1), 1) * step
+    guard = 0
+    while starts and starts[-1] + span <= frame and guard < frame + 1:
+        starts = [*starts, starts[-1] + span]
+        guard += 1
+    return starts, stride
+
+
 def frame_to_token(frame: int, starts: list[int], grid: dict, sample_stride: int = 1) -> tuple[int, int | None]:
     """Return ``(window, t)``. ``t`` is ``None`` when ``frame`` sits in no window.
 
-    Inside a window, ``t = (frame - window_start) // (tubelet * stride)``.
+    Inside a window, ``t = (frame - window_start) // (tubelet * stride)``, so
+    every source frame in that token's step shares the token. A frame in the
+    gap takes the nearer edge token: the previous window's last ``t``, or the
+    next window's ``t = 0``. The displayed frame does not move. A window that
+    starts at 55 still reports frame 65 as ``t = (65 - 55) // step`` (anchor
+    63 when the step is 4), not as frame 55.
     """
     if not starts:
         starts = [0]
+    step = tubelet_of(grid) * max(int(sample_stride), 1)
+    n_tokens = max(int(grid.get("t") or 1), 1)
+    span = n_tokens * step
+    if frame < starts[0]:
+        return 0, None
     window = 0
     for index, start in enumerate(starts):
         if start <= frame:
@@ -238,11 +269,14 @@ def frame_to_token(frame: int, starts: list[int], grid: dict, sample_stride: int
         else:
             break
     offset = frame - starts[window]
-    step = tubelet_of(grid) * max(int(sample_stride), 1)
-    span = window_span(grid) * max(int(sample_stride), 1)
-    if offset < 0 or offset >= span:
+    if offset < span:
+        return window, offset // step
+    next_start = starts[window + 1] if window + 1 < len(starts) else None
+    if next_start is None:
         return window, None
-    return window, offset // step
+    if offset - span <= next_start - frame:
+        return window, n_tokens - 1
+    return window + 1, 0
 
 
 def token_to_frame(window: int, t: int, starts: list[int], grid: dict, sample_stride: int = 1) -> int:
@@ -511,7 +545,7 @@ class RunModel:
             return None
         height, width = int(self.grid["h"]), int(self.grid["w"])
         grid = [[0.0 for _ in range(width)] for _ in range(height)]
-        starts, stride = clip_sampling(clip, self.grid, frame, self.extra)
+        starts, stride = _starts_covering(clip, self.grid, self.extra, frame)
         _window, tubelet_index = frame_to_token(frame, starts, self.grid, stride)
         if tubelet_index is None:
             return grid
