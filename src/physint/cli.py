@@ -12,6 +12,7 @@ from physint.adapters.fake import generate_clips
 from physint.run import execute_run
 from physint.thresholds import DEFAULT_HELDOUT_FRAC, DEFAULT_LAYER, DEFAULT_SEED
 from physint.validate import validate_run
+from physint.view import serve_run
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="Mechanistic interpretability for physical AI models.")
 
@@ -81,3 +82,25 @@ def validate(
             typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1)
     typer.echo(f"valid: {run_dir}")
+
+
+@app.command()
+def view(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder to open.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option(
+            "--clips",
+            help="Directory of clip files. Overrides a clip path recorded in the manifest.",
+        ),
+    ] = None,
+    host: Annotated[str, typer.Option("--host", help="Interface to bind.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Port. 0 chooses a free port.")] = 7860,
+    no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+) -> None:
+    """Start a local viewer for a run folder and open it in a browser."""
+    try:
+        serve_run(run_dir, clips_dir=clips, host=host, port=port, open_browser=not no_open)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc

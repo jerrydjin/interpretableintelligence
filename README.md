@@ -15,9 +15,12 @@ uv sync
 uv run physint generate-clips --out clips/demo --n 30 --seed 0
 uv run physint run fake --clips clips/demo --layer 16 --seed 0 --heldout-frac 0.2 --out runs/demo
 uv run physint validate runs/demo
+uv run physint view runs/demo --clips clips/demo
 ```
 
 `runs/demo/scoreboard.json` should mark exactly three features real, labelled `stripe`, `pulse`, and `corner`. The decoys `flicker`, `band`, and `speckle` fire on many clips and keep their labels on held-out clips, but they do not move the predictor, so they are not real.
+
+`physint view` serves that folder locally and opens a browser. It reads the manifest, feature acts, clip effects, `features.jsonl`, and the scoreboard. This manifest does not store clip paths, so pass `--clips` (or a `path` / `clips_dir` recorded on a manifest that has one). `--no-open` skips the browser.
 
 Force a device with `PHYSINT_DEVICE=cpu` or `PHYSINT_DEVICE=mps`.
 
@@ -35,6 +38,7 @@ uv run pytest
 | `src/physint/sae.py` | ReLU SAE trainer |
 | `src/physint/score.py` | Explained variance, loss recovered, ablations, random controls |
 | `src/physint/run.py` | `capture → SAE → label → score → run folder` |
+| `src/physint/view.py` | Local clip viewer over a finished run folder |
 | `SCHEMA.md` | Run-folder contract |
 | `ARCHITECTURE.md` | What this lane owns, and the next lanes |
 
