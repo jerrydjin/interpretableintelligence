@@ -32,6 +32,7 @@ from physint.view import (
     encode_png,
     frame_index,
     frame_to_token,
+    _read_moments,
     load_run,
     overlay_rect,
     render_frame,
@@ -485,6 +486,33 @@ def _status_run(tmp_path: Path) -> Path:
     }
     write_json(run / "heldout_loss.json", moments)
     return run
+
+
+def test_heldout_loss_accepts_a_windows_object(tmp_path: Path):
+    path = tmp_path / "heldout_loss.json"
+    write_json(
+        path,
+        {
+            "windows": [
+                {
+                    "clip_id": 67,
+                    "clip_name": "droid_ep068",
+                    "window": 1,
+                    "frame_start": 10,
+                    "frame_end": 20,
+                    "loss": 1.5,
+                    "task_text": "pick up the cup",
+                    "loss_source": "heldout",
+                }
+            ]
+        },
+    )
+    moments = _read_moments(path)
+    assert len(moments) == 1
+    assert moments[0]["clip_id"] == "67"
+    assert moments[0]["clip_name"] == "droid_ep068"
+    assert moments[0]["frame"] == 15
+    assert moments[0]["loss"] == 1.5
 
 
 def test_status_badges_sort_and_hardest_moments_use_clip_id(tmp_path: Path):

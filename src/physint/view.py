@@ -1286,7 +1286,7 @@ def _read_moments(path: Path) -> list[dict]:
     except (OSError, json.JSONDecodeError):
         return []
     if isinstance(payload, dict):
-        payload = payload.get("moments") or payload.get("losses") or []
+        payload = payload.get("moments") or payload.get("losses") or payload.get("windows") or []
     if not isinstance(payload, list):
         return []
     rows = []
