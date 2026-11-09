@@ -1,4 +1,12 @@
-"""Load a directory of ``.npy`` clips or video files."""
+"""Load a directory of ``.npy`` clips or video files.
+
+Video files are decoded the way Jeff's ``vjepa_interp.decode_video`` decodes
+them for V-JEPA 2: every frame, short edge resampled to the processor size
+(292, ``int(256 * 256 / 224)``) at decode time, display rotation applied, and
+the container frame rate kept. The adapter then takes its window from that
+stream (stride 2 when the clip is long enough). A 4K file is never expanded
+to raw frames first.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +19,8 @@ import numpy as np
 from physint.adapters.base import Clip
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
+# ``VJEPA2VideoProcessor`` shortest edge for the 256 crop, and Jeff's default.
+VJEPA_SHORT_EDGE = int(256 * 256 / 224)
 
 
 def file_sha256(path: Path) -> str:
@@ -46,7 +56,7 @@ def load_clips(path: Path) -> list[Clip]:
         if not file_path.is_file():
             raise FileNotFoundError(f"missing clip file {file_path}")
         if file_path.suffix.lower() in VIDEO_SUFFIXES:
-            decoded, video_fps = decode_video(file_path)
+            decoded, video_fps = decode_video(file_path, short_edge=VJEPA_SHORT_EDGE)
             frames = np.ascontiguousarray(decoded, dtype=np.float32)
             fps = float(video_fps)
         else:
@@ -76,11 +86,13 @@ def _clip_files(path: Path) -> list[Path]:
     return sorted(files, key=lambda item: item.name)
 
 
-def decode_video(path: Path, short_edge: int = 292) -> tuple[np.ndarray, float]:
-    """Decode a video to uint8 ``[T, H, W, 3]``, downscaled at decode time.
+def decode_video(path: Path, short_edge: int = VJEPA_SHORT_EDGE) -> tuple[np.ndarray, float]:
+    """Decode a video to uint8 ``[T, H, W, 3]`` at the model's short-edge size.
 
-    Applies container rotation (phone portrait). The short edge is reduced
-    before the frames are materialised so a 4K clip is not held raw.
+    Matches ``vjepa_interp.decode_video``: scale the short edge to
+    ``short_edge`` while decoding (so a 4K phone clip is not held raw), apply
+    display rotation, and return the container frame rate unchanged. ``.mp4``,
+    ``.webm``, and ``.mov`` all go through this path.
     """
     try:
         import av

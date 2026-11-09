@@ -1,8 +1,8 @@
 """V-JEPA 2 adapter on a tiny random config. No checkpoint download.
 
-Real ``facebook/vjepa2-*`` weights are not required. Mark any future test that
-downloads them with ``@pytest.mark.slow``; the default pytest addopts skip that
-marker.
+``test_trained_predictor_beats_the_visible_patch_mean`` is the exception: it
+downloads the real safetensors checkpoint and is marked ``slow``. The default
+pytest addopts skip that marker.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ import torch.nn.functional as F
 
 from physint.adapters.base import Clip
 from physint.adapters.vjepa2 import WEIGHT_ALLOW_PATTERNS, VJEPA2Adapter, fetch_checkpoint, generate_tiny_clips
-from physint.clips import load_clips
+from physint.clips import VJEPA_SHORT_EDGE, decode_video, load_clips
 from physint.device import ensure_mps_fallback
 from physint.sae import SAE
-from physint.score import estimate_effects, mean_predictor_loss
+from physint.score import estimate_effects, mean_predictor_loss, mean_visible_baseline_loss
 from physint.stats import loss_recovered
 
 CPU = torch.device("cpu")
@@ -252,6 +252,130 @@ def test_straight_through_estimate_reaches_the_predictor():
     effect = estimate_effects(adapter, sae, clip, adapter.windows(clip)[0])
     assert effect.shape[-1] == 4
     assert torch.isfinite(effect).all()
+
+
+def _write_video(path: Path, frames: np.ndarray, fps: int, codec: str = "libx264") -> None:
+    """Encode ``uint8 [T, H, W, 3]`` with PyAV. Even sizes; ``pts`` set so no frame is dropped."""
+    import av
+
+    if frames.dtype != np.uint8 or frames.ndim != 4 or frames.shape[-1] != 3:
+        raise ValueError(f"expected uint8 [T,H,W,3], got {frames.dtype} {frames.shape}")
+    container = av.open(str(path), mode="w")
+    stream = container.add_stream(codec, rate=fps)
+    stream.width = int(frames.shape[2])
+    stream.height = int(frames.shape[1])
+    stream.pix_fmt = "yuv420p"
+    stream.options = {"crf": "18", "preset": "ultrafast"}
+    try:
+        for index, array in enumerate(frames):
+            frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(array), format="rgb24")
+            frame.pts = index
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    finally:
+        container.close()
+
+
+def test_video_decode_resamples_the_short_edge_and_keeps_fps(tmp_path: Path):
+    """mp4, webm, and mov all take Jeff's decode: short edge 292, container fps kept."""
+    assert VJEPA_SHORT_EDGE == 292
+    source = np.zeros((4, 40, 80, 3), dtype=np.uint8)
+    source[..., 0] = 220
+    source[..., 2] = 40
+    names = (("street.mp4", "libx264"), ("kite.webm", "libvpx-vp9"), ("portrait.mov", "libx264"))
+    for name, codec in names:
+        path = tmp_path / name
+        _write_video(path, source, fps=24, codec=codec)
+        decoded, fps = decode_video(path)
+        assert decoded.shape[0] == 4
+        assert decoded.shape[-1] == 3
+        assert min(decoded.shape[1], decoded.shape[2]) == VJEPA_SHORT_EDGE
+        assert fps == pytest.approx(24.0)
+    loaded = load_clips(tmp_path)
+    assert {clip.clip_id for clip in loaded} == {"street", "kite", "portrait"}
+    for clip in loaded:
+        assert clip.frames.dtype == np.float32
+        assert clip.frames.shape[0] == 4
+        assert min(clip.frames.shape[1], clip.frames.shape[2]) == VJEPA_SHORT_EDGE
+        assert clip.fps == pytest.approx(24.0)
+
+
+def test_tiny_run_on_synthetic_mp4_clips(tmp_path: Path):
+    """Twenty short H.264 clips decode, score, and validate on the tiny CPU model.
+
+    Seed 11 is a draw where, after the short-edge resample, the zeroed layer
+    still loses to the clean tiny predictor, so ``loss_recovered`` is defined.
+    """
+    from typer.testing import CliRunner
+
+    from physint.cli import app
+
+    clips_dir = tmp_path / "clips"
+    clips_dir.mkdir()
+    rng = np.random.default_rng(11)
+    for index in range(20):
+        frames = rng.integers(0, 256, size=(8, 48, 64, 3), dtype=np.uint8)
+        _write_video(clips_dir / f"clip-{index:02d}.mp4", frames, fps=16)
+    out = tmp_path / "run"
+    runner = CliRunner()
+    ran = runner.invoke(
+        app,
+        [
+            "run",
+            "vjepa2",
+            "--clips",
+            str(clips_dir),
+            "--layer",
+            "1",
+            "--tiny",
+            "--seed",
+            "0",
+            "--heldout-frac",
+            "0.2",
+            "--out",
+            str(out),
+        ],
+    )
+    assert ran.exit_code == 0, ran.output
+    validated = runner.invoke(app, ["validate", str(out)])
+    assert validated.exit_code == 0, validated.output
+
+
+@pytest.mark.slow
+def test_trained_predictor_beats_the_visible_patch_mean(tmp_path: Path):
+    """The trained V-JEPA 2 predictor beats the mean of the visible patches.
+
+    Downloads ``facebook/vjepa2-vitl-fpc64-256`` safetensors (not the 5.1 GB
+    ``original/model.pth``). Skipped unless pytest is run with ``-m slow``.
+    """
+    clips_dir = tmp_path / "clips"
+    clips_dir.mkdir()
+    _write_video(clips_dir / "motion.mp4", _moving_scene(), fps=30)
+    clips = load_clips(clips_dir)
+    adapter = VJEPA2Adapter(layer=16, device=CPU, tiny=False)
+    adapter.load(random_init=False)
+    clean = mean_predictor_loss(adapter, clips)
+    baseline = mean_visible_baseline_loss(adapter, clips)
+    assert clean < baseline, f"predictor {clean} is not below the visible-patch mean {baseline}"
+
+
+def _moving_scene() -> np.ndarray:
+    """Forty frames of a translating blob. Long enough for a stride-2 window of 16."""
+    frames = np.zeros((40, 180, 320, 3), dtype=np.uint8)
+    frames[..., 1] = 40
+    frames[..., 2] = 20
+    yy, xx = np.mgrid[0:180, 0:320]
+    for t in range(40):
+        cx = 40 + t * 6
+        cy = 90
+        blob = (xx - cx) ** 2 + (yy - cy) ** 2 < 28**2
+        frames[t, blob, 0] = 220
+        frames[t, blob, 1] = 30
+        frames[t, blob, 2] = 30
+        frames[t, 20:28, :, 0] = 180
+    return frames
 
 
 def test_mps_fallback_is_enabled_for_an_mps_device(monkeypatch):
