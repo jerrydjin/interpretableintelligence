@@ -34,6 +34,7 @@ from physint.view import (
     frame_to_token,
     load_run,
     render_frame,
+    sampled_window_starts,
     token_to_frame,
     window_starts,
 )
@@ -71,6 +72,92 @@ def test_window_start_plus_tubelet_selects_the_source_frame():
     assert frame_to_token(6, starts, grid) == (0, 1)
     assert frame_to_token(0, starts, grid) == (0, None)
     assert window_starts({}, {"t": 8, "tubelet": 2, "window_start": 4}, 0) == [4]
+
+
+def test_extra_stride_places_a_167_frame_clip_and_a_short_clip(tmp_path: Path):
+    """manifest.extra stride 2: frame = window_start + t * tubelet * stride.
+
+    167 frames, 3 windows, frames 16, stride 2 → starts [0, 68, 135].
+    (window 1, t 3) with tubelet 2 is frame 68 + 12 = 80.
+    A 20-frame clip is shorter than span 32, so its stride falls back to 1.
+    """
+    grid = {"t": 8, "h": 2, "w": 2, "tubelet": 2, "patch_px": 16}
+    starts, stride = sampled_window_starts(167, 3, frames=16, stride=2)
+    assert starts == [0, 68, 135]
+    assert stride == 2
+    assert token_to_frame(1, 3, starts, grid, stride) == 80
+    assert frame_to_token(80, starts, grid, stride) == (1, 3)
+    assert frame_to_token(83, starts, grid, stride) == (1, 3)
+    assert frame_to_token(79, starts, grid, stride) == (1, 2)
+
+    short_starts, short_stride = sampled_window_starts(20, 3, frames=16, stride=2)
+    assert short_stride == 1
+    assert short_starts == [2]
+    assert token_to_frame(0, 3, short_starts, grid, short_stride) == 8
+
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    (clips / "droid_ep000.mp4").write_bytes(b"named-mp4")
+    (clips / "0.mp4").write_bytes(b"stem-for-clip-id-0")
+    (clips / "short.mp4").write_bytes(b"short-mp4")
+    run = tmp_path / "run"
+    (run / "features").mkdir(parents=True)
+    write_json(
+        run / "manifest.json",
+        {
+            "run_id": "vjepa-real",
+            "tool_version": "0.1.0",
+            "model": {"adapter": "vjepa2", "name": "vjepa2", "sha": "ab" * 32, "random_init": False},
+            "layer": 24,
+            "d_model": 16,
+            "grid": grid,
+            "extra": {"frames": 16, "stride": 2, "windows": 3, "source": "droid"},
+            "split": {"seed": 0, "heldout_frac": 0.0, "sha": "cd" * 32},
+            "clips": [
+                {"clip_id": 0, "name": "droid_ep000.mp4", "fps": 8.0, "n_frames": 167, "n_windows": 3, "split": "train"},
+                {"clip_id": 1, "name": "short.mp4", "fps": 8.0, "n_frames": 20, "n_windows": 3, "split": "train"},
+            ],
+        },
+    )
+    write_jsonl(
+        run / "features" / "features.jsonl",
+        [{"id": 7, "label": "grasp", "label_model": "hand-v1"}],
+    )
+    write_feature_acts(
+        run / "features" / "feature_acts.parquet",
+        {
+            "feature_id": [7, 7],
+            "clip_id": ["0", "1"],
+            "window": [1, 0],
+            "t": [3, 3],
+            "h": [1, 0],
+            "w": [0, 1],
+            "value": [3.0, 1.0],
+        },
+    )
+    model = load_run(run, clips)
+    long = model.clips["0"]
+    assert long["window_starts"] == [0, 68, 135]
+    assert long["stride"] == 2
+    assert long["frames"][80]["window"] == 1
+    assert long["frames"][80]["t"] == 3
+    assert [feature["label"] for feature in long["frames"][80]["features"]] == ["grasp"]
+    assert long["frames"][80]["features"] == long["frames"][83]["features"]
+    assert long["frames"][79]["t"] == 2
+    assert long["frames"][68]["features"] == []
+    assert model.loaded["0"].path == clips / "droid_ep000.mp4"
+    grasp = next(feature for feature in model.run_payload["features"] if feature["label"] == "grasp")
+    assert grasp["top_clips"][0]["clip_id"] == "0"
+    assert grasp["top_clips"][0]["frame"] == 80
+
+    short = model.clips["1"]
+    assert short["stride"] == 1
+    assert short["window_starts"] == [2]
+    assert short["frames"][8]["window"] == 0
+    assert short["frames"][8]["t"] == 3
+    assert [feature["label"] for feature in short["frames"][8]["features"]] == ["grasp"]
+    assert short["frames"][1]["t"] is None
+    assert model.loaded["1"].path == clips / "short.mp4"
 
 
 def test_viewer_source_does_not_import_adapters():

@@ -4,24 +4,35 @@ Reads ``manifest.json`` and ``features/feature_acts.parquet``.
 ``features/clip_effects.parquet``, ``features/features.jsonl``, and
 ``scoreboard.json`` are used when present and skipped when absent. Clip pixels
 come from a path recorded on the manifest, or from a directory passed as
-``--clips`` (filename stem, then sha256).
+``--clips``. A clip's ``name`` (the exact filename, such as
+``droid_ep000.mp4``) is tried first, then the filename stem, then sha256.
 
 Frame mapping
 -------------
 A feature token at ``(window, t)`` lands on one source frame:
 
-    frame = window_start + t * tubelet
+    frame = window_start + t * tubelet * stride
 
 ``tubelet`` is ``manifest.grid.tubelet``. ``t`` counts tubelets inside the
-window, so a V-JEPA window (``grid.t`` of 8 and a tubelet of 2) is 16 frames
-and ``t`` selects every second frame. The frames that share a tubelet show the
-same features.
+window. ``stride`` is the temporal stride of the capture: how many source
+frames separate consecutive model frames. The frames that share one tubelet
+step (``tubelet * stride`` source frames) show the same features.
 
-``window_start`` is read from the run when it recorded one, in this order:
-the clip's ``window_starts``, the clip's ``windows[].start_frame`` (or
-``start``), the clip's ``window_start``, then the same keys on
-``manifest.grid``. Otherwise windows tile the clip from frame 0. The stride
-is ``grid.window_stride`` when that is set, and ``grid.t * tubelet`` otherwise.
+``stride`` and ``window_start`` are chosen in this order:
+
+1. An explicit per-clip ``window_starts`` (or ``windows[].start_frame`` /
+   ``start``, or ``window_start``), and an explicit per-clip ``stride``.
+   The same start keys on ``manifest.grid`` count as explicit. With no
+   recorded stride this is ``window_start + t * tubelet``.
+2. Otherwise, when ``manifest.extra`` records ``frames``, ``stride``, or
+   ``windows``, starts and stride come from Jeff's placement: ``span =
+   frames * stride`` source frames, ``k`` windows spread across the clip, a
+   single window centered. A clip shorter than ``span`` is resampled at
+   stride 1. Per-clip ``n_frames`` and ``n_windows`` are the inputs; ``frames``
+   and the requested stride come from ``manifest.extra``.
+3. Otherwise windows tile the clip from frame 0 and ``stride`` is 1. The
+   distance between those tiled windows is ``grid.window_stride`` when that
+   is set, and ``grid.t * tubelet`` otherwise.
 """
 
 from __future__ import annotations
@@ -98,12 +109,12 @@ _PALETTE = np.array(
 )
 
 
-def frame_index(frame: int, grid: dict, starts: list[int] | None = None) -> tuple[int, int]:
+def frame_index(frame: int, grid: dict, starts: list[int] | None = None, sample_stride: int = 1) -> tuple[int, int]:
     """Map a source frame to ``(window, t)`` using :func:`window_starts`."""
     if starts is None:
-        span = window_span(grid)
+        span = window_span(grid) * max(int(sample_stride), 1)
         starts = [index * window_stride(grid, span) for index in range((int(frame) // span) + 1)]
-    window, tubelet_index = frame_to_token(int(frame), starts, grid)
+    window, tubelet_index = frame_to_token(int(frame), starts, grid, sample_stride)
     return window, 0 if tubelet_index is None else tubelet_index
 
 
@@ -122,23 +133,85 @@ def window_stride(grid: dict, span: int | None = None) -> int:
     return window_span(grid) if span is None else span
 
 
-def window_starts(clip: dict, grid: dict, n_windows: int) -> list[int]:
+def sampled_window_starts(n_frames: int, n_windows: int, frames: int = 16, stride: int = 2) -> tuple[list[int], int]:
+    """Jeff's window placement. Returns ``(starts, stride)``.
+
+    The body is his function: ``span = frames * stride`` source frames, fewer
+    windows than requested when the clip cannot hold them, one window centered,
+    and stride 1 when the clip is shorter than ``span``.
+    """
+    span = frames * stride
+    if n_frames < span and stride > 1:
+        stride, span = 1, frames
+    k = max(1, min(n_windows, n_frames // span))
+    if k == 1:
+        return [max(0, (n_frames - span) // 2)], stride
+    gap = (n_frames - k * span) / (k - 1)
+    return [int(round(i * (span + gap))) for i in range(k)], stride
+
+
+def window_starts(clip: dict, grid: dict, n_windows: int, extra: dict | None = None) -> list[int]:
     """Frame index where each window begins. See the module docstring."""
+    return clip_sampling(clip, grid, n_windows, extra)[0]
+
+
+def clip_sampling(clip: dict, grid: dict, n_windows: int, extra: dict | None = None) -> tuple[list[int], int]:
+    """``(window_starts, sample_stride)`` for one clip.
+
+    Precedence is explicit per-clip starts and stride, then
+    :func:`sampled_window_starts` from ``manifest.extra``, then tiling from
+    frame 0 at stride 1. ``n_windows`` is the highest window index the acts
+    need a start for.
+    """
+    clip = clip if isinstance(clip, dict) else {}
     explicit = _explicit_window_starts(clip, grid)
-    stride = window_stride(grid)
-    if explicit:
-        starts = list(explicit)
-    else:
-        starts = []
-    while len(starts) <= n_windows:
-        starts.append(starts[-1] + stride if starts else 0)
-    return starts
+    explicit_stride = int(clip["stride"]) if _is_int(clip.get("stride")) else None
+    if explicit is not None:
+        stride = explicit_stride if explicit_stride is not None else 1
+        return _extend_starts(explicit, n_windows, window_stride(grid)), max(stride, 1)
+
+    spec = _sampling_spec(extra)
+    n_frames = int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else None
+    if spec is not None and n_frames is not None:
+        frames, requested, extra_windows = spec
+        if explicit_stride is not None:
+            requested = explicit_stride
+        if _is_int(clip.get("n_windows")):
+            count = int(clip["n_windows"])
+        elif extra_windows is not None:
+            count = extra_windows
+        else:
+            count = n_windows + 1
+        starts, stride = sampled_window_starts(n_frames, max(count, 1), max(frames, 1), max(requested, 1))
+        return _extend_starts(starts, n_windows, max(frames * max(stride, 1), 1)), max(stride, 1)
+
+    stride = explicit_stride if explicit_stride is not None else 1
+    return _extend_starts([], n_windows, window_stride(grid)), max(stride, 1)
 
 
-def frame_to_token(frame: int, starts: list[int], grid: dict) -> tuple[int, int | None]:
+def _sampling_spec(extra: dict | None) -> tuple[int, int, int | None] | None:
+    if not isinstance(extra, dict):
+        return None
+    if not any(key in extra for key in ("frames", "stride", "windows")):
+        return None
+    frames = int(extra["frames"]) if _is_int(extra.get("frames")) else 16
+    stride = int(extra["stride"]) if _is_int(extra.get("stride")) else 2
+    windows = int(extra["windows"]) if _is_int(extra.get("windows")) else None
+    return frames, stride, windows
+
+
+def _extend_starts(starts: list[int], n_windows: int, step: int) -> list[int]:
+    extended = [int(item) for item in starts]
+    step = max(int(step), 1)
+    while len(extended) <= n_windows:
+        extended.append(extended[-1] + step if extended else 0)
+    return extended
+
+
+def frame_to_token(frame: int, starts: list[int], grid: dict, sample_stride: int = 1) -> tuple[int, int | None]:
     """Return ``(window, t)``. ``t`` is ``None`` when ``frame`` sits in no window.
 
-    Inside a window, ``t = (frame - window_start) // tubelet``.
+    Inside a window, ``t = (frame - window_start) // (tubelet * stride)``.
     """
     if not starts:
         starts = [0]
@@ -149,21 +222,21 @@ def frame_to_token(frame: int, starts: list[int], grid: dict) -> tuple[int, int 
         else:
             break
     offset = frame - starts[window]
-    span = window_span(grid)
+    step = tubelet_of(grid) * max(int(sample_stride), 1)
+    span = window_span(grid) * max(int(sample_stride), 1)
     if offset < 0 or offset >= span:
         return window, None
-    return window, offset // tubelet_of(grid)
+    return window, offset // step
 
 
-def token_to_frame(window: int, t: int, starts: list[int], grid: dict) -> int:
-    """Inverse of :func:`frame_to_token`: ``window_start + t * tubelet``."""
-    tubelet = tubelet_of(grid)
-    stride = window_stride(grid)
+def token_to_frame(window: int, t: int, starts: list[int], grid: dict, sample_stride: int = 1) -> int:
+    """Inverse of :func:`frame_to_token`: ``window_start + t * tubelet * stride``."""
+    step = tubelet_of(grid) * max(int(sample_stride), 1)
     if 0 <= window < len(starts):
-        return starts[window] + int(t) * tubelet
+        return starts[window] + int(t) * step
     base = starts[-1] if starts else 0
-    extra = window - (len(starts) - 1) if starts else window
-    return base + extra * stride + int(t) * tubelet
+    beyond = window - (len(starts) - 1) if starts else window
+    return base + beyond * window_stride(grid) * max(int(sample_stride), 1) + int(t) * step
 
 
 def _explicit_window_starts(clip: dict, grid: dict) -> list[int] | None:
@@ -352,9 +425,10 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
         effect_cells = {}
 
     grid = _grid_dict(manifest["grid"])
+    extra = manifest.get("extra") if isinstance(manifest.get("extra"), dict) else None
     act_cells = _act_cells(acts)
     pixels = _resolve_pixels(manifest, run_dir, None if clips_dir is None else Path(clips_dir))
-    top_clips = _top_clips(act_cells, manifest, grid)
+    top_clips = _top_clips(act_cells, manifest, grid, extra)
     features = _feature_records(scoreboard, jsonl, act_cells, top_clips)
 
     meta_by_id = {feature["id"]: feature for feature in features}
@@ -369,7 +443,7 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
         clip_id = str(clip["clip_id"])
         file_info = pixels.get(clip_id) or LoadedClip("missing", "Clip file not found. Pass --clips, or record a path in the manifest.")
         n_windows = max_window.get(clip_id, 0)
-        payload = _clip_payload(clip, grid, file_info, act_cells, effect_cells, meta_by_id, n_windows)
+        payload = _clip_payload(clip, grid, file_info, act_cells, effect_cells, meta_by_id, n_windows, extra)
         clip_payloads[clip_id] = payload
         loaded[clip_id] = file_info
         if file_info.array is not None and file_info.status == "ok":
@@ -740,7 +814,7 @@ def _effect_cells(table) -> dict[tuple, dict[str, list[float]]]:
     return grouped
 
 
-def _top_clips(cells: dict, manifest: dict, grid: dict) -> dict[int, list[dict]]:
+def _top_clips(cells: dict, manifest: dict, grid: dict, extra: dict | None = None) -> dict[int, list[dict]]:
     clips = {str(clip["clip_id"]): clip for clip in manifest["clips"] if isinstance(clip, dict) and "clip_id" in clip}
     max_window: dict[str, int] = {}
     for clip_id, window, _t, _feature_id in cells:
@@ -758,7 +832,7 @@ def _top_clips(cells: dict, manifest: dict, grid: dict) -> dict[int, list[dict]]
     grouped: dict[int, list[dict]] = {}
     for (feature_id, clip_id), (value, window, t, h, w) in peaks.items():
         clip = clips.get(clip_id, {})
-        starts = window_starts(clip, grid, max(max_window.get(clip_id, 0), window))
+        starts, sample_stride = clip_sampling(clip, grid, max(max_window.get(clip_id, 0), window), extra)
         grouped.setdefault(feature_id, []).append(
             {
                 "clip_id": clip_id,
@@ -768,7 +842,7 @@ def _top_clips(cells: dict, manifest: dict, grid: dict) -> dict[int, list[dict]]
                 "h": h,
                 "w": w,
                 "value": value,
-                "frame": token_to_frame(window, t, starts, grid),
+                "frame": token_to_frame(window, t, starts, grid, sample_stride),
             }
         )
     for feature_id, rows in grouped.items():
@@ -802,8 +876,11 @@ def _resolve_pixels(manifest: dict, run_dir: Path, clips_dir: Path | None) -> di
         clip_id = str(clip["clip_id"])
         path = _manifest_clip_path(clip, run_dir) if clips_dir is None else None
         expected = clip.get("sha256") if isinstance(clip.get("sha256"), str) else None
+        named = _named_clip_file(directory, files, clip)
         stem_path = by_stem.get(clip_id)
-        if path is None and stem_path is not None and (expected is None or _file_sha256(stem_path) == expected):
+        if path is None and _sha_ok(named, expected):
+            path = named
+        elif path is None and _sha_ok(stem_path, expected):
             path = stem_path
         elif path is None:
             if expected is not None:
@@ -811,7 +888,7 @@ def _resolve_pixels(manifest: dict, run_dir: Path, clips_dir: Path | None) -> di
                     sha_index = _index_by_sha(files)
                 path = sha_index.get(expected)
             if path is None:
-                path = stem_path
+                path = named or stem_path
         resolved[clip_id] = _load_clip_file(path, clip)
     return resolved
 
@@ -859,13 +936,13 @@ def _load_npy(path: Path, clip: dict) -> LoadedClip:
     )
 
 
-def _clip_payload(clip, grid, loaded: LoadedClip, act_cells, effect_cells, meta_by_id, n_windows: int):
+def _clip_payload(clip, grid, loaded: LoadedClip, act_cells, effect_cells, meta_by_id, n_windows: int, extra: dict | None = None):
     clip_id = str(clip["clip_id"])
     n_frames = int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else 0
-    starts = window_starts(clip, grid, n_windows)
+    starts, sample_stride = clip_sampling(clip, grid, n_windows, extra)
     frames = []
     for frame in range(n_frames):
-        window, tubelet_index = frame_to_token(frame, starts, grid)
+        window, tubelet_index = frame_to_token(frame, starts, grid, sample_stride)
         if tubelet_index is None:
             features: list[dict] = []
             shown_t = None
@@ -885,6 +962,7 @@ def _clip_payload(clip, grid, loaded: LoadedClip, act_cells, effect_cells, meta_
         "width": loaded.width,
         "height": loaded.height,
         "window_starts": starts,
+        "stride": sample_stride,
         "grid": {key: grid[key] for key in ("t", "h", "w", "tubelet", "patch_px") if key in grid},
         "frames": frames,
     }
@@ -943,6 +1021,32 @@ def _manifest_clips_dir(manifest: dict, run_dir: Path) -> Path | None:
     if not path.is_absolute():
         path = run_dir / path
     return path if path.is_dir() else None
+
+
+def _sha_ok(path: Path | None, expected: str | None) -> bool:
+    return path is not None and (expected is None or _file_sha256(path) == expected)
+
+
+def _named_clip_file(directory: Path | None, files: list[Path], clip: dict) -> Path | None:
+    """Exact filename from the clip's ``name`` field, before stem or sha256."""
+    raw = clip.get("name")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    filename = Path(raw).name
+    if not filename or filename in (".", ".."):
+        return None
+    if directory is not None:
+        direct = directory / filename
+        try:
+            direct.relative_to(directory)
+        except ValueError:
+            return None
+        if direct.is_file():
+            return direct
+    for path in files:
+        if path.name == filename:
+            return path
+    return None
 
 
 def _candidate_files(directory: Path) -> list[Path]:
