@@ -89,11 +89,16 @@ function renderHeader() {
   document.getElementById("run-layer").textContent = `layer ${run.layer}`;
   const split = run.split || {};
   document.getElementById("split-sizes").textContent = `train ${split.n_train} · held-out ${split.n_heldout}`;
-  const sae = run.sae || {};
   const saeEl = document.getElementById("sae-summary");
-  const usable = sae.usable === true;
-  saeEl.dataset.usable = usable ? "true" : "false";
-  saeEl.textContent = `${usable ? "usable" : "not usable"} · ev_heldout ${fmtUnit(sae.ev_heldout)} · loss_recovered ${fmtUnit(sae.loss_recovered)}`;
+  if (run.scoreboard === false || !run.sae) {
+    saeEl.dataset.usable = "false";
+    saeEl.textContent = "no scoreboard";
+  } else {
+    const sae = run.sae;
+    const usable = sae.usable === true;
+    saeEl.dataset.usable = usable ? "true" : "false";
+    saeEl.textContent = `${usable ? "usable" : "not usable"} · ev_heldout ${fmtUnit(sae.ev_heldout)} · loss_recovered ${fmtUnit(sae.loss_recovered)}`;
+  }
   document.title = `${run.run_id} · physint`;
 }
 
@@ -161,7 +166,7 @@ function renderIndex() {
 function showFeature(id) {
   const feature = state.run.features.find((row) => row.id === id);
   if (!feature) {
-    renderError(`Feature ${id} is not in the scoreboard.`);
+    renderError(`Feature ${id} is not in this run.`);
     return;
   }
   const rows = feature.top_clips.length
@@ -175,6 +180,24 @@ function showFeature(id) {
         ]),
       )
     : [el("tr", {}, el("td", { colspan: "5" }, "This feature does not fire on any clip."))];
+  const strip = el("div", { class: "thumb-strip", "data-testid": "top-thumbs" });
+  for (const clip of feature.top_clips) {
+    const image = el("img", {
+      alt: `${clip.clip_id} frame ${clip.frame}`,
+      src: `/api/clips/${encodeURIComponent(clip.clip_id)}/frames/${clip.frame}.png`,
+      "data-testid": "top-thumb-image",
+    });
+    image.addEventListener("error", () => {
+      image.replaceWith(el("span", { class: "thumb-missing", "data-testid": "top-thumb-missing" }, "no frame"));
+    });
+    strip.append(el("a", {
+      class: "thumb",
+      href: `#/clips/${encodeURIComponent(clip.clip_id)}?frame=${clip.frame}&feature=${feature.id}`,
+      "data-testid": "top-thumb",
+      "data-clip-id": clip.clip_id,
+      "data-frame": clip.frame,
+    }, [image, el("span", {}, `${clip.clip_id} · ${fmtActivation(clip.value)}`)]));
+  }
   app.replaceChildren(
     el("article", {
       class: "feature-page",
@@ -186,14 +209,18 @@ function showFeature(id) {
       el("p", { class: "kicker" }, `Feature ${feature.id}`),
       el("div", { class: "feature-title" }, [el("h1", {}, displayLabel(feature)), badge(feature)]),
       feature.label_model ? el("p", { class: "label-model" }, feature.label_model) : null,
+      feature.scored === false
+        ? el("p", { class: "kicker", "data-testid": "scoreboard-missing" }, "No scoreboard record. Shown as unverified.")
+        : null,
       el("dl", { class: "score", "data-testid": "scoreboard" }, [
-        scoreItem("distinct_clips_top20", String(feature.distinct_clips_top20), feature.distinct_clips_top20),
+        scoreItem("distinct_clips_top20", fmtMaybe(feature.distinct_clips_top20, String), feature.distinct_clips_top20),
         scoreItem("label_holds_heldout", fmtFlag(feature.label_holds_heldout), feature.label_holds_heldout),
         scoreItem("ablation_effect", fmtEffect(feature.ablation_effect), feature.ablation_effect),
         scoreVersus(feature),
         scoreItem("absent_in_random_init", fmtFlag(feature.absent_in_random_init), feature.absent_in_random_init),
       ]),
       el("h2", { class: "panel-title" }, "Top clips"),
+      feature.top_clips.length ? strip : null,
       el("table", { class: "top-table" }, [
         el("thead", {}, el("tr", {}, ["clip", "split", "frame", "window / t", "activation"].map((label) => el("th", {}, label)))),
         el("tbody", {}, rows),
@@ -201,6 +228,11 @@ function showFeature(id) {
     ]),
   );
   document.title = `${displayLabel(feature)} · physint`;
+}
+
+function fmtMaybe(value, render) {
+  if (value === null || value === undefined) return "—";
+  return render(value);
 }
 
 function scoreItem(name, text, raw) {
@@ -212,13 +244,17 @@ function scoreItem(name, text, raw) {
 }
 
 function scoreVersus(feature) {
+  const percentile = feature.random_percentile === null || feature.random_percentile === undefined
+    ? "—"
+    : fmtPercentile(feature.random_percentile);
+  const randomCount = feature.n_random === null || feature.n_random === undefined ? "—" : String(feature.n_random);
   return el("div", {}, [
     el("dt", {}, "random_percentile"),
     el("dd", {}, [
-      el("span", { "data-testid": "random_percentile", "data-value": String(feature.random_percentile) }, fmtPercentile(feature.random_percentile)),
+      el("span", { "data-testid": "random_percentile", "data-value": feature.random_percentile === null || feature.random_percentile === undefined ? "null" : String(feature.random_percentile) }, percentile),
       " ",
       el("span", { class: "of" }, "of "),
-      el("span", { "data-testid": "n_random", "data-value": String(feature.n_random) }, String(feature.n_random)),
+      el("span", { "data-testid": "n_random", "data-value": feature.n_random === null || feature.n_random === undefined ? "null" : String(feature.n_random) }, randomCount),
     ]),
   ]);
 }
@@ -263,8 +299,26 @@ function renderClip() {
     return el("li", {}, anchor);
   });
   const image = el("img", { alt: "", "data-testid": "frame-image" });
+  const video = el("video", {
+    "data-testid": "clip-video",
+    playsinline: "",
+    preload: "auto",
+    muted: "",
+  });
+  video.hidden = true;
   const heatmap = el("div", { class: "heatmap", "data-testid": "heatmap" });
-  const stage = el("div", { class: "stage", "data-testid": "stage" }, [image, heatmap]);
+  const stage = el("div", { class: "stage", "data-testid": "stage" }, [image, video, heatmap]);
+  video.addEventListener("loadedmetadata", () => {
+    if (video.videoWidth && video.videoHeight) stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+    if (state.clip?.media === "video" && !state.playing) renderFrame({ seek: true });
+  });
+  video.addEventListener("timeupdate", () => {
+    if (!state.playing || state.clip?.media !== "video") return;
+    const fps = state.clip.fps > 0 ? state.clip.fps : 8;
+    const frame = Math.floor(video.currentTime * fps + 1e-3);
+    if (frame !== state.frame) setFrame(frame, { seek: false });
+  });
+  video.addEventListener("ended", stop);
   const message = el("p", { class: "pixels-message", "data-testid": "pixels-message" });
   stage.append(message);
   const play = el("button", { type: "button", id: "play", "data-testid": "play", "data-state": "paused" }, "Play");
@@ -312,34 +366,62 @@ function renderClip() {
   document.querySelector(".clip-list a[aria-current='page']")?.scrollIntoView({ block: "nearest" });
 }
 
-function setFrame(frame) {
+function setFrame(frame, options) {
   state.frame = clampFrame(frame);
-  renderFrame();
+  renderFrame(options);
   const feature = state.featureId === null || Number.isNaN(state.featureId) ? "" : `&feature=${state.featureId}`;
   const hash = `#/clips/${encodeURIComponent(state.clipId)}?frame=${state.frame}${feature}`;
   if (location.hash !== hash) history.replaceState(null, "", hash);
 }
 
-function renderFrame() {
+function renderFrame(options) {
   const clip = state.clip;
   const frame = clip.frames[state.frame];
   const stage = document.querySelector("[data-testid=stage]");
   const image = document.querySelector("[data-testid=frame-image]");
+  const video = document.querySelector("[data-testid=clip-video]");
   const message = document.querySelector("[data-testid=pixels-message]");
   const readout = document.querySelector("[data-testid=frame-readout]");
   const scrubber = document.getElementById("scrubber");
   const list = document.querySelector("[data-testid=frame-features]");
   if (!frame || !list) return;
 
+  const seek = !options || options.seek !== false;
+  const tubelet = frame.t === null || frame.t === undefined ? "—" : String(frame.t);
   scrubber.value = String(state.frame);
-  readout.textContent = `frame ${state.frame} · t ${frame.t} · window ${frame.window}`;
+  readout.textContent = `frame ${state.frame} · t ${tubelet} · window ${frame.window}`;
   list.dataset.frame = String(state.frame);
   image.alt = `${clip.clip_id} frame ${state.frame}`;
 
+  const useVideo = clip.media === "video" && clip.pixels === "ok";
+  stage.dataset.media = useVideo ? "video" : clip.pixels === "ok" ? "frames" : "none";
   if (clip.width && clip.height) stage.style.aspectRatio = `${clip.width} / ${clip.height}`;
-  if (clip.pixels === "ok") {
+  if (useVideo) {
     stage.classList.remove("is-empty");
     message.hidden = true;
+    image.hidden = true;
+    image.removeAttribute("src");
+    video.hidden = false;
+    const src = `/api/clips/${encodeURIComponent(clip.clip_id)}/media`;
+    if (video.getAttribute("src") !== src) video.src = src;
+    if (seek && !state.playing) {
+      const fps = clip.fps > 0 ? clip.fps : 8;
+      const target = state.frame / fps;
+      if (!Number.isFinite(video.currentTime) || Math.abs(video.currentTime - target) > 0.45 / fps) {
+        try {
+          video.currentTime = target;
+        } catch (_error) {
+          // metadata may not be ready yet; loadedmetadata retries the seek
+        }
+      }
+    }
+  } else if (clip.pixels === "ok") {
+    stage.classList.remove("is-empty");
+    message.hidden = true;
+    if (video) {
+      video.hidden = true;
+      video.removeAttribute("src");
+    }
     const src = `/api/clips/${encodeURIComponent(clip.clip_id)}/frames/${state.frame}.png`;
     if (image.getAttribute("src") !== src) image.src = src;
     image.hidden = false;
@@ -347,6 +429,7 @@ function renderFrame() {
     stage.classList.add("is-empty");
     image.hidden = true;
     image.removeAttribute("src");
+    if (video) video.hidden = true;
     message.hidden = false;
     message.textContent = clip.message || "Clip pixels are not available.";
   }
@@ -386,8 +469,10 @@ function renderFeatureRow(feature, active) {
   row.append(
     el("div", { class: "feature-head" }, [link, badge(feature)]),
     el("div", { class: "activation" }, ["activation ", el("b", { "data-testid": "activation" }, fmtActivation(feature.activation))]),
-    el("div", { class: "effects" }, feature.effects.map(renderEffect)),
   );
+  if (feature.effects && feature.effects.length) {
+    row.append(el("div", { class: "effects" }, feature.effects.map(renderEffect)));
+  }
   row.addEventListener("click", () => {
     state.featureId = feature.id;
     renderFrame();
@@ -440,10 +525,21 @@ function renderHeat(feature) {
 }
 
 function togglePlay() {
+  const video = document.querySelector("[data-testid=clip-video]");
+  const useVideo = state.clip?.media === "video" && state.clip.pixels === "ok" && video && !video.hidden;
   state.playing = !state.playing;
   const button = document.getElementById("play");
   button.textContent = state.playing ? "Pause" : "Play";
   button.dataset.state = state.playing ? "playing" : "paused";
+  if (useVideo) {
+    if (state.playing) {
+      const play = video.play();
+      if (play && typeof play.catch === "function") play.catch(() => stop());
+    } else {
+      video.pause();
+    }
+    return;
+  }
   if (state.playing) tick();
   else if (state.timer) {
     clearTimeout(state.timer);
@@ -462,6 +558,8 @@ function stop() {
   state.playing = false;
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
+  const video = document.querySelector("[data-testid=clip-video]");
+  if (video && !video.paused) video.pause();
   const button = document.getElementById("play");
   if (button) {
     button.textContent = "Play";

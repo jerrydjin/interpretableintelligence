@@ -1,6 +1,6 @@
 # Architecture
 
-This lane is the contract, the scoring core, and a local clip viewer. It does not load V-JEPA 2 or pi0.5, and it does not talk to a database. `physint view` reads a finished run folder only: the manifest, feature acts, clip effects, `features.jsonl`, and the scoreboard. It does not import adapters.
+This lane is the contract, the scoring core, and a local clip viewer. It does not load V-JEPA 2 or pi0.5, and it does not talk to a database. `physint view` reads a finished run folder only: the manifest and feature acts, plus clip effects, `features.jsonl`, and the scoreboard when those files are present. It does not import adapters. mp4 and webm play natively; other containers are transcoded with ffmpeg. A token `(window, t)` maps to source frame `window_start + t * tubelet`.
 
 ## Pipeline
 
@@ -46,6 +46,6 @@ The reference run (`--layer 16 --seed 0 --heldout-frac 0.2`, 30 clips) is the ac
 ## Next lanes
 
 1. **Real adapters.** Implement the protocol for V-JEPA 2 and pi0.5. They must run on MPS and CPU. They replace `fake`; they do not change the run folder or the gates.
-2. **Clip-first viewer.** Shipped as `physint view runs/<run_id>`. Video on the left, features that fire on the current frame on the right, activation maps from `feature_acts.parquet`, effects from `clip_effects.parquet`. Clip pixels come from a path on the manifest or from `--clips`. It only reads the contract.
+2. **Clip-first viewer.** Shipped as `physint view runs/<run_id>`. Video on the left, features that fire on the current frame on the right, activation maps from `feature_acts.parquet`, effects from `clip_effects.parquet` when that file exists. Clip files come from a path on the manifest or from `--clips` (filename stem, then sha256). The patch heatmap is drawn over the video frame. It only reads the contract.
 3. **Hosted ingest.** Upload a run folder into Postgres plus object storage. Shards and weights go to objects; manifest, scoreboard, and feature rows go to tables. Ingest reuses `physint validate` and refuses a folder that fails it.
 4. **Failed-clip API.** `upload a clip that the policy missed, return the features that drove it`. The response may cite only features with `real: true`, and only effects with `effect_kind: "ablation"`. Estimates are a ranking aid inside a run, not something the API serves as evidence.

@@ -20,7 +20,9 @@ uv run physint view runs/demo --clips clips/demo
 
 `runs/demo/scoreboard.json` should mark exactly three features real, labelled `stripe`, `pulse`, and `corner`. The decoys `flicker`, `band`, and `speckle` fire on many clips and keep their labels on held-out clips, but they do not move the predictor, so they are not real.
 
-`physint view` serves that folder locally and opens a browser. It reads the manifest, feature acts, clip effects, `features.jsonl`, and the scoreboard. This manifest does not store clip paths, so pass `--clips` (or a `path` / `clips_dir` recorded on a manifest that has one). `--no-open` skips the browser.
+`physint view` serves that folder locally and opens a browser. It reads the manifest and feature acts. Clip effects, `features.jsonl`, and the scoreboard are shown when they are present. A missing scoreboard leaves every feature unverified, and a missing `clip_effects.parquet` shows activations with no effect column. This manifest does not store clip paths, so pass `--clips` (or a `path` / `clips_dir` recorded on a manifest that has one). Files in `--clips` match `clip_id` by filename stem, then by sha256. mp4, webm, and m4v play in a `<video>` element; avi, mov, and mkv are transcoded with ffmpeg. `--no-open` skips the browser.
+
+A token `(window, t)` is the source frame `window_start + t * tubelet`. `tubelet` is `manifest.grid.tubelet`, and `t` counts tubelets, so the frames inside one tubelet share a feature list. A V-JEPA window is 16 frames (`grid.t` of 8 and a tubelet of 2). Window starts are read from the clip or the grid when the run recorded them (`window_starts`, `windows[].start_frame`, or `window_start`); otherwise the windows tile from frame 0 with stride `grid.t * tubelet`.
 
 Force a device with `PHYSINT_DEVICE=cpu` or `PHYSINT_DEVICE=mps`.
 
