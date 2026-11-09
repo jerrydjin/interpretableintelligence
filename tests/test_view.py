@@ -33,6 +33,7 @@ from physint.view import (
     frame_index,
     frame_to_token,
     load_run,
+    overlay_rect,
     render_frame,
     sampled_window_starts,
     token_to_frame,
@@ -159,6 +160,123 @@ def test_extra_stride_places_a_167_frame_clip_and_a_short_clip(tmp_path: Path):
     assert [feature["label"] for feature in short["frames"][8]["features"]] == ["grasp"]
     assert short["frames"][1]["t"] is None
     assert model.loaded["1"].path == clips / "short.mp4"
+
+
+def test_vjepa_overlay_is_the_centre_square_of_a_292_by_519_frame():
+    """Wide DROID frames are centre-cropped. hw [292, 519] → side 292 at x 113.5."""
+    hw = [292, 519]
+    rect = overlay_rect(hw, None, "vjepa2")
+    assert rect == {"x": 113.5, "y": 0.0, "width": 292.0, "height": 292.0}
+    tall = overlay_rect([519, 292], None, "vjepa2")
+    assert tall == {"x": 0.0, "y": 113.5, "width": 292.0, "height": 292.0}
+    explicit = {"x": 10, "y": 4, "width": 200, "height": 180}
+    assert overlay_rect(hw, {"crop": explicit}, "vjepa2") == {"x": 10.0, "y": 4.0, "width": 200.0, "height": 180.0}
+    assert overlay_rect(hw, {"crop": [8, 2, 100, 90]}, "fake") == {"x": 8.0, "y": 2.0, "width": 100.0, "height": 90.0}
+    assert overlay_rect(hw, None, "fake") is None
+
+
+def test_wide_clip_payload_carries_the_centre_crop(tmp_path: Path):
+    run = tmp_path / "run"
+    (run / "features").mkdir(parents=True)
+    write_json(
+        run / "manifest.json",
+        {
+            "run_id": "droid-wide",
+            "model": {"adapter": "vjepa2", "name": "vjepa2", "sha": "ab" * 32},
+            "layer": 24,
+            "grid": {"t": 4, "h": 2, "w": 2, "tubelet": 1},
+            "clips": [
+                {
+                    "clip_id": 0,
+                    "name": "droid_ep000.mp4",
+                    "fps": 8.0,
+                    "n_frames": 8,
+                    "split": "train",
+                    "hw": [292, 519],
+                }
+            ],
+        },
+    )
+    write_feature_acts(
+        run / "features" / "feature_acts.parquet",
+        {"feature_id": [7], "clip_id": ["0"], "window": [0], "t": [0], "h": [0], "w": [1], "value": [1.5]},
+    )
+    model = load_run(run, None)
+    clip = model.clips["0"]
+    assert clip["hw"] == [292.0, 519.0]
+    assert clip["crop"] == {"x": 113.5, "y": 0.0, "width": 292.0, "height": 292.0}
+
+
+def test_playwright_heatmap_covers_the_centre_square(tmp_path: Path):
+    clips = tmp_path / "clips"
+    _encode_video(clips / "droid_ep000.mp4", color="0x335544", size="320x180", frames=8, fps=8)
+    run = tmp_path / "run"
+    (run / "features").mkdir(parents=True)
+    write_json(
+        run / "manifest.json",
+        {
+            "run_id": "droid-wide",
+            "model": {"adapter": "vjepa2", "name": "vjepa2", "sha": "ab" * 32},
+            "layer": 24,
+            "grid": {"t": 4, "h": 2, "w": 2, "tubelet": 1},
+            "clips": [
+                {
+                    "clip_id": 0,
+                    "name": "droid_ep000.mp4",
+                    "fps": 8.0,
+                    "n_frames": 8,
+                    "split": "train",
+                    "hw": [292, 519],
+                }
+            ],
+        },
+    )
+    write_jsonl(run / "features" / "features.jsonl", [{"id": 7, "label": "grasp"}])
+    write_feature_acts(
+        run / "features" / "feature_acts.parquet",
+        {"feature_id": [7], "clip_id": ["0"], "window": [0], "t": [0], "h": [0], "w": [1], "value": [1.5]},
+    )
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    from playwright.sync_api import sync_playwright
+
+    with _view_server(run, clips) as url, sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=_chrome(),
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        page = browser.new_page(viewport={"width": 1280, "height": 800})
+        page.goto(url + "#/clips/0?frame=0&feature=7", wait_until="domcontentloaded")
+        page.wait_for_selector("[data-testid=heatmap][data-crop-x='113.5']")
+        page.wait_for_selector("[data-testid=heat-cell]")
+        boxes = page.evaluate(
+            """() => {
+                const stage = document.querySelector('[data-testid=stage]').getBoundingClientRect();
+                const heat = document.querySelector('[data-testid=heatmap]').getBoundingClientRect();
+                const shade = document.querySelector('[data-testid=crop-shade]');
+                const shadeBox = shade.getBoundingClientRect();
+                return {
+                    stage: {x: stage.x, y: stage.y, width: stage.width, height: stage.height},
+                    heat: {x: heat.x, y: heat.y, width: heat.width, height: heat.height},
+                    shade: {x: shadeBox.x, y: shadeBox.y, width: shadeBox.width, height: shadeBox.height},
+                    shadeHidden: shade.hidden,
+                    shadow: getComputedStyle(shade).boxShadow,
+                };
+            }"""
+        )
+        stage = boxes["stage"]
+        heat = boxes["heat"]
+        assert heat["x"] - stage["x"] == pytest.approx(stage["width"] * 113.5 / 519, abs=1.5)
+        assert heat["y"] - stage["y"] == pytest.approx(0, abs=1.5)
+        assert heat["width"] == pytest.approx(stage["width"] * 292 / 519, abs=1.5)
+        assert heat["height"] == pytest.approx(stage["height"], abs=1.5)
+        assert boxes["shadeHidden"] is False
+        assert boxes["shade"]["x"] == pytest.approx(heat["x"], abs=1.0)
+        assert boxes["shade"]["width"] == pytest.approx(heat["width"], abs=1.0)
+        assert "rgba" in boxes["shadow"]
+        page.screenshot(path=str(shots / "viewer-crop.png"), full_page=True)
+        browser.close()
 
 
 def test_viewer_source_does_not_import_adapters():

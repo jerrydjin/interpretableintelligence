@@ -35,6 +35,12 @@ step (``tubelet * stride`` source frames) show the same features.
 3. Otherwise windows tile the clip from frame 0 and ``stride`` is 1. The
    distance between those tiled windows is ``grid.window_stride`` when that
    is set, and ``grid.t * tubelet`` otherwise.
+
+The heatmap is the model's patch grid. V-JEPA centre-crops the displayed
+frame to a square before it sees it, so the grid is drawn on that square
+(side ``min(H, W)``, inset by ``(W - side) / 2`` or ``(H - side) / 2``)
+and the leftover side bands are dimmed. ``H, W`` are the clip's ``hw``.
+``manifest.extra.crop`` replaces that guess.
 """
 
 from __future__ import annotations
@@ -299,6 +305,72 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def overlay_rect(hw: list[float] | None, extra: dict | None, adapter: object) -> dict[str, float] | None:
+    """Model-input rectangle on the displayed frame, in pixels.
+
+    ``hw`` is ``[height, width]`` of the frame the viewer shows. ``manifest.extra.crop``
+    wins when it is present: a dict with ``x``/``left``, ``y``/``top``, and
+    ``width``/``w`` plus ``height``/``h`` (or a single ``size``), a list
+    ``[x, y, width, height]``, or ``"center"``. Otherwise a ``vjepa2`` adapter
+    uses the centre square, ``side = min(H, W)``, offset ``(W - side) / 2``
+    horizontally or ``(H - side) / 2`` vertically. Any other adapter leaves
+    the overlay on the full frame.
+    """
+    explicit = extra.get("crop") if isinstance(extra, dict) and "crop" in extra else None
+    if explicit is not None:
+        parsed = _parse_crop(explicit, hw)
+        if parsed is not None:
+            return parsed
+    if adapter == "vjepa2" and hw is not None:
+        return _center_square(hw[0], hw[1])
+    return None
+
+
+def _center_square(height: float, width: float) -> dict[str, float]:
+    side = min(height, width)
+    return {"x": (width - side) / 2, "y": (height - side) / 2, "width": side, "height": side}
+
+
+def _parse_crop(raw: object, hw: list[float] | None) -> dict[str, float] | None:
+    if isinstance(raw, str) and raw.strip().lower() in {"center", "centre", "center_square", "centre_square"}:
+        return _center_square(hw[0], hw[1]) if hw is not None else None
+    if isinstance(raw, dict):
+        mode = raw.get("mode") if isinstance(raw.get("mode"), str) else raw.get("type")
+        if isinstance(mode, str) and mode.strip().lower() in {"center", "centre", "center_square", "centre_square"}:
+            return _center_square(hw[0], hw[1]) if hw is not None else None
+        x = _plain_num(raw.get("x", raw.get("left")))
+        y = _plain_num(raw.get("y", raw.get("top")))
+        width = _plain_num(raw.get("width", raw.get("w", raw.get("size"))))
+        height = _plain_num(raw.get("height", raw.get("h", raw.get("size"))))
+        if x is None or y is None or width is None or height is None or width <= 0 or height <= 0:
+            return None
+        return {"x": x, "y": y, "width": width, "height": height}
+    if isinstance(raw, (list, tuple)) and len(raw) == 4:
+        x, y, width, height = (_plain_num(item) for item in raw)
+        if x is None or y is None or width is None or height is None or width <= 0 or height <= 0:
+            return None
+        return {"x": x, "y": y, "width": width, "height": height}
+    return None
+
+
+def _plain_num(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    return _num(value)
+
+
+def _displayed_hw(clip: dict, loaded: LoadedClip) -> list[float] | None:
+    """Displayed frame size ``[height, width]``. Manifest ``hw`` wins over the file."""
+    raw = clip.get("hw")
+    if isinstance(raw, (list, tuple)) and len(raw) == 2:
+        height, width = _plain_num(raw[0]), _plain_num(raw[1])
+        if height is not None and width is not None and height > 0 and width > 0:
+            return [height, width]
+    if loaded.height and loaded.width and loaded.height > 0 and loaded.width > 0:
+        return [float(loaded.height), float(loaded.width)]
+    return None
+
+
 def badge_for(real: object) -> str:
     """Non-real features are unverified. Only a JSON true counts as real."""
     return "real" if real is True else "unverified"
@@ -354,6 +426,7 @@ class RunModel:
     features_by_id: dict[int, dict] = field(default_factory=dict)
     viz: dict[int, Path] = field(default_factory=dict)
     run_dir: Path = field(default_factory=Path)
+    adapter: str | None = None
     acts: "_Acts | None" = None
     _png: dict[tuple[str, int], bytes] = field(default_factory=dict)
     _media: dict[str, tuple[Path, str]] = field(default_factory=dict)
@@ -484,6 +557,7 @@ class RunModel:
             self.acts.effects(clip_id),
             self.features_by_id,
             self.extra,
+            self.adapter,
         )
 
 
@@ -585,6 +659,7 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
         features_by_id={feature["id"]: feature for feature in features},
         viz=viz,
         run_dir=run_dir,
+        adapter=model_info.get("adapter") if isinstance(model_info.get("adapter"), str) else None,
         acts=acts,
     )
     model.clips = _LazyClips(model._build_clip)
@@ -1169,7 +1244,7 @@ def _sae_payload(scoreboard: dict | None) -> dict | None:
     }
 
 
-def _clip_payload(clip, grid, loaded, timeline, effect_rows, meta_by_id, extra):
+def _clip_payload(clip, grid, loaded, timeline, effect_rows, meta_by_id, extra, adapter=None):
     """Per-frame top features for one clip. Activations are sums over h, w.
 
     Heatmaps are not included; they are loaded for the token on screen.
@@ -1193,6 +1268,8 @@ def _clip_payload(clip, grid, loaded, timeline, effect_rows, meta_by_id, extra):
     for bucket in effects.values():
         bucket.sort(key=lambda item: (_KIND_ORDER.get(item["effect_kind"], 2), item["effect_kind"]))
     starts, sample_stride = clip_sampling(clip, grid, max_window, extra)
+    hw = _displayed_hw(clip, loaded)
+    crop = overlay_rect(hw, extra, adapter)
     frames = []
     for frame in range(n_frames):
         window, tubelet_index = frame_to_token(frame, starts, grid, sample_stride)
@@ -1231,6 +1308,8 @@ def _clip_payload(clip, grid, loaded, timeline, effect_rows, meta_by_id, extra):
         "message": loaded.message,
         "width": loaded.width,
         "height": loaded.height,
+        "hw": hw,
+        "crop": crop,
         "window_starts": starts,
         "stride": sample_stride,
         "grid": {key: grid[key] for key in ("t", "h", "w", "tubelet", "patch_px") if key in grid},

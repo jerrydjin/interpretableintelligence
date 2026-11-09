@@ -320,9 +320,13 @@ function renderClip() {
   });
   video.hidden = true;
   const heatmap = el("div", { class: "heatmap", "data-testid": "heatmap" });
-  const stage = el("div", { class: "stage", "data-testid": "stage" }, [image, video, heatmap]);
+  const shade = el("div", { class: "crop-shade", "data-testid": "crop-shade", hidden: "" });
+  const stage = el("div", { class: "stage", "data-testid": "stage" }, [image, video, shade, heatmap]);
   video.addEventListener("loadedmetadata", () => {
-    if (video.videoWidth && video.videoHeight) stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+    const hw = state.clip?.hw;
+    if (video.videoWidth && video.videoHeight && !(hw && hw[0] > 0 && hw[1] > 0)) {
+      stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+    }
     if (state.clip?.media === "video" && !state.playing) renderFrame({ seek: true });
   });
   video.addEventListener("timeupdate", () => {
@@ -408,7 +412,9 @@ function renderFrame(options) {
 
   const useVideo = clip.media === "video" && clip.pixels === "ok";
   stage.dataset.media = useVideo ? "video" : clip.pixels === "ok" ? "frames" : "none";
-  if (clip.width && clip.height) stage.style.aspectRatio = `${clip.width} / ${clip.height}`;
+  if (clip.hw && clip.hw[0] > 0 && clip.hw[1] > 0) stage.style.aspectRatio = `${clip.hw[1]} / ${clip.hw[0]}`;
+  else if (clip.width && clip.height) stage.style.aspectRatio = `${clip.width} / ${clip.height}`;
+  placeCrop(clip);
   if (useVideo) {
     stage.classList.remove("is-empty");
     message.hidden = true;
@@ -507,6 +513,43 @@ function renderEffect(effect) {
     el("span", { class: "kind" }, effect.effect_kind),
     el("span", { class: "value" }, fmtEffect(effect.effect)),
   ]);
+}
+
+function placeCrop(clip) {
+  const heat = document.querySelector("[data-testid=heatmap]");
+  const shade = document.querySelector("[data-testid=crop-shade]");
+  if (!heat) return;
+  const hw = clip.hw;
+  const crop = clip.crop;
+  const known = hw && hw[0] > 0 && hw[1] > 0 && crop && crop.width > 0 && crop.height > 0;
+  if (!known) {
+    heat.style.left = "0";
+    heat.style.top = "0";
+    heat.style.width = "100%";
+    heat.style.height = "100%";
+    delete heat.dataset.cropX;
+    delete heat.dataset.cropY;
+    delete heat.dataset.cropWidth;
+    delete heat.dataset.cropHeight;
+    if (shade) shade.hidden = true;
+    return;
+  }
+  const left = (crop.x / hw[1]) * 100;
+  const top = (crop.y / hw[0]) * 100;
+  const width = (crop.width / hw[1]) * 100;
+  const height = (crop.height / hw[0]) * 100;
+  for (const node of [heat, shade].filter(Boolean)) {
+    node.style.left = `${left}%`;
+    node.style.top = `${top}%`;
+    node.style.width = `${width}%`;
+    node.style.height = `${height}%`;
+  }
+  heat.dataset.cropX = String(crop.x);
+  heat.dataset.cropY = String(crop.y);
+  heat.dataset.cropWidth = String(crop.width);
+  heat.dataset.cropHeight = String(crop.height);
+  const covers = crop.x === 0 && crop.y === 0 && crop.width === hw[1] && crop.height === hw[0];
+  if (shade) shade.hidden = covers;
 }
 
 async function renderHeat(feature) {
