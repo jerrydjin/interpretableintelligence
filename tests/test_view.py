@@ -147,8 +147,9 @@ def test_extra_stride_places_a_167_frame_clip_and_a_short_clip(tmp_path: Path):
     assert long["frames"][68]["features"] == []
     assert model.loaded["0"].path == clips / "droid_ep000.mp4"
     grasp = next(feature for feature in model.run_payload["features"] if feature["label"] == "grasp")
-    assert grasp["top_clips"][0]["clip_id"] == "0"
-    assert grasp["top_clips"][0]["frame"] == 80
+    detail = model.feature(grasp["id"])
+    assert detail["top_clips"][0]["clip_id"] == "0"
+    assert detail["top_clips"][0]["frame"] == 80
 
     short = model.clips["1"]
     assert short["stride"] == 1
@@ -202,8 +203,9 @@ def test_non_real_feature_stays_unverified_and_effects_stay_distinct(tmp_path: P
     assert stripe["badge"] == "real"
     assert flicker["badge"] == "unverified"
     assert flicker["random_percentile"] == 100.0
-    assert stripe["top_clips"][0]["clip_id"] == "clip-000"
-    assert stripe["top_clips"][0]["frame"] == 2
+    detail = model.feature(stripe["id"])
+    assert detail["top_clips"][0]["clip_id"] == "clip-000"
+    assert detail["top_clips"][0]["frame"] == 2
 
     payload = model.clips["clip-000"]
     assert payload["frames"][0]["features"] == []
@@ -215,8 +217,9 @@ def test_non_real_feature_stays_unverified_and_effects_stay_distinct(tmp_path: P
     assert fired["stripe"]["effects"][0]["effect"] == pytest.approx(0.2)
     assert fired["stripe"]["effects"][1]["effect"] == pytest.approx(-0.01)
     assert [effect["effect_kind"] for effect in fired["flicker"]["effects"]] == ["estimate"]
-    assert fired["stripe"]["heatmap"][0][1] == pytest.approx(1.25)
-    assert fired["stripe"]["heatmap"][1][0] == 0
+    heat = model.heatmap("clip-000", 2, stripe["id"])
+    assert heat[0][1] == pytest.approx(1.25)
+    assert heat[1][0] == 0
     assert fired["flicker"]["badge"] == "unverified"
     assert payload["pixels"] == "ok"
     png = model.frame_png("clip-000", 2)
@@ -279,7 +282,7 @@ def test_missing_scoreboard_effects_and_clip_files_do_not_crash(tmp_path: Path):
     assert set(fired) == {"grasp"}
     assert by_frame[10]["t"] == 3
     assert by_frame[10]["features"] == by_frame[11]["features"]
-    assert fired["grasp"]["heatmap"][1][0] == pytest.approx(3.0)
+    assert model.heatmap("robot-grasp", 10, fired["grasp"]["id"])[1][0] == pytest.approx(3.0)
     assert fired["grasp"]["effects"][0]["effect_kind"] == "ablation"
     assert model.clips["robot-absent"]["pixels"] == "missing"
     assert model.clips["robot-absent"]["media"] == "none"
@@ -287,7 +290,7 @@ def test_missing_scoreboard_effects_and_clip_files_do_not_crash(tmp_path: Path):
     grasp_row = next(feature for feature in model.run_payload["features"] if feature["label"] == "grasp")
     reach_row = next(feature for feature in model.run_payload["features"] if feature["label"] == "reach")
     assert grasp_row["badge"] == "real"
-    assert grasp_row["top_clips"][0]["frame"] == 10
+    assert model.feature(grasp_row["id"])["top_clips"][0]["frame"] == 10
 
     short = json.loads((run / "scoreboard.json").read_text(encoding="utf-8"))
     short["features"] = [row for row in short["features"] if row["label"] == "grasp"]
@@ -801,14 +804,14 @@ def viewer_url(fresh_fake_run: tuple[Path, Path]):
         err.close()
 
 
-def test_playwright_scrub_shows_real_ablation_and_unverified_decoy(fresh_fake_run, viewer_url: str):
+def test_playwright_scrub_shows_real_ablation_and_unverified_decoy(fresh_fake_run, viewer_url: str, tmp_path: Path):
     from playwright.sync_api import expect, sync_playwright
 
     clips, run = fresh_fake_run
     del clips
     moment = _moment(run)
-    artifacts = Path("/opt/cursor/artifacts")
-    artifacts.mkdir(parents=True, exist_ok=True)
+    shots = tmp_path / "shots"
+    shots.mkdir()
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -866,6 +869,7 @@ def test_playwright_scrub_shows_real_ablation_and_unverified_decoy(fresh_fake_ru
             }""",
             arg=moment["feature_id"],
         )
+        page.wait_for_selector("[data-testid=heat-cell]")
         heat = page.locator("[data-testid=heat-cell]").evaluate_all("nodes => nodes.map((node) => Number(node.dataset.value))")
         assert heat and max(heat) > 0
 
@@ -880,7 +884,7 @@ def test_playwright_scrub_shows_real_ablation_and_unverified_decoy(fresh_fake_ru
             }"""
         )
         page.evaluate("() => document.fonts.ready")
-        page.screenshot(path=str(artifacts / "viewer-clip.png"), full_page=True)
+        page.screenshot(path=str(shots / "viewer-clip.png"), full_page=True)
 
         row.locator("[data-testid=feature-link]").click()
         page.wait_for_selector("[data-testid=feature-page]")
@@ -898,7 +902,7 @@ def test_playwright_scrub_shows_real_ablation_and_unverified_decoy(fresh_fake_ru
         expect(page.locator("[data-testid=absent_in_random_init]")).to_have_text("yes")
         expect(page.locator("[data-testid=top-clip]").first).to_be_visible()
         page.evaluate("() => document.fonts.ready")
-        page.screenshot(path=str(artifacts / "viewer-feature.png"), full_page=True)
+        page.screenshot(path=str(shots / "viewer-feature.png"), full_page=True)
         browser.close()
 
 
@@ -965,8 +969,8 @@ def test_playwright_video_scrub_updates_features_at_the_tubelet_frame(tmp_path: 
     shutil.copytree(run, bare)
     (bare / "scoreboard.json").unlink()
     (bare / "features" / "clip_effects.parquet").unlink()
-    artifacts = Path("/opt/cursor/artifacts")
-    artifacts.mkdir(parents=True, exist_ok=True)
+    shots = tmp_path / "shots"
+    shots.mkdir()
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -992,6 +996,7 @@ def test_playwright_video_scrub_updates_features_at_the_tubelet_frame(tmp_path: 
             expect(row.locator("[data-testid=badge]")).to_have_text("real")
             ablation = row.locator("[data-testid=effect][data-kind=ablation]")
             assert float(ablation.get_attribute("data-effect")) == pytest.approx(0.4)
+            page.wait_for_selector("[data-testid=heat-cell][data-h='1'][data-w='0']")
             cell = page.locator("[data-testid=heat-cell][data-h='1'][data-w='0']")
             expect(cell).to_have_attribute("data-value", "3")
             page.wait_for_function(
@@ -1004,7 +1009,7 @@ def test_playwright_video_scrub_updates_features_at_the_tubelet_frame(tmp_path: 
                 }"""
             )
             page.evaluate("() => document.fonts.ready")
-            page.screenshot(path=str(artifacts / "viewer-video.png"), full_page=True)
+            page.screenshot(path=str(shots / "viewer-video.png"), full_page=True)
 
         with _view_server(bare, clips) as url:
             page.goto(url, wait_until="domcontentloaded")
@@ -1018,6 +1023,7 @@ def test_playwright_video_scrub_updates_features_at_the_tubelet_frame(tmp_path: 
             expect(row.locator("[data-testid=badge]")).to_have_text("unverified")
             expect(row.locator("[data-testid=activation]")).to_contain_text("3.000")
             expect(page.locator("[data-testid=effect]")).to_have_count(0)
+            page.wait_for_selector("[data-testid=heat-cell][data-h='1'][data-w='0']")
             expect(page.locator("[data-testid=heat-cell][data-h='1'][data-w='0']")).to_have_attribute("data-value", "3")
             row.locator("[data-testid=feature-link]").click()
             page.wait_for_selector("[data-testid=feature-page]")
@@ -1032,5 +1038,233 @@ def test_playwright_video_scrub_updates_features_at_the_tubelet_frame(tmp_path: 
             )
             expect(page.locator("[data-testid=top-thumb]")).to_have_attribute("data-frame", "10")
             page.evaluate("() => document.fonts.ready")
-            page.screenshot(path=str(artifacts / "viewer-no-scoreboard.png"), full_page=True)
+            page.screenshot(path=str(shots / "viewer-no-scoreboard.png"), full_page=True)
         browser.close()
+
+
+def test_candidates_are_listed_before_the_other_features(tmp_path: Path):
+    run = tmp_path / "run"
+    (run / "features" / "viz").mkdir(parents=True)
+    write_json(
+        run / "manifest.json",
+        {
+            "run_id": "cand",
+            "model": {"name": "tiny", "sha": "abc"},
+            "layer": 3,
+            "grid": {"t": 2, "h": 2, "w": 2, "tubelet": 1},
+            "clips": [{"clip_id": "c0", "n_frames": 2, "split": "train", "fps": 8}],
+        },
+    )
+    write_feature_acts(
+        run / "features" / "feature_acts.parquet",
+        {
+            "feature_id": [0, 2],
+            "clip_id": ["c0", "c0"],
+            "window": [0, 0],
+            "t": [0, 0],
+            "h": [0, 0],
+            "w": [0, 1],
+            "value": [0.2, 0.9],
+        },
+    )
+    write_jsonl(
+        run / "features" / "features.jsonl",
+        [{"id": 0, "label": "zero"}, {"id": 1, "label": "one"}],
+    )
+    (run / "features" / "candidates.json").write_text(
+        json.dumps(
+            [
+                {"feature_id": 2, "distinct_clips_top20": 1, "freq": 1, "max_act": 0.9},
+                {"feature_id": 0, "distinct_clips_top20": 1, "freq": 1, "max_act": 0.2},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (run / "features" / "viz" / "feature_00002.png").write_bytes(b"\x89PNG\r\n")
+    model = load_run(run, None)
+    rows = model.run_payload["features"]
+    assert [row["id"] for row in rows] == [2, 0, 1]
+    assert [row["candidate"] for row in rows] == [True, True, False]
+    assert "top_clips" not in rows[0]
+    detail = model.feature(2)
+    assert detail["viz"] is True
+    assert detail["top_clips"][0]["clip_id"] == "c0"
+    assert detail["top_clips"][0]["value"] == pytest.approx(0.9)
+
+
+def _act_value(clip: int, window: int, tubelet: int, height: int, width: int) -> float:
+    return float(((clip * 10007 + window * 97 + tubelet * 13 + height * 3 + width) % 997) * 0.001)
+
+
+def _write_ten_million_acts(path: Path) -> int:
+    """200 features × 40 clips × 4 × 8 × 8 × 5 = 10,240,000 rows, sorted by feature_id."""
+    import pyarrow as pa
+
+    n_features = 200
+    clip_id, window, tubelet, height, width = (
+        array.reshape(-1).astype(np.int32)
+        for array in np.meshgrid(
+            np.arange(40, dtype=np.int32),
+            np.arange(4, dtype=np.int32),
+            np.arange(8, dtype=np.int32),
+            np.arange(8, dtype=np.int32),
+            np.arange(5, dtype=np.int32),
+            indexing="ij",
+        )
+    )
+    base = (
+        (clip_id * 10007 + window * 97 + tubelet * 13 + height * 3 + width) % 997
+    ).astype(np.float32) * np.float32(0.001)
+    planted = base.copy()
+    planted[(clip_id == 3) & (window == 1) & (tubelet == 2) & (height == 1) & (width == 0)] = np.float32(999.0)
+    schema = pa.schema(
+        [
+            ("feature_id", pa.int32()),
+            ("clip_id", pa.int32()),
+            ("window", pa.int32()),
+            ("t", pa.int32()),
+            ("h", pa.int32()),
+            ("w", pa.int32()),
+            ("value", pa.float32()),
+        ]
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    writer = pq.ParquetWriter(path, schema, compression="zstd")
+    batch: list = []
+    pending = 0
+    total = 0
+    for feature_id in range(n_features):
+        table = pa.table(
+            {
+                "feature_id": pa.array(np.full(clip_id.shape[0], feature_id, dtype=np.int32), type=pa.int32()),
+                "clip_id": pa.array(clip_id, type=pa.int32()),
+                "window": pa.array(window, type=pa.int32()),
+                "t": pa.array(tubelet, type=pa.int32()),
+                "h": pa.array(height, type=pa.int32()),
+                "w": pa.array(width, type=pa.int32()),
+                "value": pa.array(planted if feature_id == 7 else base, type=pa.float32()),
+            }
+        )
+        batch.append(table)
+        pending += table.num_rows
+        if pending >= 1_048_576:
+            writer.write_table(pa.concat_tables(batch))
+            total += pending
+            batch, pending = [], 0
+    if batch:
+        writer.write_table(pa.concat_tables(batch))
+        total += pending
+    writer.close()
+    return total
+
+
+def _vmhwm_kb(pid: int) -> int:
+    for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+        if line.startswith("VmHWM:"):
+            return int(line.split()[1])
+    raise AssertionError(f"VmHWM missing for pid {pid}")
+
+
+@pytest.mark.slow
+def test_ten_million_acts_bind_under_five_seconds_and_one_point_five_gb(tmp_path: Path):
+    run = tmp_path / "run"
+    acts = run / "features" / "feature_acts.parquet"
+    total = _write_ten_million_acts(acts)
+    assert total >= 10_000_000
+    assert pq.ParquetFile(acts).metadata.num_rows >= 10_000_000
+    write_json(
+        run / "manifest.json",
+        {
+            "run_id": "large",
+            "model": {"adapter": "fake", "name": "large", "sha": "deadbeef"},
+            "layer": 16,
+            "grid": {"t": 8, "h": 8, "w": 5, "tubelet": 2, "patch_px": 4},
+            "clips": [
+                {"clip_id": index, "n_frames": 64, "split": "train", "fps": 8, "name": f"clip-{index:03d}.mp4"}
+                for index in range(40)
+            ],
+        },
+    )
+    label = "planted-token-" + ("x" * 2800)
+    with (run / "features" / "features.jsonl").open("w", encoding="utf-8") as handle:
+        for feature_id in range(8000):
+            text = "planted" if feature_id == 7 else label
+            handle.write(json.dumps({"id": feature_id, "label": text, "blob": "y" * 200}) + "\n")
+    (run / "features" / "candidates.json").write_text(
+        json.dumps(
+            [
+                {"feature_id": 7, "distinct_clips_top20": 40, "freq": 1, "max_act": 999},
+                {"feature_id": 11, "distinct_clips_top20": 40, "freq": 1, "max_act": 0.01},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    script = tmp_path / "serve_large.py"
+    script.write_text(
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "from physint.view import bind_server, load_run\n"
+        "def hwm():\n"
+        "    for line in Path('/proc/self/status').read_text().splitlines():\n"
+        "        if line.startswith('VmHWM:'):\n"
+        "            return int(line.split()[1])\n"
+        "    return 0\n"
+        "started = time.perf_counter()\n"
+        "model = load_run(Path(sys.argv[1]), None)\n"
+        "server = bind_server(model, '127.0.0.1', 0)\n"
+        "print(json.dumps({'elapsed': time.perf_counter() - started, 'hwm_kb': hwm(), 'port': server.server_address[1]}), flush=True)\n"
+        "server.serve_forever()\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.Popen(
+        [sys.executable, str(script), str(run)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert proc.stdout is not None
+        ready, _, _ = select.select([proc.stdout], [], [], 20)
+        assert ready, "viewer did not bind within 20s"
+        line = proc.stdout.readline()
+        assert proc.poll() is None, proc.stderr.read() if proc.stderr else line
+        report = json.loads(line)
+        assert report["elapsed"] < 5.0, report
+        limit_kb = int(1.5 * 1024 * 1024)
+        assert report["hwm_kb"] < limit_kb, report
+        base = f"http://127.0.0.1:{report['port']}"
+        with urllib.request.urlopen(base + "/api/run", timeout=30) as response:
+            payload = json.load(response)
+        assert [row["id"] for row in payload["features"][:2]] == [7, 11]
+        assert payload["features"][0]["candidate"] is True
+        assert payload["scoreboard"] is False
+        with urllib.request.urlopen(base + "/api/clips/3", timeout=120) as response:
+            clip = json.load(response)
+        fired = {row["id"]: row for row in clip["frames"][20]["features"]}
+        assert fired[7]["label"] == "planted"
+        expected = sum(
+            999.0 if (h, w) == (1, 0) else _act_value(3, 1, 2, h, w) for h in range(8) for w in range(5)
+        )
+        assert fired[7]["activation"] == pytest.approx(expected)
+        with urllib.request.urlopen(base + "/api/clips/3/heatmap?frame=20&feature=7", timeout=60) as response:
+            heat = json.load(response)["heatmap"]
+        assert heat[1][0] == pytest.approx(999.0)
+        with urllib.request.urlopen(base + "/api/features/7", timeout=60) as response:
+            detail = json.load(response)
+        assert detail["top_clips"][0]["clip_id"] == "3"
+        assert detail["top_clips"][0]["frame"] == 20
+        assert detail["top_clips"][0]["value"] == pytest.approx(999.0)
+        peak_kb = _vmhwm_kb(proc.pid)
+        assert peak_kb < limit_kb, peak_kb
+        timing = {
+            "startup_s": report["elapsed"],
+            "startup_hwm_kb": report["hwm_kb"],
+            "peak_hwm_kb": peak_kb,
+            "rows": total,
+            "parquet_bytes": acts.stat().st_size,
+        }
+        (tmp_path / "large-view-timing.json").write_text(json.dumps(timing), encoding="utf-8")
+        print(json.dumps(timing), flush=True)
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)

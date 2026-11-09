@@ -1,8 +1,10 @@
 """Local clip-first viewer over a finished run folder.
 
-Reads ``manifest.json`` and ``features/feature_acts.parquet``.
-``features/clip_effects.parquet``, ``features/features.jsonl``, and
-``scoreboard.json`` are used when present and skipped when absent. Clip pixels
+Reads ``manifest.json``. ``features/feature_acts.parquet`` is queried per clip and
+per feature through DuckDB (the file is not loaded into memory).
+``features/clip_effects.parquet``, ``features/features.jsonl``,
+``features/candidates.json``, and ``scoreboard.json`` are used when present
+and skipped when absent. Clip pixels
 come from a path recorded on the manifest, or from a directory passed as
 ``--clips``. A clip's ``name`` (the exact filename, such as
 ``droid_ep000.mp4``) is tried first, then the filename stem, then sha256.
@@ -50,12 +52,14 @@ import zlib
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
+import duckdb
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 
-from physint.artifacts import read_json, read_jsonl
+from physint.artifacts import read_json
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -77,9 +81,15 @@ _SCORE_FIELDS = (
     "real",
 )
 _KIND_ORDER = {"ablation": 0, "estimate": 1}
+_TOP_FEATURES = 40
+_TOP_CLIPS = 20
+_SHA_EAGER_LIMIT = 8 * 1024 * 1024
 _CLIP_ID = re.compile(r"^/api/clips/(?P<clip>[^/]+)$")
 _FRAME_PNG = re.compile(r"^/api/clips/(?P<clip>[^/]+)/frames/(?P<frame>[0-9]+)\.png$")
 _MEDIA = re.compile(r"^/api/clips/(?P<clip>[^/]+)/media$")
+_HEAT = re.compile(r"^/api/clips/(?P<clip>[^/]+)/heatmap$")
+_FEATURE = re.compile(r"^/api/features/(?P<feature>[0-9]+)$")
+_FEATURE_VIZ = re.compile(r"^/api/features/(?P<feature>[0-9]+)/viz$")
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -337,12 +347,21 @@ class RunModel:
     loaded: dict[str, LoadedClip] = field(default_factory=dict)
     frames: dict[str, np.ndarray] = field(default_factory=dict)
     peaks: dict[str, float] = field(default_factory=dict)
+    meta: dict[str, dict] = field(default_factory=dict)
+    manifest_clips: dict[str, dict] = field(default_factory=dict)
+    grid: dict = field(default_factory=dict)
+    extra: dict | None = None
+    features_by_id: dict[int, dict] = field(default_factory=dict)
+    viz: dict[int, Path] = field(default_factory=dict)
+    run_dir: Path = field(default_factory=Path)
+    acts: "_Acts | None" = None
     _png: dict[tuple[str, int], bytes] = field(default_factory=dict)
     _media: dict[str, tuple[Path, str]] = field(default_factory=dict)
+    _viz_stat: dict[int, Path | None] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def frame_png(self, clip_id: str, frame: int) -> bytes | None:
-        clip = self.clips.get(clip_id)
+        clip = self.meta.get(clip_id)
         if clip is None or clip["pixels"] != "ok":
             return None
         if frame < 0 or frame >= int(clip["n_frames"]):
@@ -358,7 +377,7 @@ class RunModel:
 
     def media_file(self, clip_id: str) -> tuple[Path, str] | None:
         """Playable video path and content type. Transcodes avi/mov/mkv once."""
-        clip = self.clips.get(clip_id)
+        clip = self.meta.get(clip_id)
         loaded = self.loaded.get(clip_id)
         if clip is None or loaded is None or clip.get("media") != "video" or loaded.path is None:
             return None
@@ -379,11 +398,93 @@ class RunModel:
             scale = _display_scale(image.shape[0], image.shape[1])
             return encode_png(_upsample(image, scale))
         loaded = self.loaded.get(clip_id)
-        clip = self.clips[clip_id]
+        clip = self.meta.get(clip_id) or {}
         if loaded is None or loaded.path is None:
             return None
         fps = float(clip.get("fps") or 0.0) or 8.0
         return _video_frame_png(loaded.path, frame, fps)
+
+    def feature(self, feature_id: int) -> dict | None:
+        """One feature, with its top clips queried on demand."""
+        base = self.features_by_id.get(feature_id)
+        tops = self._top_for(feature_id) if self.acts is not None else []
+        if base is None and not tops:
+            return None
+        detail = dict(base or _blank_feature(feature_id))
+        detail["top_clips"] = tops
+        detail["viz"] = self.viz_file(feature_id) is not None
+        return detail
+
+    def viz_file(self, feature_id: int) -> Path | None:
+        if feature_id in self._viz_stat:
+            return self._viz_stat[feature_id]
+        found = self.viz.get(feature_id)
+        if found is None:
+            for name in (f"feature_{feature_id:05d}.png", f"feature_{feature_id}.png"):
+                candidate = self.run_dir / "features" / "viz" / name
+                if candidate.is_file():
+                    found = candidate
+                    break
+        self._viz_stat[feature_id] = found
+        return found
+
+    def heatmap(self, clip_id: str, frame: int, feature_id: int) -> list[list[float]] | None:
+        """Patch grid for one token. Empty cells are 0."""
+        clip = self.manifest_clips.get(clip_id)
+        if clip is None or self.acts is None:
+            return None
+        n_frames = int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else 0
+        if frame < 0 or frame >= n_frames:
+            return None
+        height, width = int(self.grid["h"]), int(self.grid["w"])
+        grid = [[0.0 for _ in range(width)] for _ in range(height)]
+        starts, stride = clip_sampling(clip, self.grid, frame, self.extra)
+        _window, tubelet_index = frame_to_token(frame, starts, self.grid, stride)
+        if tubelet_index is None:
+            return grid
+        for h, w, value in self.acts.cells(clip_id, _window, tubelet_index, feature_id):
+            if 0 <= h < height and 0 <= w < width:
+                grid[h][w] = value
+        return grid
+
+    def _top_for(self, feature_id: int) -> list[dict]:
+        rows = []
+        for clip_id, window, tubelet_index, h, w, value in self.acts.top_clips(feature_id):
+            clip = self.manifest_clips.get(str(clip_id), {})
+            starts, stride = clip_sampling(clip, self.grid, int(window), self.extra)
+            rows.append(
+                {
+                    "clip_id": str(clip_id),
+                    "split": clip.get("split"),
+                    "window": int(window),
+                    "t": int(tubelet_index),
+                    "h": int(h),
+                    "w": int(w),
+                    "value": float(value),
+                    "frame": token_to_frame(int(window), int(tubelet_index), starts, self.grid, stride),
+                }
+            )
+        return rows
+
+    def _build_clip(self, clip_id: str) -> dict | None:
+        clip = self.manifest_clips.get(clip_id)
+        if clip is None or self.acts is None:
+            return None
+        loaded = self.loaded.get(clip_id) or LoadedClip(
+            "missing",
+            "Clip file not found. Pass --clips, or record a path in the manifest.",
+        )
+        if loaded.kind == "video" and loaded.width is None and loaded.path is not None and loaded.status == "ok":
+            loaded.width, loaded.height = _probe_video(loaded.path)
+        return _clip_payload(
+            clip,
+            self.grid,
+            loaded,
+            self.acts.timeline(clip_id),
+            self.acts.effects(clip_id),
+            self.features_by_id,
+            self.extra,
+        )
 
 
 def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
@@ -405,50 +506,55 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
         raise ValueError("manifest.clips must be a list")
 
     scoreboard = _read_optional_json(run_dir / "scoreboard.json")
-    jsonl = read_jsonl(run_dir / "features" / "features.jsonl") if (run_dir / "features" / "features.jsonl").is_file() else []
-    acts = pq.read_table(run_dir / "features" / "feature_acts.parquet")
-    _require_columns(
-        acts,
-        ("feature_id", "clip_id", "window", "t", "h", "w", "value"),
-        "feature_acts.parquet",
-    )
+    labels = _stream_labels(run_dir / "features" / "features.jsonl")
+    candidates = _read_candidates(run_dir / "features" / "candidates.json")
+    acts_path = run_dir / "features" / "feature_acts.parquet"
+    _require_columns(pq.read_schema(acts_path), ("feature_id", "clip_id", "window", "t", "h", "w", "value"), "feature_acts.parquet")
     effects_path = run_dir / "features" / "clip_effects.parquet"
     if effects_path.is_file():
-        effects = pq.read_table(effects_path)
         _require_columns(
-            effects,
+            pq.read_schema(effects_path),
             ("feature_id", "clip_id", "window", "t", "effect", "effect_kind"),
             "clip_effects.parquet",
         )
-        effect_cells = _effect_cells(effects)
-    else:
-        effect_cells = {}
+    acts = _Acts(acts_path, effects_path if effects_path.is_file() else None)
 
     grid = _grid_dict(manifest["grid"])
     extra = manifest.get("extra") if isinstance(manifest.get("extra"), dict) else None
-    act_cells = _act_cells(acts)
+    features, viz = _feature_index(scoreboard, labels, candidates, run_dir)
     pixels = _resolve_pixels(manifest, run_dir, None if clips_dir is None else Path(clips_dir))
-    top_clips = _top_clips(act_cells, manifest, grid, extra)
-    features = _feature_records(scoreboard, jsonl, act_cells, top_clips)
-
-    meta_by_id = {feature["id"]: feature for feature in features}
-    clip_payloads: dict[str, dict] = {}
+    manifest_clips: dict[str, dict] = {}
     loaded: dict[str, LoadedClip] = {}
     frames: dict[str, np.ndarray] = {}
     peaks: dict[str, float] = {}
-    max_window = _max_window(act_cells, effect_cells)
+    meta: dict[str, dict] = {}
     for clip in manifest["clips"]:
         if not isinstance(clip, dict) or "clip_id" not in clip:
             continue
         clip_id = str(clip["clip_id"])
-        file_info = pixels.get(clip_id) or LoadedClip("missing", "Clip file not found. Pass --clips, or record a path in the manifest.")
-        n_windows = max_window.get(clip_id, 0)
-        payload = _clip_payload(clip, grid, file_info, act_cells, effect_cells, meta_by_id, n_windows, extra)
-        clip_payloads[clip_id] = payload
+        manifest_clips[clip_id] = clip
+        file_info = pixels.get(clip_id) or LoadedClip(
+            "missing",
+            "Clip file not found. Pass --clips, or record a path in the manifest.",
+        )
         loaded[clip_id] = file_info
         if file_info.array is not None and file_info.status == "ok":
             frames[clip_id] = file_info.array
             peaks[clip_id] = file_info.peak
+        if file_info.kind == "video" and file_info.status == "ok":
+            media = "video"
+        elif file_info.kind == "array" and file_info.status == "ok":
+            media = "frames"
+        else:
+            media = "none"
+        meta[clip_id] = {
+            "clip_id": clip_id,
+            "fps": float(clip.get("fps") or 0.0),
+            "n_frames": int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else 0,
+            "split": clip.get("split"),
+            "pixels": file_info.status,
+            "media": media,
+        }
 
     model_info = manifest["model"]
     run_payload = {
@@ -463,20 +569,26 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
         "scoreboard": scoreboard is not None,
         "split": _split_payload(scoreboard, manifest),
         "sae": _sae_payload(scoreboard),
-        "clips": [
-            {
-                "clip_id": payload["clip_id"],
-                "fps": payload["fps"],
-                "n_frames": payload["n_frames"],
-                "split": payload["split"],
-                "pixels": payload["pixels"],
-                "media": payload["media"],
-            }
-            for payload in clip_payloads.values()
-        ],
+        "clips": list(meta.values()),
         "features": features,
     }
-    return RunModel(run_payload=run_payload, clips=clip_payloads, loaded=loaded, frames=frames, peaks=peaks)
+    model = RunModel(
+        run_payload=run_payload,
+        clips={},
+        loaded=loaded,
+        frames=frames,
+        peaks=peaks,
+        meta=meta,
+        manifest_clips=manifest_clips,
+        grid=grid,
+        extra=extra,
+        features_by_id={feature["id"]: feature for feature in features},
+        viz=viz,
+        run_dir=run_dir,
+        acts=acts,
+    )
+    model.clips = _LazyClips(model._build_clip)
+    return model
 
 
 def render_frame(frame: np.ndarray, peak: float) -> np.ndarray:
@@ -523,7 +635,8 @@ def _handler(model: RunModel):
         def do_HEAD(self) -> None:  # noqa: N802
             self.close_connection = True
             try:
-                self._route(unquote(urlparse(self.path).path), head=True)
+                path, query = self._target()
+                self._route(path, query, head=True)
             except BrokenPipeError:
                 return
             except Exception as exc:  # noqa: BLE001
@@ -531,16 +644,20 @@ def _handler(model: RunModel):
 
         def do_GET(self) -> None:  # noqa: N802
             self.close_connection = True
-            path = unquote(urlparse(self.path).path)
             try:
-                self._route(path, head=False)
+                path, query = self._target()
+                self._route(path, query, head=False)
             except BrokenPipeError:
                 return
             except Exception as exc:  # noqa: BLE001
                 body = json.dumps({"error": str(exc)}).encode()
                 self._send(body, "application/json", status=500)
 
-        def _route(self, path: str, head: bool) -> None:
+        def _target(self) -> tuple[str, dict[str, list[str]]]:
+            parsed = urlparse(self.path)
+            return unquote(parsed.path), parse_qs(parsed.query)
+
+        def _route(self, path: str, query: dict[str, list[str]], head: bool) -> None:
             if path in ("/", "/index.html"):
                 self._send_file(STATIC_DIR / "index.html", head=head)
                 return
@@ -549,6 +666,35 @@ def _handler(model: RunModel):
                 return
             if path == "/api/run":
                 self._send_json(model.run_payload, head=head)
+                return
+            viz_match = _FEATURE_VIZ.match(path)
+            if viz_match:
+                viz = model.viz_file(int(viz_match.group("feature")))
+                if viz is None:
+                    self._send_json({"error": "no viz"}, status=404, head=head)
+                    return
+                self._send(viz.read_bytes(), "image/png", cache="private, max-age=3600", head=head)
+                return
+            feature_match = _FEATURE.match(path)
+            if feature_match:
+                detail = model.feature(int(feature_match.group("feature")))
+                if detail is None:
+                    self._send_json({"error": "unknown feature"}, status=404, head=head)
+                    return
+                self._send_json(detail, head=head)
+                return
+            heat_match = _HEAT.match(path)
+            if heat_match:
+                frame = _query_int(query, "frame")
+                feature_id = _query_int(query, "feature")
+                if frame is None or feature_id is None:
+                    self._send_json({"error": "frame and feature are required"}, status=400, head=head)
+                    return
+                heat = model.heatmap(heat_match.group("clip"), frame, feature_id)
+                if heat is None:
+                    self._send_json({"error": "frame not available"}, status=404, head=head)
+                    return
+                self._send_json({"heatmap": heat}, head=head)
                 return
             media_match = _MEDIA.match(path)
             if media_match:
@@ -694,11 +840,241 @@ def _grid_dict(grid: dict) -> dict:
     return parsed
 
 
-def _feature_records(scoreboard: dict | None, jsonl: list, act_cells: dict, top_clips: dict) -> list[dict]:
-    """Every feature seen in the acts, jsonl, or scoreboard.
+class _LazyClips(dict):
+    """Builds a clip payload the first time it is requested."""
 
-    A feature with no scoreboard row is unverified. A missing scoreboard makes
-    every feature unverified. Extra rows are kept; missing fields stay null.
+    def __init__(self, build):
+        super().__init__()
+        self._build = build
+
+    def get(self, key, default=None):
+        if key in self:
+            return super().get(key, default)
+        built = self._build(str(key))
+        if built is None:
+            return default
+        self[str(key)] = built
+        return built
+
+    def __getitem__(self, key):
+        value = self.get(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+
+class _LRU:
+    def __init__(self, cap: int):
+        self.cap = cap
+        self._data: dict = {}
+        self._order: list = []
+
+    def get(self, key):
+        if key not in self._data:
+            return None
+        self._order.remove(key)
+        self._order.append(key)
+        return self._data[key]
+
+    def put(self, key, value) -> None:
+        if key in self._data:
+            self._order.remove(key)
+        self._data[key] = value
+        self._order.append(key)
+        while len(self._order) > self.cap:
+            self._data.pop(self._order.pop(0), None)
+
+
+class _Acts:
+    """DuckDB queries over feature_acts, with predicate pushdown and a small cache.
+
+    The parquet is never materialized. Timeline rows sum ``value`` over ``h, w``.
+    Heatmaps are one token. Top clips are the per-clip peak row.
+    """
+
+    def __init__(self, acts_path: Path, effects_path: Path | None):
+        self.acts_path = str(acts_path)
+        schema = pq.read_schema(acts_path)
+        self.clip_is_int = pa.types.is_integer(schema.field("clip_id").type)
+        self.effects_path = str(effects_path) if effects_path is not None else None
+        self.effects_clip_is_int = False
+        if effects_path is not None:
+            effect_schema = pq.read_schema(effects_path)
+            self.effects_clip_is_int = pa.types.is_integer(effect_schema.field("clip_id").type)
+        self._con = duckdb.connect()
+        self._con.execute("SET memory_limit='768MB'")
+        self._con.execute("SET threads=2")
+        self._con.execute("SET preserve_insertion_order=false")
+        self._lock = threading.Lock()
+        self._timeline = _LRU(8)
+        self._effects = _LRU(8)
+        self._cells = _LRU(64)
+        self._tops = _LRU(32)
+
+    def timeline(self, clip_id: str) -> list[tuple]:
+        key = str(clip_id)
+        with self._lock:
+            cached = self._timeline.get(key)
+            if cached is not None:
+                return cached
+            rows = self._con.execute(
+                """
+                WITH summed AS (
+                    SELECT "window", "t", feature_id, sum(value)::DOUBLE AS activation
+                    FROM read_parquet(?)
+                    WHERE clip_id = ?
+                    GROUP BY "window", "t", feature_id
+                ),
+                ranked AS (
+                    SELECT "window", "t", feature_id, activation,
+                           row_number() OVER (
+                               PARTITION BY "window", "t"
+                               ORDER BY activation DESC, feature_id
+                           ) AS rn
+                    FROM summed
+                )
+                SELECT "window", "t", feature_id, activation
+                FROM ranked
+                WHERE rn <= ?
+                """,
+                [self.acts_path, self._clip_param(key, self.clip_is_int), _TOP_FEATURES],
+            ).fetchall()
+            self._timeline.put(key, rows)
+            return rows
+
+    def effects(self, clip_id: str) -> list[tuple]:
+        key = str(clip_id)
+        with self._lock:
+            cached = self._effects.get(key)
+            if cached is not None:
+                return cached
+            if self.effects_path is None:
+                self._effects.put(key, [])
+                return []
+            rows = self._con.execute(
+                """
+                SELECT feature_id, "window", "t", effect_kind, avg(effect)::DOUBLE
+                FROM read_parquet(?)
+                WHERE clip_id = ?
+                GROUP BY feature_id, "window", "t", effect_kind
+                """,
+                [self.effects_path, self._clip_param(key, self.effects_clip_is_int)],
+            ).fetchall()
+            self._effects.put(key, rows)
+            return rows
+
+    def cells(self, clip_id: str, window: int, tubelet_index: int, feature_id: int) -> list[tuple]:
+        key = (str(clip_id), int(window), int(tubelet_index), int(feature_id))
+        with self._lock:
+            cached = self._cells.get(key)
+            if cached is not None:
+                return cached
+            rows = self._con.execute(
+                """
+                SELECT h, w, max(value)::DOUBLE
+                FROM read_parquet(?)
+                WHERE clip_id = ? AND "window" = ? AND "t" = ? AND feature_id = ?
+                GROUP BY h, w
+                """,
+                [
+                    self.acts_path,
+                    self._clip_param(key[0], self.clip_is_int),
+                    int(window),
+                    int(tubelet_index),
+                    int(feature_id),
+                ],
+            ).fetchall()
+            self._cells.put(key, rows)
+            return rows
+
+    def top_clips(self, feature_id: int) -> list[tuple]:
+        key = int(feature_id)
+        with self._lock:
+            cached = self._tops.get(key)
+            if cached is not None:
+                return cached
+            rows = self._con.execute(
+                """
+                WITH ranked AS (
+                    SELECT clip_id, "window", "t", h, w, value::DOUBLE AS value,
+                           row_number() OVER (
+                               PARTITION BY clip_id
+                               ORDER BY value DESC, "window", "t", h, w
+                           ) AS rn
+                    FROM read_parquet(?)
+                    WHERE feature_id = ?
+                )
+                SELECT clip_id, "window", "t", h, w, value
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY value DESC, clip_id
+                LIMIT ?
+                """,
+                [self.acts_path, key, _TOP_CLIPS],
+            ).fetchall()
+            self._tops.put(key, rows)
+            return rows
+
+    def _clip_param(self, clip_id: str, integer: bool):
+        if integer:
+            try:
+                return int(clip_id)
+            except ValueError:
+                return clip_id
+        return str(clip_id)
+
+
+def _stream_labels(path: Path) -> dict[int, dict]:
+    """One pass over features.jsonl. Only id, label, and label_model are kept."""
+    found: dict[int, dict] = {}
+    if not path.is_file():
+        return found
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path} has a line that is not JSON") from exc
+            if not isinstance(row, dict) or not _is_int(row.get("id")):
+                continue
+            found[int(row["id"])] = {
+                "label": row["label"] if isinstance(row.get("label"), str) else "",
+                "label_model": row["label_model"] if isinstance(row.get("label_model"), str) else None,
+            }
+    return found
+
+
+def _read_candidates(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        payload = payload.get("candidates") or payload.get("features") or []
+    if not isinstance(payload, list):
+        return []
+    return [row for row in payload if isinstance(row, dict) and _is_int(row.get("feature_id"))]
+
+
+def _blank_feature(feature_id: int) -> dict:
+    record = {
+        "id": feature_id,
+        "label": "",
+        "label_model": None,
+        "badge": "unverified",
+        "scored": False,
+        "candidate": False,
+    }
+    for key in _SCORE_FIELDS:
+        record[key] = None
+    return record
+
+
+def _feature_index(scoreboard: dict | None, labels: dict[int, dict], candidates: list[dict], run_dir: Path) -> tuple[list[dict], dict[int, Path]]:
+    """Scoreboard and jsonl features, with candidates.json entries first.
+
+    Nothing here reads feature_acts. Top clips are filled in when a feature is opened.
     """
     scored: dict[int, dict] = {}
     rows = scoreboard.get("features") if isinstance(scoreboard, dict) else None
@@ -706,27 +1082,29 @@ def _feature_records(scoreboard: dict | None, jsonl: list, act_cells: dict, top_
         for row in rows:
             if isinstance(row, dict) and "id" in row and _is_int(row["id"]):
                 scored[int(row["id"])] = row
-    labelled: dict[int, dict] = {}
-    for row in jsonl:
-        if isinstance(row, dict) and "id" in row and _is_int(row["id"]):
-            labelled[int(row["id"])] = row
-    feature_ids = set(scored) | set(labelled) | {key[3] for key in act_cells}
+    ordered: list[int] = []
+    seen: set[int] = set()
+    viz: dict[int, Path] = {}
+    for row in candidates:
+        feature_id = int(row["feature_id"])
+        if feature_id in seen:
+            continue
+        seen.add(feature_id)
+        ordered.append(feature_id)
+        picture = _resolve_viz(run_dir, feature_id, row.get("viz"))
+        if picture is not None:
+            viz[feature_id] = picture
+    for feature_id in sorted((set(scored) | set(labels)) - seen):
+        ordered.append(feature_id)
     records = []
-    for feature_id in sorted(feature_ids):
+    for feature_id in ordered:
         row = scored.get(feature_id)
-        meta = labelled.get(feature_id, {})
+        meta = labels.get(feature_id, {})
         jsonl_label = meta.get("label") if isinstance(meta.get("label"), str) else ""
         if row is None:
-            record = {
-                "id": feature_id,
-                "label": jsonl_label,
-                "label_model": meta.get("label_model"),
-                "badge": "unverified",
-                "scored": False,
-                "top_clips": top_clips.get(feature_id, []),
-            }
-            for key in _SCORE_FIELDS:
-                record[key] = None
+            record = _blank_feature(feature_id)
+            record["label"] = jsonl_label
+            record["label_model"] = meta.get("label_model")
         else:
             label = row.get("label") if isinstance(row.get("label"), str) else jsonl_label
             record = {
@@ -735,12 +1113,36 @@ def _feature_records(scoreboard: dict | None, jsonl: list, act_cells: dict, top_
                 "label_model": meta.get("label_model"),
                 "badge": badge_for(row.get("real")),
                 "scored": True,
-                "top_clips": top_clips.get(feature_id, []),
+                "candidate": feature_id in seen,
             }
             for key in _SCORE_FIELDS:
                 record[key] = _json_value(row[key]) if key in row else None
+        record["candidate"] = feature_id in seen
         records.append(record)
-    return records
+    return records, viz
+
+
+def _resolve_viz(run_dir: Path, feature_id: int, raw: object) -> Path | None:
+    if isinstance(raw, str) and raw and ".." not in Path(raw).parts and not Path(raw).is_absolute():
+        candidate = (run_dir / raw).resolve()
+        try:
+            candidate.relative_to(run_dir.resolve())
+        except ValueError:
+            candidate = None
+        if candidate is not None and candidate.is_file():
+            return candidate
+    for name in (f"feature_{feature_id:05d}.png", f"feature_{feature_id}.png"):
+        candidate = run_dir / "features" / "viz" / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _query_int(query: dict[str, list[str]], name: str) -> int | None:
+    raw = (query.get(name) or [None])[0]
+    if raw is None or not str(raw).isdigit():
+        return None
+    return int(raw)
 
 
 def _split_payload(scoreboard: dict | None, manifest: dict) -> dict:
@@ -767,89 +1169,94 @@ def _sae_payload(scoreboard: dict | None) -> dict | None:
     }
 
 
-def _max_window(act_cells: dict, effect_cells: dict) -> dict[str, int]:
-    found: dict[str, int] = {}
-    for clip_id, window, _t, _feature_id in act_cells:
-        found[clip_id] = max(found.get(clip_id, 0), window)
-    for clip_id, window, _t, _feature_id in effect_cells:
-        found[clip_id] = max(found.get(clip_id, 0), window)
-    return found
+def _clip_payload(clip, grid, loaded, timeline, effect_rows, meta_by_id, extra):
+    """Per-frame top features for one clip. Activations are sums over h, w.
 
-
-def _act_cells(table) -> dict[tuple, dict[tuple[int, int], float]]:
-    cells: dict[tuple, dict[tuple[int, int], float]] = {}
-    columns = table.select(["feature_id", "clip_id", "window", "t", "h", "w", "value"]).to_pydict()
-    for feature_id, clip_id, window, t, h, w, value in zip(
-        columns["feature_id"],
-        columns["clip_id"],
-        columns["window"],
-        columns["t"],
-        columns["h"],
-        columns["w"],
-        columns["value"],
-        strict=True,
-    ):
-        key = (str(clip_id), int(window), int(t), int(feature_id))
-        site = (int(h), int(w))
-        number = float(value)
-        bucket = cells.setdefault(key, {})
-        bucket[site] = max(bucket.get(site, number), number)
-    return cells
-
-
-def _effect_cells(table) -> dict[tuple, dict[str, list[float]]]:
-    grouped: dict[tuple, dict[str, list[float]]] = {}
-    columns = table.select(["feature_id", "clip_id", "window", "t", "effect", "effect_kind"]).to_pydict()
-    for feature_id, clip_id, window, t, effect, kind in zip(
-        columns["feature_id"],
-        columns["clip_id"],
-        columns["window"],
-        columns["t"],
-        columns["effect"],
-        columns["effect_kind"],
-        strict=True,
-    ):
-        key = (str(clip_id), int(window), int(t), int(feature_id))
-        grouped.setdefault(key, {}).setdefault(str(kind), []).append(float(effect))
-    return grouped
-
-
-def _top_clips(cells: dict, manifest: dict, grid: dict, extra: dict | None = None) -> dict[int, list[dict]]:
-    clips = {str(clip["clip_id"]): clip for clip in manifest["clips"] if isinstance(clip, dict) and "clip_id" in clip}
-    max_window: dict[str, int] = {}
-    for clip_id, window, _t, _feature_id in cells:
-        max_window[clip_id] = max(max_window.get(clip_id, 0), window)
-    peaks: dict[tuple[int, str], tuple] = {}
-    for (clip_id, window, t, feature_id), sites in cells.items():
-        if not sites:
+    Heatmaps are not included; they are loaded for the token on screen.
+    """
+    clip_id = str(clip["clip_id"])
+    n_frames = int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else 0
+    grouped: dict[tuple[int, int], list[tuple[int, float]]] = {}
+    max_window = 0
+    for window, tubelet_index, feature_id, activation in timeline:
+        max_window = max(max_window, int(window))
+        grouped.setdefault((int(window), int(tubelet_index)), []).append((int(feature_id), float(activation)))
+    effects: dict[tuple[int, int, int], list[dict]] = {}
+    for feature_id, window, tubelet_index, kind, effect in effect_rows:
+        max_window = max(max_window, int(window))
+        effect_value = _num(effect)
+        if effect_value is None or kind is None:
             continue
-        (h, w), value = max(sites.items(), key=lambda item: (item[1], -item[0][0], -item[0][1]))
-        candidate = (value, window, t, h, w)
-        key = (feature_id, clip_id)
-        current = peaks.get(key)
-        if current is None or candidate[0] > current[0] or (candidate[0] == current[0] and candidate[1:] < current[1:]):
-            peaks[key] = candidate
-    grouped: dict[int, list[dict]] = {}
-    for (feature_id, clip_id), (value, window, t, h, w) in peaks.items():
-        clip = clips.get(clip_id, {})
-        starts, sample_stride = clip_sampling(clip, grid, max(max_window.get(clip_id, 0), window), extra)
-        grouped.setdefault(feature_id, []).append(
-            {
-                "clip_id": clip_id,
-                "split": clip.get("split"),
-                "window": window,
-                "t": t,
-                "h": h,
-                "w": w,
-                "value": value,
-                "frame": token_to_frame(window, t, starts, grid, sample_stride),
-            }
+        effects.setdefault((int(feature_id), int(window), int(tubelet_index)), []).append(
+            {"effect_kind": str(kind), "effect": effect_value}
         )
-    for feature_id, rows in grouped.items():
-        rows.sort(key=lambda row: (-row["value"], row["clip_id"]))
-        del rows[20:]
-        grouped[feature_id] = rows
-    return grouped
+    for bucket in effects.values():
+        bucket.sort(key=lambda item: (_KIND_ORDER.get(item["effect_kind"], 2), item["effect_kind"]))
+    starts, sample_stride = clip_sampling(clip, grid, max_window, extra)
+    frames = []
+    for frame in range(n_frames):
+        window, tubelet_index = frame_to_token(frame, starts, grid, sample_stride)
+        if tubelet_index is None:
+            features: list[dict] = []
+            shown_t = None
+        else:
+            features = []
+            for feature_id, activation in grouped.get((window, tubelet_index), []):
+                meta = meta_by_id.get(feature_id, {})
+                features.append(
+                    {
+                        "id": feature_id,
+                        "label": meta.get("label") or "",
+                        "badge": meta.get("badge") or "unverified",
+                        "activation": activation,
+                        "effects": effects.get((feature_id, window, tubelet_index), []),
+                    }
+                )
+            features.sort(key=lambda row: (-row["activation"], row["id"]))
+            shown_t = tubelet_index
+        frames.append({"frame": frame, "window": window, "t": shown_t, "features": features})
+    if loaded.kind == "video" and loaded.status == "ok":
+        media = "video"
+    elif loaded.kind == "array" and loaded.status == "ok":
+        media = "frames"
+    else:
+        media = "none"
+    return {
+        "clip_id": clip_id,
+        "fps": float(clip.get("fps") or 0.0),
+        "n_frames": n_frames,
+        "split": clip.get("split"),
+        "pixels": loaded.status,
+        "media": media,
+        "message": loaded.message,
+        "width": loaded.width,
+        "height": loaded.height,
+        "window_starts": starts,
+        "stride": sample_stride,
+        "grid": {key: grid[key] for key in ("t", "h", "w", "tubelet", "patch_px") if key in grid},
+        "frames": frames,
+    }
+
+
+
+def _manifest_clip_path(clip: dict, run_dir: Path) -> Path | None:
+    raw = clip.get("path") or clip.get("file")
+    if not raw or not isinstance(raw, str):
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = run_dir / path
+    return path if path.is_file() else None
+
+
+def _manifest_clips_dir(manifest: dict, run_dir: Path) -> Path | None:
+    raw = manifest.get("clips_dir")
+    if not isinstance(raw, str) or not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = run_dir / path
+    return path if path.is_dir() else None
 
 
 @dataclass
@@ -897,14 +1304,17 @@ def _load_clip_file(path: Path | None, clip: dict) -> LoadedClip:
     if path is None or not path.is_file():
         return LoadedClip("missing", "Clip file not found. Pass --clips, or record a path in the manifest.")
     expected = clip.get("sha256")
-    if isinstance(expected, str) and _file_sha256(path) != expected:
+    if (
+        isinstance(expected, str)
+        and path.stat().st_size <= _SHA_EAGER_LIMIT
+        and _file_sha256(path) != expected
+    ):
         return LoadedClip("sha_mismatch", "Clip file does not match the sha256 recorded in the manifest.", path=path)
     suffix = path.suffix.lower()
     if suffix == ".npy":
         return _load_npy(path, clip)
     if suffix in _NATIVE_VIDEO or suffix in _TRANSCODE_VIDEO:
-        width, height = _probe_video(path)
-        return LoadedClip("ok", "", kind="video", path=path, width=width, height=height)
+        return LoadedClip("ok", "", kind="video", path=path)
     return LoadedClip("unreadable", f"Unsupported clip file {path.name}.", path=path)
 
 
@@ -936,95 +1346,12 @@ def _load_npy(path: Path, clip: dict) -> LoadedClip:
     )
 
 
-def _clip_payload(clip, grid, loaded: LoadedClip, act_cells, effect_cells, meta_by_id, n_windows: int, extra: dict | None = None):
-    clip_id = str(clip["clip_id"])
-    n_frames = int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else 0
-    starts, sample_stride = clip_sampling(clip, grid, n_windows, extra)
-    frames = []
-    for frame in range(n_frames):
-        window, tubelet_index = frame_to_token(frame, starts, grid, sample_stride)
-        if tubelet_index is None:
-            features: list[dict] = []
-            shown_t = None
-        else:
-            features = _features_at(clip_id, window, tubelet_index, grid, act_cells, effect_cells, meta_by_id)
-            shown_t = tubelet_index
-        frames.append({"frame": frame, "window": window, "t": shown_t, "features": features})
-    media = "video" if loaded.kind == "video" and loaded.status == "ok" else "frames" if loaded.kind == "array" and loaded.status == "ok" else "none"
-    return {
-        "clip_id": clip_id,
-        "fps": float(clip.get("fps") or 0.0),
-        "n_frames": n_frames,
-        "split": clip.get("split"),
-        "pixels": loaded.status,
-        "media": media,
-        "message": loaded.message,
-        "width": loaded.width,
-        "height": loaded.height,
-        "window_starts": starts,
-        "stride": sample_stride,
-        "grid": {key: grid[key] for key in ("t", "h", "w", "tubelet", "patch_px") if key in grid},
-        "frames": frames,
-    }
-
-
-def _features_at(clip_id, window, t, grid, act_cells, effect_cells, meta_by_id) -> list[dict]:
-    height, width = int(grid["h"]), int(grid["w"])
-    prefix = (clip_id, window, t)
-    feature_ids = {key[3] for key in act_cells if key[:3] == prefix}
-    rows = []
-    for feature_id in feature_ids:
-        sites = act_cells[(clip_id, window, t, feature_id)]
-        heatmap = [[0.0 for _ in range(width)] for _ in range(height)]
-        activation = 0.0
-        for (h, w), value in sites.items():
-            activation = max(activation, value)
-            if 0 <= h < height and 0 <= w < width:
-                heatmap[h][w] = value
-        meta = meta_by_id.get(feature_id, {})
-        kinds = effect_cells.get((clip_id, window, t, feature_id), {})
-        effects = [
-            {"effect_kind": kind, "effect": _num(sum(values) / len(values))}
-            for kind, values in kinds.items()
-            if values
-        ]
-        effects.sort(key=lambda item: (_KIND_ORDER.get(item["effect_kind"], 2), item["effect_kind"]))
-        rows.append(
-            {
-                "id": feature_id,
-                "label": meta.get("label") or "",
-                "badge": meta.get("badge") or "unverified",
-                "activation": activation,
-                "effects": effects,
-                "heatmap": heatmap,
-            }
-        )
-    rows.sort(key=lambda row: (-row["activation"], row["id"]))
-    return rows
-
-
-def _manifest_clip_path(clip: dict, run_dir: Path) -> Path | None:
-    raw = clip.get("path") or clip.get("file")
-    if not raw or not isinstance(raw, str):
-        return None
-    path = Path(raw)
-    if not path.is_absolute():
-        path = run_dir / path
-    return path if path.is_file() else None
-
-
-def _manifest_clips_dir(manifest: dict, run_dir: Path) -> Path | None:
-    raw = manifest.get("clips_dir")
-    if not isinstance(raw, str) or not raw:
-        return None
-    path = Path(raw)
-    if not path.is_absolute():
-        path = run_dir / path
-    return path if path.is_dir() else None
-
-
 def _sha_ok(path: Path | None, expected: str | None) -> bool:
-    return path is not None and (expected is None or _file_sha256(path) == expected)
+    if path is None:
+        return False
+    if expected is None or path.stat().st_size > _SHA_EAGER_LIMIT:
+        return True
+    return _file_sha256(path) == expected
 
 
 def _named_clip_file(directory: Path | None, files: list[Path], clip: dict) -> Path | None:
@@ -1239,7 +1566,8 @@ def _require_keys(payload: dict, keys: tuple[str, ...], name: str) -> None:
 
 
 def _require_columns(table, columns: tuple[str, ...], name: str) -> None:
-    missing = [column for column in columns if column not in table.column_names]
+    present = set(getattr(table, "names", None) or table.column_names)
+    missing = [column for column in columns if column not in present]
     if missing:
         raise ValueError(f"{name} is missing columns {', '.join(missing)}")
 

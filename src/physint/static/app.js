@@ -7,6 +7,7 @@ const state = {
   playing: false,
   timer: null,
   token: 0,
+  heatToken: 0,
 };
 
 const app = document.getElementById("app");
@@ -145,6 +146,7 @@ function renderIndex() {
         "data-testid": "feature-index-link",
         "data-feature-id": feature.id,
         "data-label": feature.label || "",
+        "data-candidate": feature.candidate ? "true" : "false",
       },
       [
         el("span", {}, [el("span", { class: "index-id" }, String(feature.id).padStart(2, "0")), displayLabel(feature)]),
@@ -163,12 +165,20 @@ function renderIndex() {
   document.title = `features · ${state.run.run_id} · physint`;
 }
 
-function showFeature(id) {
-  const feature = state.run.features.find((row) => row.id === id);
-  if (!feature) {
+async function showFeature(id) {
+  const token = ++state.token;
+  const response = await fetch(`/api/features/${id}`, { cache: "no-store" });
+  if (token !== state.token) return;
+  if (!response.ok) {
     renderError(`Feature ${id} is not in this run.`);
     return;
   }
+  const feature = await response.json();
+  if (token !== state.token) return;
+  renderFeature(feature);
+}
+
+function renderFeature(feature) {
   const rows = feature.top_clips.length
     ? feature.top_clips.map((clip) =>
         el("tr", { "data-testid": "top-clip", "data-clip-id": clip.clip_id }, [
@@ -209,6 +219,9 @@ function showFeature(id) {
       el("p", { class: "kicker" }, `Feature ${feature.id}`),
       el("div", { class: "feature-title" }, [el("h1", {}, displayLabel(feature)), badge(feature)]),
       feature.label_model ? el("p", { class: "label-model" }, feature.label_model) : null,
+      feature.viz
+        ? el("img", { class: "viz", alt: "", src: `/api/features/${feature.id}/viz`, "data-testid": "feature-viz" })
+        : null,
       feature.scored === false
         ? el("p", { class: "kicker", "data-testid": "scoreboard-missing" }, "No scoreboard record. Shown as unverified.")
         : null,
@@ -496,11 +509,25 @@ function renderEffect(effect) {
   ]);
 }
 
-function renderHeat(feature) {
+async function renderHeat(feature) {
   const grid = document.querySelector("[data-testid=heatmap]");
+  if (!grid) return;
+  const token = ++state.heatToken;
   grid.replaceChildren();
-  if (!feature || !feature.heatmap || !feature.heatmap.length) return;
-  const rows = feature.heatmap;
+  if (!feature) return;
+  const response = await fetch(
+    `/api/clips/${encodeURIComponent(state.clipId)}/heatmap?frame=${state.frame}&feature=${feature.id}`,
+    { cache: "no-store" },
+  );
+  if (token !== state.heatToken || !response.ok) return;
+  const payload = await response.json();
+  if (token !== state.heatToken) return;
+  drawHeat(payload.heatmap || []);
+}
+
+function drawHeat(rows) {
+  const grid = document.querySelector("[data-testid=heatmap]");
+  if (!grid || !rows.length) return;
   const height = rows.length;
   const width = rows[0].length;
   let max = 0;

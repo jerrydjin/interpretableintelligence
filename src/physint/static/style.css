@@ -365,6 +365,14 @@ button, input { font: inherit; color: inherit; }
 
 .feature-page, .feature-index { max-width: 760px; }
 
+.viz {
+  display: block;
+  max-width: min(100%, 420px);
+  height: auto;
+  margin: 8px 0 16px;
+  background: #141311;
+}
+
 .thumb-strip {
   display: flex;
   gap: 10px;
