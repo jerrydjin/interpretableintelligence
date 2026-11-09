@@ -4,7 +4,9 @@ Reads ``manifest.json``. ``features/feature_acts.parquet`` is queried per clip a
 per feature through DuckDB (the file is not loaded into memory).
 ``features/clip_effects.parquet``, ``features/features.jsonl``,
 ``features/candidates.json``, and ``scoreboard.json`` are used when present
-and skipped when absent. Clip pixels
+and skipped when absent. A scoreboard feature's string ``status`` is shown
+on the badge unless ``real`` is true. ``heldout_loss.json``, when present,
+is the hardest-moments list. Clip pixels
 come from a path recorded on the manifest, or from a directory passed as
 ``--clips``. A clip's ``name`` (the exact filename, such as
 ``droid_ep000.mp4``) is tried first, then the filename stem, then sha256.
@@ -405,9 +407,25 @@ def _displayed_hw(clip: dict, loaded: LoadedClip) -> list[float] | None:
     return None
 
 
-def badge_for(real: object) -> str:
-    """Non-real features are unverified. Only a JSON true counts as real."""
-    return "real" if real is True else "unverified"
+def badge_for(real: object, status: object = None) -> str:
+    """Only a JSON true is real. A status string is its own badge; otherwise unverified."""
+    if real is True:
+        return "real"
+    return "status" if status_text(status) else "unverified"
+
+
+def status_text(status: object) -> str | None:
+    """Badge copy for a non-real feature. The word ``real`` is never a status."""
+    if not isinstance(status, str):
+        return None
+    text = status.strip()
+    if not text or text.casefold() == "real":
+        return None
+    return text
+
+
+def ablation_passed(status: object) -> bool:
+    return isinstance(status, str) and "ablation-passed" in status.casefold()
 
 
 def serve_run(
@@ -630,6 +648,7 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
     grid = _grid_dict(manifest["grid"])
     extra = manifest.get("extra") if isinstance(manifest.get("extra"), dict) else None
     features, viz = _feature_index(scoreboard, labels, candidates, run_dir)
+    moments = _read_moments(run_dir / "heldout_loss.json")
     pixels = _resolve_pixels(manifest, run_dir, None if clips_dir is None else Path(clips_dir))
     manifest_clips: dict[str, dict] = {}
     loaded: dict[str, LoadedClip] = {}
@@ -679,6 +698,7 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
         "sae": _sae_payload(scoreboard),
         "clips": list(meta.values()),
         "features": features,
+        "moments": moments,
     }
     model = RunModel(
         run_payload=run_payload,
@@ -1172,6 +1192,7 @@ def _blank_feature(feature_id: int) -> dict:
         "label": "",
         "label_model": None,
         "badge": "unverified",
+        "status": None,
         "scored": False,
         "candidate": False,
     }
@@ -1216,11 +1237,13 @@ def _feature_index(scoreboard: dict | None, labels: dict[int, dict], candidates:
             record["label_model"] = meta.get("label_model")
         else:
             label = row.get("label") if isinstance(row.get("label"), str) else jsonl_label
+            status = status_text(row.get("status"))
             record = {
                 "id": feature_id,
                 "label": label or "",
                 "label_model": meta.get("label_model"),
-                "badge": badge_for(row.get("real")),
+                "badge": badge_for(row.get("real"), status),
+                "status": status,
                 "scored": True,
                 "candidate": feature_id in seen,
             }
@@ -1245,6 +1268,64 @@ def _resolve_viz(run_dir: Path, feature_id: int, raw: object) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def _frame_feature_key(row: dict) -> tuple:
+    """Higher activation first. Ablation-passed wins inside the same tenth."""
+    activation = float(row["activation"])
+    passed = 0 if ablation_passed(row.get("status")) else 1
+    return (-round(activation, 1), passed, -activation, int(row["id"]))
+
+
+def _read_moments(path: Path) -> list[dict]:
+    """``heldout_loss.json`` rows, highest loss first. Links use ``clip_id``."""
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if isinstance(payload, dict):
+        payload = payload.get("moments") or payload.get("losses") or []
+    if not isinstance(payload, list):
+        return []
+    rows = []
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict) or not _is_int(item.get("clip_id")):
+            continue
+        if not _is_int(item.get("frame_start")) or not _is_int(item.get("frame_end")):
+            continue
+        loss = _num(item.get("loss"))
+        if loss is None:
+            continue
+        start, end = int(item["frame_start"]), int(item["frame_end"])
+        if end < start:
+            start, end = end, start
+        task = item.get("task_text")
+        if not isinstance(task, str) or not task.strip():
+            task = None
+        else:
+            task = task.strip()
+        name = item.get("clip_name")
+        clip_id = str(int(item["clip_id"]))
+        rows.append(
+            {
+                "clip_id": clip_id,
+                "clip_name": name.strip() if isinstance(name, str) and name.strip() else clip_id,
+                "window": int(item["window"]) if _is_int(item.get("window")) else None,
+                "frame_start": start,
+                "frame_end": end,
+                "frame": (start + end) // 2,
+                "loss": loss,
+                "task_text": task,
+                "loss_source": item.get("loss_source") if isinstance(item.get("loss_source"), str) else None,
+                "_order": index,
+            }
+        )
+    rows.sort(key=lambda row: (-row["loss"], row["_order"]))
+    for row in rows:
+        del row["_order"]
+    return rows
 
 
 def _query_int(query: dict[str, list[str]], name: str) -> int | None:
@@ -1319,11 +1400,12 @@ def _clip_payload(clip, grid, loaded, timeline, effect_rows, meta_by_id, extra, 
                         "id": feature_id,
                         "label": meta.get("label") or "",
                         "badge": meta.get("badge") or "unverified",
+                        "status": meta.get("status"),
                         "activation": activation,
                         "effects": effects.get((feature_id, window, tubelet_index), []),
                     }
                 )
-            features.sort(key=lambda row: (-row["activation"], row["id"]))
+            features.sort(key=_frame_feature_key)
             shown_t = tubelet_index
         frames.append({"frame": frame, "window": window, "t": shown_t, "features": features})
     if loaded.kind == "video" and loaded.status == "ok":

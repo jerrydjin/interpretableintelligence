@@ -162,6 +162,7 @@ button, input { font: inherit; color: inherit; }
 
 .clip-kicker {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 10px;
   margin-bottom: 8px;
@@ -250,10 +251,58 @@ button, input { font: inherit; color: inherit; }
 
 #play[data-state="playing"] { background: var(--unv); }
 
+.scrubber-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 22px;
+}
+
+.scrubber-wrap::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  background: var(--line);
+}
+
+.moment-range {
+  position: absolute;
+  top: 50%;
+  height: 6px;
+  margin-top: -3px;
+  background: #2f6a45;
+  pointer-events: none;
+  z-index: 1;
+}
+
 #scrubber {
+  position: relative;
+  z-index: 2;
   width: 100%;
-  accent-color: var(--ink);
+  margin: 0;
+  background: transparent;
   cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 22px;
+}
+
+#scrubber::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+}
+
+#scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  background: var(--ink);
 }
 
 .frame-readout {
@@ -367,6 +416,14 @@ button, input { font: inherit; color: inherit; }
 }
 
 .badge-real { background: var(--real); color: var(--real-ink); }
+.badge-status {
+  background: #e5f0e6;
+  color: #245c3a;
+  border: 1px solid #b7d4c0;
+  letter-spacing: 0;
+  font-weight: 500;
+  white-space: normal;
+}
 .badge-unverified { background: var(--unv-bg); color: var(--unv); border: 1px solid var(--unv-line); }
 
 .empty {
@@ -377,7 +434,38 @@ button, input { font: inherit; color: inherit; }
   padding: 16px;
 }
 
-.feature-page, .feature-index { max-width: 760px; }
+.feature-page, .feature-index, .hardest { max-width: 760px; }
+
+.hardest { margin-bottom: 28px; }
+
+.hardest h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.hardest-list { list-style: none; margin: 0; padding: 0; }
+
+.hardest-list a {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr auto auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  text-decoration: none;
+}
+
+.moment-task { color: var(--muted); }
+
+.moment-loss, .moment-range { font-variant-numeric: tabular-nums; }
+
+.clip-task {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 .viz {
   display: block;

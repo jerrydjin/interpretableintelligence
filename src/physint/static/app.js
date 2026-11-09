@@ -60,8 +60,11 @@ function displayLabel(feature) {
 }
 
 function badge(feature) {
-  const kind = feature.badge === "real" ? "real" : "unverified";
-  return el("span", { class: `badge badge-${kind}`, "data-testid": "badge" }, kind);
+  const real = feature.badge === "real";
+  const status = !real && typeof feature.status === "string" ? feature.status.trim() : "";
+  const shown = real ? "real" : status && status.toLowerCase() !== "real" ? status : "";
+  const kind = real ? "real" : shown ? "status" : "unverified";
+  return el("span", { class: `badge badge-${kind}`, "data-testid": "badge", "data-kind": kind }, shown || "unverified");
 }
 
 async function boot() {
@@ -137,6 +140,7 @@ function renderError(message) {
 function renderIndex() {
   const features = state.run.features;
   const real = features.filter((feature) => feature.badge === "real").length;
+  const moments = renderMoments();
   const list = el("ul", { class: "index-list" });
   for (const feature of features) {
     const link = el(
@@ -155,14 +159,41 @@ function renderIndex() {
     );
     list.append(el("li", {}, link));
   }
-  app.replaceChildren(
+  const page = [
+    moments,
     el("section", { class: "feature-index", "data-testid": "feature-index" }, [
       el("h1", {}, "Features"),
       el("p", { class: "kicker", "data-testid": "real-count" }, `${real} real · ${features.length - real} unverified`),
       list,
     ]),
-  );
+  ].filter(Boolean);
+  app.replaceChildren(...page);
   document.title = `features · ${state.run.run_id} · physint`;
+}
+
+function renderMoments() {
+  const moments = (state.run.moments || []).slice(0, 10);
+  if (!moments.length) return null;
+  const rows = moments.map((moment) => {
+    const task = moment.task_text ? el("span", { class: "moment-task" }, moment.task_text) : el("span", { class: "moment-task" }, "");
+    return el("li", {}, el("a", {
+      href: `#/clips/${encodeURIComponent(moment.clip_id)}?frame=${moment.frame}`,
+      "data-testid": "hardest-moment",
+      "data-clip-id": moment.clip_id,
+      "data-clip-name": moment.clip_name || "",
+      "data-frame": moment.frame,
+      "data-loss": moment.loss,
+    }, [
+      el("span", { class: "moment-name" }, moment.clip_name || moment.clip_id),
+      task,
+      el("span", { class: "moment-range" }, `${moment.frame_start}–${moment.frame_end}`),
+      el("span", { class: "moment-loss" }, Number(moment.loss).toFixed(4)),
+    ]));
+  });
+  return el("section", { class: "hardest", "data-testid": "hardest-moments" }, [
+    el("h2", {}, "Hardest moments"),
+    el("ol", { class: "hardest-list" }, rows),
+  ]);
 }
 
 async function showFeature(id) {
@@ -354,6 +385,7 @@ function renderClip() {
     value: String(state.frame),
     "aria-label": "Frame",
   });
+  const scrubberWrap = el("div", { class: "scrubber-wrap", "data-testid": "scrubber-wrap" }, scrubber);
   play.addEventListener("click", togglePlay);
   scrubber.addEventListener("input", () => {
     stop();
@@ -369,11 +401,12 @@ function renderClip() {
         el("div", { class: "clip-kicker" }, [
           el("h2", { "data-testid": "clip-title" }, clip.clip_id),
           el("span", { class: "split-tag" }, clip.split || ""),
+          el("p", { class: "clip-task", "data-testid": "clip-task", hidden: "" }),
         ]),
         stage,
         el("div", { class: "transport" }, [
           play,
-          scrubber,
+          scrubberWrap,
           el("p", { class: "frame-readout", "data-testid": "frame-readout" }),
         ]),
         el("p", { class: "heat-caption", "data-testid": "heatmap-label" }),
@@ -386,6 +419,44 @@ function renderClip() {
   );
   renderFrame();
   document.querySelector(".clip-list a[aria-current='page']")?.scrollIntoView({ block: "nearest" });
+}
+
+function clipMoments(clip) {
+  const id = String(clip.clip_id);
+  return (state.run.moments || []).filter((moment) => String(moment.clip_id) === id);
+}
+
+function showTask(clip, frame) {
+  const node = document.querySelector("[data-testid=clip-task]");
+  if (!node) return;
+  const moment = clipMoments(clip).find((item) => frame >= item.frame_start && frame <= item.frame_end && item.task_text);
+  if (!moment) {
+    node.hidden = true;
+    node.textContent = "";
+    return;
+  }
+  node.hidden = false;
+  node.textContent = moment.task_text;
+}
+
+function markMoments(clip) {
+  const wrap = document.querySelector("[data-testid=scrubber-wrap]");
+  if (!wrap) return;
+  wrap.querySelectorAll("[data-testid=moment-range]").forEach((node) => node.remove());
+  const span = Math.max(clip.n_frames - 1, 1);
+  for (const moment of clipMoments(clip)) {
+    const start = Math.max(0, Math.min(span, moment.frame_start));
+    const end = Math.max(start, Math.min(span, moment.frame_end));
+    const mark = el("span", {
+      class: "moment-range",
+      "data-testid": "moment-range",
+      "data-start": moment.frame_start,
+      "data-end": moment.frame_end,
+    });
+    mark.style.left = `${(start / span) * 100}%`;
+    mark.style.width = `${Math.max((end - start) / span, 1 / span) * 100}%`;
+    wrap.append(mark);
+  }
 }
 
 function setFrame(frame, options) {
@@ -417,6 +488,8 @@ function renderFrame(options) {
   readout.dataset.window = String(frame.window);
   list.dataset.frame = String(state.frame);
   image.alt = `${clip.clip_id} frame ${state.frame}`;
+  markMoments(clip);
+  showTask(clip, state.frame);
 
   const useVideo = clip.media === "video" && clip.pixels === "ok";
   stage.dataset.media = useVideo ? "video" : clip.pixels === "ok" ? "frames" : "none";

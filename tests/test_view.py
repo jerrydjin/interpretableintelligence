@@ -47,9 +47,14 @@ runner = CliRunner()
 
 def test_badge_is_real_only_for_json_true():
     assert badge_for(True) == "real"
+    assert badge_for(True, "ablation-passed, control pending") == "real"
     assert badge_for(False) == "unverified"
     assert badge_for(None) == "unverified"
     assert badge_for(1) == "unverified"
+    assert badge_for(False, "ablation-passed, control pending") == "status"
+    assert badge_for(False, "estimate (ablation incomplete)") == "status"
+    assert badge_for(False, "real") == "unverified"
+    assert badge_for(False, "  ") == "unverified"
 
 
 def test_frame_index_follows_the_grid():
@@ -408,6 +413,151 @@ def test_playwright_url_feature_and_same_clip_frames(tmp_path: Path):
                 return cell && cell.dataset.value === "9";
             }"""
         )
+        browser.close()
+
+
+def _status_run(tmp_path: Path) -> Path:
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    run = tmp_path / "run"
+    (run / "features").mkdir(parents=True)
+    write_json(
+        run / "manifest.json",
+        {
+            "run_id": "status-demo",
+            "model": {"adapter": "fake", "name": "fake", "sha": "ab" * 32},
+            "layer": 1,
+            "grid": {"t": 8, "h": 2, "w": 2, "tubelet": 2},
+            "clips": [
+                {"clip_id": 67, "name": "droid_ep068.mp4", "fps": 8.0, "n_frames": 40, "split": "heldout"},
+            ],
+        },
+    )
+    write_json(
+        run / "scoreboard.json",
+        {
+            "features": [
+                {"id": 1, "label": "passed", "real": False, "status": "ablation-passed, control pending"},
+                {"id": 2, "label": "close", "real": False},
+                {"id": 3, "label": "done", "real": True, "status": "ablation-passed, control pending"},
+                {"id": 4, "label": "estimate", "real": False, "status": "estimate (ablation incomplete)"},
+                {"id": 5, "label": "fake", "real": False, "status": "real"},
+                {"id": 6, "label": "loud", "real": False},
+            ]
+        },
+    )
+    write_jsonl(run / "features" / "features.jsonl", [{"id": index, "label": ""} for index in range(1, 7)])
+    write_feature_acts(
+        run / "features" / "feature_acts.parquet",
+        {
+            "feature_id": [6, 1, 2, 5, 4, 3],
+            "clip_id": ["67"] * 6,
+            "window": [0] * 6,
+            "t": [7] * 6,
+            "h": [0] * 6,
+            "w": [0] * 6,
+            "value": [3.0, 1.19, 1.20, 1.19, 1.14, 0.2],
+        },
+    )
+    moments = []
+    for index in range(12):
+        moments.append(
+            {
+                "clip_id": 100 + index,
+                "clip_name": f"droid_ep{101 + index:03d}",
+                "window": 0,
+                "frame_start": 0,
+                "frame_end": 4,
+                "loss": float(12 - index),
+                "task_text": None,
+                "loss_source": "heldout",
+            }
+        )
+    moments[1] = {
+        "clip_id": 67,
+        "clip_name": "droid_ep068",
+        "window": 1,
+        "frame_start": 10,
+        "frame_end": 20,
+        "loss": 11.25,
+        "task_text": "pick up the cup",
+        "loss_source": "heldout",
+    }
+    write_json(run / "heldout_loss.json", moments)
+    return run
+
+
+def test_status_badges_sort_and_hardest_moments_use_clip_id(tmp_path: Path):
+    model = load_run(_status_run(tmp_path), None)
+    by_label = {feature["label"]: feature for feature in model.run_payload["features"]}
+    assert by_label["done"]["badge"] == "real"
+    assert by_label["done"]["status"] == "ablation-passed, control pending"
+    assert by_label["passed"]["badge"] == "status"
+    assert by_label["passed"]["status"] == "ablation-passed, control pending"
+    assert by_label["estimate"]["badge"] == "status"
+    assert by_label["fake"]["badge"] == "unverified"
+    assert by_label["fake"]["status"] is None
+    assert by_label["close"]["badge"] == "unverified"
+    order = [feature["id"] for feature in model.clips["67"]["frames"][15]["features"]]
+    assert order == [6, 1, 2, 5, 4, 3]
+    moments = model.run_payload["moments"]
+    assert len(moments) == 12
+    assert moments[0]["loss"] == 12
+    assert moments[1]["clip_id"] == "67"
+    assert moments[1]["clip_name"] == "droid_ep068"
+    assert moments[1]["frame"] == 15
+    assert [moment["clip_id"] for moment in moments].count("68") == 0
+
+
+def test_playwright_status_badge_and_hardest_moments(tmp_path: Path):
+    from playwright.sync_api import expect, sync_playwright
+
+    with _view_server(_status_run(tmp_path), tmp_path / "clips") as url, sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=_chrome(),
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        page = browser.new_page(viewport={"width": 1100, "height": 800})
+        page.goto(url + "#/features", wait_until="domcontentloaded")
+        page.wait_for_selector("[data-testid=hardest-moments]")
+        rows = page.locator("[data-testid=hardest-moment]")
+        expect(rows).to_have_count(10)
+        expect(rows.nth(0).locator(".moment-loss")).to_have_text("12.0000")
+        moment = rows.nth(1)
+        expect(moment).to_have_attribute("data-clip-id", "67")
+        expect(moment).to_have_attribute("href", "#/clips/67?frame=15")
+        expect(moment.locator(".moment-name")).to_have_text("droid_ep068")
+        expect(moment.locator(".moment-task")).to_have_text("pick up the cup")
+        expect(moment.locator(".moment-range")).to_have_text("10–20")
+        expect(moment.locator(".moment-loss")).to_have_text("11.2500")
+        expect(page.locator("[data-testid=feature-index-link][data-feature-id='1'] [data-testid=badge]")).to_have_text(
+            "ablation-passed, control pending"
+        )
+        expect(page.locator("[data-testid=feature-index-link][data-feature-id='1'] [data-testid=badge]")).to_have_attribute(
+            "data-kind", "status"
+        )
+        expect(page.locator("[data-testid=feature-index-link][data-feature-id='3'] [data-testid=badge]")).to_have_text("real")
+        expect(page.locator("[data-testid=feature-index-link][data-feature-id='4'] [data-testid=badge]")).to_have_text(
+            "estimate (ablation incomplete)"
+        )
+        expect(page.locator("[data-testid=feature-index-link][data-feature-id='5'] [data-testid=badge]")).to_have_text("unverified")
+
+        moment.click()
+        page.wait_for_function(
+            """() => document.querySelector("[data-testid=clip-title]")?.textContent === "67"
+                && document.querySelector("[data-testid=frame-readout]")?.dataset.frame === "15" """
+        )
+        expect(page.locator("[data-testid=clip-task]")).to_have_text("pick up the cup")
+        mark = page.locator("[data-testid=moment-range]")
+        expect(mark).to_have_attribute("data-start", "10")
+        expect(mark).to_have_attribute("data-end", "20")
+        ids = page.locator("[data-testid=frame-feature]").evaluate_all("nodes => nodes.map((node) => node.dataset.featureId)")
+        assert ids == ["6", "1", "2", "5", "4", "3"]
+        page.evaluate("() => { location.hash = '#/clips/67?frame=0'; }")
+        page.wait_for_function("""() => document.querySelector("[data-testid=frame-readout]")?.dataset.frame === "0" """)
+        expect(page.locator("[data-testid=clip-task]")).to_be_hidden()
+        expect(page.locator("[data-testid=moment-range]")).to_have_count(1)
         browser.close()
 
 
