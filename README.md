@@ -19,6 +19,13 @@ uv run physint validate runs/demo
 
 `runs/demo/scoreboard.json` should mark exactly three features real, labelled `stripe`, `pulse`, and `corner`. The decoys `flicker`, `band`, and `speckle` fire on many clips and keep their labels on held-out clips, but they do not move the predictor, so they are not real.
 
+Explain a new clip with that run. The cited answer is per window and time, and it includes only real features and only ablation effects. Anything else is listed as unverified. If the run's SAE is not usable, the command refuses.
+
+```bash
+uv run physint explain --run runs/demo --clip clips/demo/clip-000.npy
+uv run physint serve --runs runs
+```
+
 Force a device with `PHYSINT_DEVICE=cpu` or `PHYSINT_DEVICE=mps`.
 
 ```bash
