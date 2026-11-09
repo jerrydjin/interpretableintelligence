@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -9,6 +10,7 @@ import typer
 
 from physint import __version__
 from physint.adapters.fake import generate_clips
+from physint.explain import ExplainError, explain_clip
 from physint.run import execute_run
 from physint.thresholds import DEFAULT_HELDOUT_FRAC, DEFAULT_LAYER, DEFAULT_SEED
 from physint.validate import validate_run
@@ -68,6 +70,83 @@ def run(
     except (ValueError, RuntimeError, FileNotFoundError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+def _emit_explain_error(exc: ExplainError) -> None:
+    typer.echo(f"error: {exc}", err=True)
+    typer.echo(f"run_id: {exc.run_id}", err=True)
+    typer.echo(f"model_sha: {exc.model_sha}", err=True)
+    typer.echo(f"layer: {exc.layer}", err=True)
+
+
+def _print_explain(payload: dict) -> None:
+    typer.echo(f"run_id: {payload['run_id']}")
+    typer.echo(f"model_sha: {payload['model_sha']}")
+    typer.echo(f"layer: {payload['layer']}")
+    typer.echo(f"clip_id: {payload['clip_id']}")
+    typer.echo(f"clip_sha256: {payload['clip_sha256']}")
+    typer.echo("answer:")
+    rank = 1
+    for group in payload["answer"]:
+        for feature in group["features"]:
+            label = feature["label"] or "-"
+            typer.echo(
+                f"  {rank}. window={group['window']} t={group['t']}  "
+                f"feature {feature['feature_id']}  {label}  "
+                f"effect={feature['effect']:.6f}  ablation"
+            )
+            rank += 1
+    if rank == 1:
+        typer.echo("  (no cited features)")
+    typer.echo("unverified:")
+    if not payload["unverified"]:
+        typer.echo("  (none)")
+    for row in payload["unverified"]:
+        label = row["label"] or "-"
+        typer.echo(
+            f"  window={row['window']} t={row['t']}  feature {row['feature_id']}  {label}  "
+            f"effect={row['effect']:.6f}  {row['effect_kind']}  "
+            f"real={str(row['real']).lower()}  {row['reason']}"
+        )
+
+
+@app.command("explain")
+def explain_cmd(
+    run: Annotated[Path, typer.Option("--run", exists=True, file_okay=False, help="Run folder, e.g. runs/<run_id>.")],
+    clip: Annotated[Path, typer.Option("--clip", exists=True, dir_okay=False, help="New clip (.npy) to explain.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print the response as JSON.")] = False,
+) -> None:
+    """Ablate the features active in a clip and cite only real ablation effects."""
+    try:
+        payload = explain_clip(run, clip)
+    except ExplainError as exc:
+        _emit_explain_error(exc)
+        raise typer.Exit(code=1) from exc
+    except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    _print_explain(payload)
+
+
+@app.command("serve")
+def serve_cmd(
+    runs: Annotated[Path, typer.Option("--runs", exists=True, file_okay=False, help="Directory of run folders.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", exists=True, file_okay=False, help="Directory of clip files (.npy)."),
+    ] = None,
+    host: Annotated[str, typer.Option("--host", help="Bind address.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535, help="Bind port.")] = 8000,
+) -> None:
+    """Serve the read API and POST /explain. Reads stay available for contract tests; the Rust server is the one to run."""
+    import uvicorn
+
+    from physint.api import create_app
+
+    uvicorn.run(create_app(runs, clips), host=host, port=port)
 
 
 @app.command()

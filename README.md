@@ -19,6 +19,14 @@ uv run physint validate runs/demo
 
 `runs/demo/scoreboard.json` should mark exactly three features real, labelled `stripe`, `pulse`, and `corner`. The decoys `flicker`, `band`, and `speckle` fire on many clips and keep their labels on held-out clips, but they do not move the predictor, so they are not real.
 
+The read API is the Rust binary `physint-server` (`server/`). It queries the run folder's parquet with DuckDB. `POST /explain` stays in Python, because it has to run the model: start `physint serve` and point the Rust server at it with `--explain-url` (or `PHYSINT_EXPLAIN_URL`). Without that, `POST /explain` returns 501.
+
+```bash
+cargo build -p physint-server
+cargo run -p physint-server -- serve --runs runs --clips clips
+uv run physint serve --runs runs --port 8000
+```
+
 Force a device with `PHYSINT_DEVICE=cpu` or `PHYSINT_DEVICE=mps`.
 
 ```bash
@@ -37,5 +45,7 @@ uv run pytest
 | `src/physint/run.py` | `capture → SAE → label → score → run folder` |
 | `SCHEMA.md` | Run-folder contract |
 | `ARCHITECTURE.md` | What this lane owns, and the next lanes |
+| `server/` | Rust read API (`physint-server`) over the run folder |
+| `docs/HOSTING.md` | Hosting proposal and the DuckDB latency notes |
 
 The run refuses fewer than 20 clips. The holdout is a fraction of **clips**, not frames, using `random.Random(seed)`.
