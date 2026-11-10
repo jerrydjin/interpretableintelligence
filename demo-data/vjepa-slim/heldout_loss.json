@@ -1,0 +1,743 @@
+{
+ "run_id": "droid100-L16",
+ "note": "clean V-JEPA 2 predictor masked-patch loss: mean |pred - LN(target_encoder)| (L1) over the masked tokens; centre 8x8 spatial tube mask (top_left (4,4) on the 16x16 grid, all 8 tubelets = 512 target tokens, 1536 context), context-only encoder with RoPE ids, extra no-affine layer norm on the target, no edit. frame_start/frame_end are source-frame indices (16 frames, stride 2, 15 fps).",
+ "mask": {
+  "type": "tube",
+  "block": [
+   8,
+   8
+  ],
+  "top_left": [
+   4,
+   4
+  ],
+  "n_target": 512,
+  "n_context": 1536
+ },
+ "n_windows": 72,
+ "n_reused_from_score": 24,
+ "n_computed": 48,
+ "seconds": 583.2,
+ "windows": [
+  {
+   "clip_id": 67,
+   "clip_name": "droid_ep068.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5905775427818298,
+   "task_text": "Take the lid off the smaller pot",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 29,
+   "clip_name": "droid_ep029.mp4",
+   "window": 2,
+   "frame_start": 195,
+   "frame_end": 225,
+   "loss": 0.587465763092041,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 29,
+   "clip_name": "droid_ep029.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5859709978103638,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 67,
+   "clip_name": "droid_ep068.mp4",
+   "window": 2,
+   "frame_start": 180,
+   "frame_end": 210,
+   "loss": 0.5855021476745605,
+   "task_text": "Take the lid off the smaller pot",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 52,
+   "clip_name": "droid_ep052.mp4",
+   "window": 1,
+   "frame_start": 209,
+   "frame_end": 239,
+   "loss": 0.5835238695144653,
+   "task_text": "Turn the tap on and off and put the spoon in the dishes tray",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 2,
+   "clip_name": "droid_ep002.mp4",
+   "window": 1,
+   "frame_start": 56,
+   "frame_end": 86,
+   "loss": 0.5833786129951477,
+   "task_text": "Put one green sachet in the grey bowl.",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 95,
+   "clip_name": "droid_ep097.mp4",
+   "window": 2,
+   "frame_start": 417,
+   "frame_end": 447,
+   "loss": 0.5831846594810486,
+   "task_text": "Pick the two bottles on the stove and place them on the counter, then pick the cooking stick from the pot and place it on the stove",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 2,
+   "clip_name": "droid_ep002.mp4",
+   "window": 2,
+   "frame_start": 111,
+   "frame_end": 141,
+   "loss": 0.5818493366241455,
+   "task_text": "Put one green sachet in the grey bowl.",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 42,
+   "clip_name": "droid_ep042.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5818087458610535,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 18,
+   "clip_name": "droid_ep018.mp4",
+   "window": 2,
+   "frame_start": 159,
+   "frame_end": 189,
+   "loss": 0.5812423229217529,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 2,
+   "clip_name": "droid_ep002.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.580482006072998,
+   "task_text": "Put one green sachet in the grey bowl.",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 29,
+   "clip_name": "droid_ep029.mp4",
+   "window": 1,
+   "frame_start": 98,
+   "frame_end": 128,
+   "loss": 0.5802199244499207,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 67,
+   "clip_name": "droid_ep068.mp4",
+   "window": 1,
+   "frame_start": 90,
+   "frame_end": 120,
+   "loss": 0.5799431204795837,
+   "task_text": "Take the lid off the smaller pot",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 52,
+   "clip_name": "droid_ep052.mp4",
+   "window": 2,
+   "frame_start": 418,
+   "frame_end": 448,
+   "loss": 0.5784502625465393,
+   "task_text": "Turn the tap on and off and put the spoon in the dishes tray",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 23,
+   "clip_name": "droid_ep023.mp4",
+   "window": 1,
+   "frame_start": 108,
+   "frame_end": 138,
+   "loss": 0.57769775390625,
+   "task_text": "Turn off the left light switch",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 42,
+   "clip_name": "droid_ep042.mp4",
+   "window": 2,
+   "frame_start": 299,
+   "frame_end": 329,
+   "loss": 0.5774656534194946,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 18,
+   "clip_name": "droid_ep018.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5769925117492676,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 81,
+   "clip_name": "droid_ep083.mp4",
+   "window": 1,
+   "frame_start": 60,
+   "frame_end": 90,
+   "loss": 0.5760453343391418,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 7,
+   "clip_name": "droid_ep007.mp4",
+   "window": 1,
+   "frame_start": 209,
+   "frame_end": 239,
+   "loss": 0.5750676989555359,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 52,
+   "clip_name": "droid_ep052.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5739173889160156,
+   "task_text": "Turn the tap on and off and put the spoon in the dishes tray",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 49,
+   "clip_name": "droid_ep049.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5737812519073486,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 18,
+   "clip_name": "droid_ep018.mp4",
+   "window": 1,
+   "frame_start": 80,
+   "frame_end": 110,
+   "loss": 0.5734268426895142,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 7,
+   "clip_name": "droid_ep007.mp4",
+   "window": 2,
+   "frame_start": 418,
+   "frame_end": 448,
+   "loss": 0.5722939968109131,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 42,
+   "clip_name": "droid_ep042.mp4",
+   "window": 1,
+   "frame_start": 150,
+   "frame_end": 180,
+   "loss": 0.5720543265342712,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 7,
+   "clip_name": "droid_ep007.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5718077421188354,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 58,
+   "clip_name": "droid_ep058.mp4",
+   "window": 1,
+   "frame_start": 90,
+   "frame_end": 120,
+   "loss": 0.5716729760169983,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 10,
+   "clip_name": "droid_ep010.mp4",
+   "window": 2,
+   "frame_start": 324,
+   "frame_end": 354,
+   "loss": 0.5714197158813477,
+   "task_text": "Move the pan to the right.",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 49,
+   "clip_name": "droid_ep049.mp4",
+   "window": 1,
+   "frame_start": 65,
+   "frame_end": 95,
+   "loss": 0.5707553029060364,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 39,
+   "clip_name": "droid_ep039.mp4",
+   "window": 2,
+   "frame_start": 418,
+   "frame_end": 448,
+   "loss": 0.5704818964004517,
+   "task_text": "Take two folded white cloths out of the white box on the left",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 49,
+   "clip_name": "droid_ep049.mp4",
+   "window": 2,
+   "frame_start": 130,
+   "frame_end": 160,
+   "loss": 0.5701737403869629,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 43,
+   "clip_name": "droid_ep043.mp4",
+   "window": 1,
+   "frame_start": 63,
+   "frame_end": 93,
+   "loss": 0.5700407028198242,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 16,
+   "clip_name": "droid_ep016.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5699679851531982,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 39,
+   "clip_name": "droid_ep039.mp4",
+   "window": 1,
+   "frame_start": 209,
+   "frame_end": 239,
+   "loss": 0.5699285268783569,
+   "task_text": "Take two folded white cloths out of the white box on the left",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 58,
+   "clip_name": "droid_ep058.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5694706439971924,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 16,
+   "clip_name": "droid_ep016.mp4",
+   "window": 1,
+   "frame_start": 70,
+   "frame_end": 100,
+   "loss": 0.5680192708969116,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 84,
+   "clip_name": "droid_ep086.mp4",
+   "window": 1,
+   "frame_start": 54,
+   "frame_end": 84,
+   "loss": 0.5662559270858765,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 96,
+   "clip_name": "droid_ep098.mp4",
+   "window": 1,
+   "frame_start": 209,
+   "frame_end": 239,
+   "loss": 0.5660642385482788,
+   "task_text": "Take the blocks out of the gift disappointed",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 4,
+   "clip_name": "droid_ep004.mp4",
+   "window": 1,
+   "frame_start": 90,
+   "frame_end": 120,
+   "loss": 0.5656914710998535,
+   "task_text": "Move the sharpie to the table",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 85,
+   "clip_name": "droid_ep087.mp4",
+   "window": 2,
+   "frame_start": 417,
+   "frame_end": 447,
+   "loss": 0.5650254487991333,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 95,
+   "clip_name": "droid_ep097.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5647730231285095,
+   "task_text": "Pick the two bottles on the stove and place them on the counter, then pick the cooking stick from the pot and place it on the stove",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 43,
+   "clip_name": "droid_ep043.mp4",
+   "window": 2,
+   "frame_start": 126,
+   "frame_end": 156,
+   "loss": 0.5636786222457886,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 10,
+   "clip_name": "droid_ep010.mp4",
+   "window": 1,
+   "frame_start": 162,
+   "frame_end": 192,
+   "loss": 0.5631700754165649,
+   "task_text": "Move the pan to the right.",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 95,
+   "clip_name": "droid_ep097.mp4",
+   "window": 1,
+   "frame_start": 208,
+   "frame_end": 238,
+   "loss": 0.5628958344459534,
+   "task_text": "Pick the two bottles on the stove and place them on the counter, then pick the cooking stick from the pot and place it on the stove",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 16,
+   "clip_name": "droid_ep016.mp4",
+   "window": 2,
+   "frame_start": 141,
+   "frame_end": 171,
+   "loss": 0.562415599822998,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 85,
+   "clip_name": "droid_ep087.mp4",
+   "window": 1,
+   "frame_start": 208,
+   "frame_end": 238,
+   "loss": 0.5622939467430115,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 10,
+   "clip_name": "droid_ep010.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5619757175445557,
+   "task_text": "Move the pan to the right.",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 23,
+   "clip_name": "droid_ep023.mp4",
+   "window": 2,
+   "frame_start": 216,
+   "frame_end": 246,
+   "loss": 0.561606228351593,
+   "task_text": "Turn off the left light switch",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 51,
+   "clip_name": "droid_ep051.mp4",
+   "window": 2,
+   "frame_start": 144,
+   "frame_end": 174,
+   "loss": 0.5614444017410278,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 51,
+   "clip_name": "droid_ep051.mp4",
+   "window": 1,
+   "frame_start": 72,
+   "frame_end": 102,
+   "loss": 0.5607732534408569,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 74,
+   "clip_name": "droid_ep075.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5606932044029236,
+   "task_text": "Move the cup to the right",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 48,
+   "clip_name": "droid_ep048.mp4",
+   "window": 1,
+   "frame_start": 99,
+   "frame_end": 129,
+   "loss": 0.5598788261413574,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 48,
+   "clip_name": "droid_ep048.mp4",
+   "window": 2,
+   "frame_start": 198,
+   "frame_end": 228,
+   "loss": 0.5588089227676392,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 51,
+   "clip_name": "droid_ep051.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5581241250038147,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 4,
+   "clip_name": "droid_ep004.mp4",
+   "window": 2,
+   "frame_start": 180,
+   "frame_end": 210,
+   "loss": 0.5579034090042114,
+   "task_text": "Move the sharpie to the table",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 43,
+   "clip_name": "droid_ep043.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5573842525482178,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 4,
+   "clip_name": "droid_ep004.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5571573376655579,
+   "task_text": "Move the sharpie to the table",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 81,
+   "clip_name": "droid_ep083.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5570602416992188,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 85,
+   "clip_name": "droid_ep087.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5560562610626221,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 58,
+   "clip_name": "droid_ep058.mp4",
+   "window": 2,
+   "frame_start": 181,
+   "frame_end": 211,
+   "loss": 0.5545390844345093,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 74,
+   "clip_name": "droid_ep075.mp4",
+   "window": 1,
+   "frame_start": 97,
+   "frame_end": 127,
+   "loss": 0.5526661276817322,
+   "task_text": "Move the cup to the right",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 92,
+   "clip_name": "droid_ep094.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.552008330821991,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 96,
+   "clip_name": "droid_ep098.mp4",
+   "window": 2,
+   "frame_start": 418,
+   "frame_end": 448,
+   "loss": 0.5516337156295776,
+   "task_text": "Take the blocks out of the gift disappointed",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 39,
+   "clip_name": "droid_ep039.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5509182214736938,
+   "task_text": "Take two folded white cloths out of the white box on the left",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 74,
+   "clip_name": "droid_ep075.mp4",
+   "window": 2,
+   "frame_start": 194,
+   "frame_end": 224,
+   "loss": 0.55083829164505,
+   "task_text": "Move the cup to the right",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 23,
+   "clip_name": "droid_ep023.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.549788236618042,
+   "task_text": "Turn off the left light switch",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 96,
+   "clip_name": "droid_ep098.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5486506223678589,
+   "task_text": "Take the blocks out of the gift disappointed",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 5,
+   "clip_name": "droid_ep005.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.5465261340141296,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 92,
+   "clip_name": "droid_ep094.mp4",
+   "window": 2,
+   "frame_start": 168,
+   "frame_end": 198,
+   "loss": 0.5462753772735596,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 84,
+   "clip_name": "droid_ep086.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.545961856842041,
+   "task_text": "",
+   "loss_source": "computed"
+  },
+  {
+   "clip_id": 5,
+   "clip_name": "droid_ep005.mp4",
+   "window": 1,
+   "frame_start": 54,
+   "frame_end": 84,
+   "loss": 0.5453777313232422,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 92,
+   "clip_name": "droid_ep094.mp4",
+   "window": 1,
+   "frame_start": 84,
+   "frame_end": 114,
+   "loss": 0.5444493889808655,
+   "task_text": "",
+   "loss_source": "score.py"
+  },
+  {
+   "clip_id": 48,
+   "clip_name": "droid_ep048.mp4",
+   "window": 0,
+   "frame_start": 0,
+   "frame_end": 30,
+   "loss": 0.543656587600708,
+   "task_text": "",
+   "loss_source": "computed"
+  }
+ ]
+}

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Candidate picker · interpretableintelligence</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/demo.css">
+  <link rel="icon" href="/favicon.ico">
+</head>
+<body>
+  <header class="top">
+    <div class="brand-row">
+      <a class="wordmark" href="/">interpretableintelligence</a>
+      <nav class="nav"><a href="/fake/">Fake</a><a href="/picker/" aria-current="page">Picker</a><a href="/vjepa/">V-JEPA 2</a><a href="/groot/">GR00T</a></nav>
+    </div>
+  </header>
+  <main class="prose">
+    <h1>Candidate picker on synthetic rollouts</h1>
+    <p>Null runs with a final candidate, from <code>picker/synth_test.py --null-seeds 30</code>.</p>
+    <table class="score-table" data-testid="null-counts">
+      <thead><tr><th>Match</th><th>Final candidate</th></tr></thead>
+      <tbody><tr><td>time + detrend</td><td>0/30</td></tr><tr><td>time, no detrend</td><td>1/30</td></tr><tr><td>phase + detrend</td><td>0/30</td></tr></tbody>
+    </table>
+    <p>Planted feature recovered as a candidate, from <code>picker/synth_test_extra.py</code>, 50 episodes per run, 5 seeds. <code>plant</code> is the fraction of tokens that fire in the window before failure.</p>
+    <table class="score-table" data-testid="plant-counts">
+      <thead><tr><th>Plant fraction</th><th>Recovered</th></tr></thead>
+      <tbody>
+        <tr><td>0.15</td><td>4/5</td></tr>
+        <tr><td>0.05</td><td>1/5</td></tr>
+      </tbody>
+    </table>
+    <p>Rerun of those two scripts. Final candidates: 0/30 (time + detrend); 1/30 (time, no detrend); 0/30 (phase + detrend). Recovered: 4/5 at plant 0.15 and 1/5 at plant 0.05.</p>
+    </main>
+</body>
+</html>

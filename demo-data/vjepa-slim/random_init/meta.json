@@ -1,0 +1,24 @@
+{
+ "rule": "absent_in_random_init = freq_random < 0.1 * freq_trained (held-out tokens; SAE inference threshold; trained-SAE norm constants)",
+ "model": {
+  "random_init": true,
+  "seed": 0,
+  "config": "facebook/vjepa2-vitl-fpc64-256"
+ },
+ "layer": 16,
+ "n_heldout_clips": 25,
+ "n_tokens_trained": 147456,
+ "n_tokens_random": 147456,
+ "acts_shards_saved": false,
+ "l0_trained": 31.67511749267578,
+ "l0_random": 1695.31103515625,
+ "features_firing_trained": 8185,
+ "features_firing_random": 6112,
+ "token_norm_mean_trained": 172.38299560546875,
+ "token_norm_mean_random": 75.71847534179688,
+ "sae_norm_scale": 65.2786636352539,
+ "seconds": {
+  "trained_stats": 17.7,
+  "random_capture_encode": 1907.4
+ }
+}

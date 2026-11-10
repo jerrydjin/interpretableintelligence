@@ -1,0 +1,219 @@
+{
+ "id": 3,
+ "label": "corner",
+ "label_model": "fake-cue-v1",
+ "badge": "real",
+ "status": null,
+ "scored": true,
+ "candidate": true,
+ "distinct_clips_top20": 20,
+ "label_holds_heldout": true,
+ "ablation_effect": 0.0002052366423110167,
+ "random_percentile": 100.0,
+ "n_random": 100,
+ "absent_in_random_init": true,
+ "real": true,
+ "top_clips": [
+  {
+   "clip_id": "clip-016",
+   "split": "train",
+   "window": 0,
+   "t": 5,
+   "h": 2,
+   "w": 0,
+   "value": 1.129932165145874,
+   "frame": 10
+  },
+  {
+   "clip_id": "clip-014",
+   "split": "train",
+   "window": 0,
+   "t": 1,
+   "h": 1,
+   "w": 3,
+   "value": 1.1285454034805298,
+   "frame": 2
+  },
+  {
+   "clip_id": "clip-015",
+   "split": "train",
+   "window": 0,
+   "t": 0,
+   "h": 0,
+   "w": 0,
+   "value": 1.1238224506378174,
+   "frame": 0
+  },
+  {
+   "clip_id": "clip-012",
+   "split": "train",
+   "window": 0,
+   "t": 7,
+   "h": 2,
+   "w": 1,
+   "value": 1.1055474281311035,
+   "frame": 14
+  },
+  {
+   "clip_id": "clip-029",
+   "split": "train",
+   "window": 0,
+   "t": 5,
+   "h": 3,
+   "w": 1,
+   "value": 1.100871205329895,
+   "frame": 10
+  },
+  {
+   "clip_id": "clip-027",
+   "split": "train",
+   "window": 0,
+   "t": 4,
+   "h": 1,
+   "w": 2,
+   "value": 1.0928326845169067,
+   "frame": 8
+  },
+  {
+   "clip_id": "clip-013",
+   "split": "train",
+   "window": 0,
+   "t": 0,
+   "h": 1,
+   "w": 3,
+   "value": 1.0827006101608276,
+   "frame": 0
+  },
+  {
+   "clip_id": "clip-011",
+   "split": "train",
+   "window": 0,
+   "t": 1,
+   "h": 1,
+   "w": 1,
+   "value": 1.0697648525238037,
+   "frame": 2
+  },
+  {
+   "clip_id": "clip-026",
+   "split": "train",
+   "window": 0,
+   "t": 2,
+   "h": 2,
+   "w": 2,
+   "value": 1.0677214860916138,
+   "frame": 4
+  },
+  {
+   "clip_id": "clip-028",
+   "split": "train",
+   "window": 0,
+   "t": 3,
+   "h": 1,
+   "w": 2,
+   "value": 1.0666276216506958,
+   "frame": 6
+  },
+  {
+   "clip_id": "clip-009",
+   "split": "train",
+   "window": 0,
+   "t": 7,
+   "h": 0,
+   "w": 2,
+   "value": 1.0634818077087402,
+   "frame": 14
+  },
+  {
+   "clip_id": "clip-010",
+   "split": "heldout",
+   "window": 0,
+   "t": 4,
+   "h": 0,
+   "w": 3,
+   "value": 1.0524325370788574,
+   "frame": 8
+  },
+  {
+   "clip_id": "clip-025",
+   "split": "train",
+   "window": 0,
+   "t": 2,
+   "h": 3,
+   "w": 0,
+   "value": 1.0461573600769043,
+   "frame": 4
+  },
+  {
+   "clip_id": "clip-008",
+   "split": "train",
+   "window": 0,
+   "t": 5,
+   "h": 1,
+   "w": 0,
+   "value": 1.0416395664215088,
+   "frame": 10
+  },
+  {
+   "clip_id": "clip-007",
+   "split": "train",
+   "window": 0,
+   "t": 7,
+   "h": 3,
+   "w": 3,
+   "value": 1.0398203134536743,
+   "frame": 14
+  },
+  {
+   "clip_id": "clip-024",
+   "split": "train",
+   "window": 0,
+   "t": 7,
+   "h": 2,
+   "w": 0,
+   "value": 1.034390926361084,
+   "frame": 14
+  },
+  {
+   "clip_id": "clip-023",
+   "split": "train",
+   "window": 0,
+   "t": 6,
+   "h": 0,
+   "w": 1,
+   "value": 1.0342509746551514,
+   "frame": 12
+  },
+  {
+   "clip_id": "clip-022",
+   "split": "train",
+   "window": 0,
+   "t": 7,
+   "h": 3,
+   "w": 2,
+   "value": 1.032152771949768,
+   "frame": 14
+  },
+  {
+   "clip_id": "clip-006",
+   "split": "train",
+   "window": 0,
+   "t": 6,
+   "h": 0,
+   "w": 1,
+   "value": 1.019123911857605,
+   "frame": 12
+  },
+  {
+   "clip_id": "clip-005",
+   "split": "heldout",
+   "window": 0,
+   "t": 2,
+   "h": 0,
+   "w": 1,
+   "value": 1.011256217956543,
+   "frame": 4
+  }
+ ],
+ "viz": false
+}
