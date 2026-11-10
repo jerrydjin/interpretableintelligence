@@ -22,6 +22,16 @@ That command captures the layer, trains the SAE, writes feature candidates, scor
 
 The report's cost per hour of footage is measured stage wall time times `--gpu-cost-per-hour`, divided by the hours of footage in the clips. It is omitted when the flag is absent. Stage wall time, peak RSS, device, and row/token counts are stored on `manifest.stages`. Activation rows are streamed from an on-disk cache; a stage does not load the full activation matrix.
 
+`physint rank` is the cheap prefilter. One forward and backward per window scores every SAE feature by `activation × ∂objective/∂activation`, summed over tokens and windows. `--objective prediction_loss` is the masked predictor MSE. `--objective action_loglik` is the log-likelihood of the action the policy took, for a robot policy whose success is not differentiable. `--objective activation` ranks by activation magnitude only, the baseline the attribution has to beat. The objective is stored in the parquet metadata. The output is a shortlist: every pick is confirmed by a real ablation, and the score itself is not evidence.
+
+```bash
+uv run physint rank fake --clips clips/demo --prefilter 3 --out runs/rank
+uv run physint run fake --clips clips/demo --prefilter 3 --out runs/short --no-serve
+uv run python scripts/compare_attribution_vs_ablation.py runs/demo --k 3
+```
+
+`--prefilter K` on `physint run` still trains, labels, and checks the random-init gate for every feature, and runs the held-out ablation plus the 100 matched random controls only for the top K. Omit it to score every feature. A finished run always writes the attribution files. `scripts/compare_attribution_vs_ablation.py` prints Spearman and top-K overlap for that attribution next to the same numbers for activation magnitude. Attribution has to beat the magnitude baseline.
+
 `runs/demo/scoreboard.json` should mark exactly three features real, labelled `stripe`, `pulse`, and `corner`. The decoys `flicker`, `band`, and `speckle` fire on many clips and keep their labels on held-out clips, but they do not move the predictor, so they are not real.
 
 `physint view` serves that folder locally and opens a browser. It reads the manifest, and queries feature acts per clip and per feature instead of loading the parquet into memory. Clip effects, `features.jsonl`, and the scoreboard are shown when they are present. A missing scoreboard leaves every feature unverified, and a missing `clip_effects.parquet` shows activations with no effect column. This manifest does not store clip paths, so pass `--clips` (or a `path` / `clips_dir` recorded on a manifest that has one). Files in `--clips` match the clip's `name` (exact filename, such as `droid_ep000.mp4`) first, then the filename stem, then sha256. mp4, webm, and m4v play in a `<video>` element; avi, mov, and mkv are transcoded with ffmpeg. `--no-open` skips the browser.
@@ -75,8 +85,10 @@ Feature `3` is the planted reacher feature. The command prints the success delta
 | `docs/FRICTION-vjepa2.md` | Jeff's setup log for the V-JEPA 2 port |
 | `src/physint/sae.py` | ReLU SAE trainer |
 | `src/physint/score.py` | Explained variance, loss recovered, ablations, random controls |
+| `src/physint/attribute.py` | Attribution-patching prefilter and the ablation comparison |
 | `src/physint/pipeline.py` | Resumable capture, SAE, features, score, and viewer |
-| `src/physint/run.py` | `execute_run` entry that does not start the viewer |
+| `src/physint/run.py` | `execute_run` entry that does not start the viewer, and `physint rank` |
+| `scripts/compare_attribution_vs_ablation.py` | Spearman and top-K overlap for a finished run |
 | `src/physint/view.py` | Local clip viewer over a finished run folder |
 | `src/physint/contract_view.py` | Read-API payloads matched by `physint-server` |
 | `src/physint/policies/` | Policy + simulator protocol, fake reacher, robot stubs |

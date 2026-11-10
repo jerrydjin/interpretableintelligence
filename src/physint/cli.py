@@ -13,9 +13,11 @@ from physint.adapters.fake import generate_clips
 from physint.explain import ExplainError, explain_clip
 from physint.pipeline import execute_pipeline
 from physint.rollout import execute_rollouts, format_report, parse_feature_ids
+from physint.run import execute_rank
 from physint.thresholds import (
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
+    DEFAULT_PREFILTER_K,
     DEFAULT_ROLLOUT_ALPHA,
     DEFAULT_ROLLOUT_BATCH,
     DEFAULT_ROLLOUT_CONTROLS,
@@ -68,6 +70,14 @@ def run(
         float,
         typer.Option("--heldout-frac", help="Fraction of clips held out."),
     ] = DEFAULT_HELDOUT_FRAC,
+    prefilter: Annotated[
+        int | None,
+        typer.Option(
+            "--prefilter",
+            min=1,
+            help="Ablate and run random-feature controls only for the K features with the largest attribution. Omit to score every feature.",
+        ),
+    ] = None,
     tiny: Annotated[
         bool,
         typer.Option(
@@ -108,12 +118,70 @@ def run(
             seed=seed,
             heldout_frac=heldout_frac,
             tiny=tiny,
+            prefilter=prefilter,
             gpu_cost_per_hour=gpu_cost_per_hour,
             score=not no_score,
             serve=not no_serve,
             host=host,
             port=port,
             open_browser=not no_open,
+            log=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+
+
+@app.command()
+def rank(
+    adapter: Annotated[str, typer.Argument(help="Adapter name. This lane ships 'fake'.")],
+    clips: Annotated[Path, typer.Option("--clips", exists=True, file_okay=False, help="Clip directory.")],
+    out: Annotated[Path, typer.Option("--out", help="Directory for attribution.parquet and candidates.json.")],
+    layer: Annotated[int, typer.Option("--layer", min=0, help="Layer to instrument.")] = DEFAULT_LAYER,
+    seed: Annotated[int, typer.Option("--seed", help="Split and SAE seed. Ignored when --from-run has a split.")] = DEFAULT_SEED,
+    heldout_frac: Annotated[
+        float,
+        typer.Option("--heldout-frac", help="Fraction of clips held out when training an SAE."),
+    ] = DEFAULT_HELDOUT_FRAC,
+    prefilter: Annotated[
+        int,
+        typer.Option(
+            "--prefilter",
+            min=1,
+            help="How many top-ranked features to keep as ablation candidates.",
+        ),
+    ] = DEFAULT_PREFILTER_K,
+    from_run: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-run",
+            exists=True,
+            file_okay=False,
+            help="Reuse the SAE in this run folder instead of training one.",
+        ),
+    ] = None,
+    objective: Annotated[
+        str,
+        typer.Option(
+            "--objective",
+            help="prediction_loss, action_loglik, or activation (magnitude baseline). The result is a shortlist.",
+        ),
+    ] = "prediction_loss",
+) -> None:
+    """Rank SAE features. Does not ablate; every pick still needs a real ablation."""
+    try:
+        execute_rank(
+            adapter_name=adapter,
+            clips_dir=clips,
+            out_dir=out,
+            layer=layer,
+            seed=seed,
+            heldout_frac=heldout_frac,
+            prefilter=prefilter,
+            from_run=from_run,
+            objective=objective,
             log=typer.echo,
         )
     except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:

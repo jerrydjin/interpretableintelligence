@@ -28,6 +28,37 @@ def pearson(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a64, b64) / (da * db))
 
 
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    """0-based average ranks. Ties share the mean of the occupied ranks."""
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(values.shape[0], dtype=np.float64)
+    start = 0
+    while start < values.shape[0]:
+        stop = start + 1
+        while stop < values.shape[0] and values[order[stop]] == values[order[start]]:
+            stop += 1
+        ranks[order[start:stop]] = (start + stop - 1) / 2.0
+        start = stop
+    return ranks
+
+
+def spearman(a: np.ndarray, b: np.ndarray) -> float:
+    """Spearman rank correlation. Ties use average ranks.
+
+    Returns 0 when either ranking has no variance, including a constant input.
+    Needs at least two pairs.
+    """
+    left = np.asarray(a, dtype=np.float64).ravel()
+    right = np.asarray(b, dtype=np.float64).ravel()
+    if left.shape != right.shape:
+        raise ValueError(f"spearman shape mismatch {left.shape} vs {right.shape}")
+    if left.shape[0] < 2:
+        raise ValueError("spearman needs at least two pairs")
+    if not np.isfinite(left).all() or not np.isfinite(right).all():
+        raise ValueError("spearman inputs must be finite")
+    return pearson(_average_ranks(left), _average_ranks(right))
+
+
 def loss_recovered(loss_zero: float, loss_sae: float, loss_clean: float) -> float:
     """Scale predictor loss from 0 (layer zeroed) to 1 (untouched model)."""
     denom = loss_zero - loss_clean
@@ -69,17 +100,22 @@ def feature_is_real(
     usable: bool,
     distinct_clips_top20: int,
     label_holds_heldout: bool | None,
-    random_percentile: float,
+    random_percentile: float | None,
     absent_in_random_init: bool | None,
 ) -> bool:
     """A feature is real only if the SAE is usable and all four gates pass.
 
     ``None`` means the check did not run and never counts as a pass.
     """
+    percentile_ok = (
+        isinstance(random_percentile, (int, float))
+        and not isinstance(random_percentile, bool)
+        and random_percentile >= RANDOM_PERCENTILE_MIN
+    )
     return bool(
         usable
         and distinct_clips_top20 >= DISTINCT_CLIPS_TOP20
         and label_holds_heldout is True
-        and random_percentile >= RANDOM_PERCENTILE_MIN
+        and percentile_ok
         and absent_in_random_init is True
     )

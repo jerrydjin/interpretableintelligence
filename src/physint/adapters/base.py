@@ -90,6 +90,21 @@ class Adapter(Protocol):
         edit: EditFn | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
+    def attribution_objective(
+        self,
+        clip: Clip,
+        window: Window,
+        objective: str,
+        edit: EditFn | None = None,
+    ) -> torch.Tensor:
+        """Differentiable scalar the attribution prefilter backprops into.
+
+        ``prediction_loss`` is the mean masked predictor MSE (lower is better).
+        ``action_loglik`` is the mean log-likelihood of the action the policy
+        took (higher is better), a stand-in for success when success itself
+        is not differentiable. The returned value is a 0-dim tensor.
+        """
+
     def grid(self) -> Grid: ...
 
     def mask(self, window: Window) -> torch.Tensor: ...

@@ -14,6 +14,7 @@ ROWS_PER_SHARD = 50_000
 
 FEATURE_ACT_COLUMNS = ("feature_id", "clip_id", "window", "t", "h", "w", "value")
 CLIP_EFFECT_COLUMNS = ("feature_id", "clip_id", "window", "t", "effect", "effect_kind")
+ATTRIBUTION_COLUMNS = ("feature_id", "clip_id", "score")
 ROLLOUT_COLUMNS = (
     "episode_id",
     "task_id",
@@ -165,6 +166,29 @@ def read_rollout_episodes(path: Path) -> list[dict]:
             }
         )
     return rows
+
+
+def write_attribution(path: Path, rows: dict[str, list], objective: str = "prediction_loss") -> None:
+    """Write attribution scores. ``objective`` is stored in the parquet schema metadata."""
+    table = pa.table(
+        {
+            "feature_id": pa.array(rows["feature_id"], type=pa.int32()),
+            "clip_id": pa.array(rows["clip_id"], type=pa.string()),
+            "score": pa.array(rows["score"], type=pa.float32()),
+        }
+    )
+    table = table.replace_schema_metadata({b"objective": objective.encode("utf-8")})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path)
+
+
+def read_attribution_objective(path: Path) -> str | None:
+    """Objective name recorded in the attribution parquet schema metadata."""
+    metadata = pq.read_schema(path).metadata or {}
+    raw = metadata.get(b"objective")
+    if raw is None:
+        return None
+    return raw.decode("utf-8")
 
 
 def write_clip_effects(path: Path, rows: dict[str, list]) -> None:

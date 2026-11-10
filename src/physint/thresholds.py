@@ -25,6 +25,10 @@ N_RANDOM_FEATURES = 100
 # clip_effects rows with effect_kind="ablation": this many features per clip.
 TOP_K_ABLATION_PER_CLIP = 10
 
+# Default width of the attribution shortlist (`physint rank --prefilter`).
+# `physint run` still ablates every feature unless --prefilter is set.
+DEFAULT_PREFILTER_K = 10
+
 # Labeller: assign a cue only when train correlation clears this,
 # and require this held-out correlation for label_holds_heldout.
 LABEL_ASSIGN_MIN_CORR = 0.50

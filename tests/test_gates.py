@@ -2,7 +2,7 @@
 
 import pytest
 
-from physint.stats import feature_is_real, is_usable, loss_recovered
+from physint.stats import feature_is_real, is_usable, loss_recovered, spearman
 
 
 def test_loss_recovered_scale():
@@ -39,9 +39,19 @@ def test_real_requires_every_gate():
         {"label_holds_heldout": False},
         {"label_holds_heldout": None},
         {"random_percentile": 94.9},
+        {"random_percentile": None},
         {"absent_in_random_init": False},
         {"absent_in_random_init": None},
     ]
     for override in failures:
         kwargs = {**passing, **override}
         assert feature_is_real(**kwargs) is False
+
+
+def test_spearman_ranks_with_ties():
+    assert spearman([1, 2, 3], [10, 20, 30]) == pytest.approx(1.0)
+    assert spearman([1, 2, 3], [3, 2, 1]) == pytest.approx(-1.0)
+    assert spearman([1, 2, 2], [1, 3, 3]) == pytest.approx(1.0)
+    assert spearman([1, 1, 1], [1, 2, 3]) == pytest.approx(0.0)
+    with pytest.raises(ValueError):
+        spearman([1.0], [1.0])

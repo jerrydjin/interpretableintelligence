@@ -10,10 +10,12 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from physint.artifacts import (
+    ATTRIBUTION_COLUMNS,
     CLIP_EFFECT_COLUMNS,
     FEATURE_ACT_COLUMNS,
     ROLLOUT_COLUMNS,
     load_activation_shards,
+    read_attribution_objective,
     read_json,
     read_jsonl,
     read_rollout_episodes,
@@ -26,6 +28,7 @@ from physint.rollout import (
     make_episode_id,
     summarize,
 )
+from physint.attribute import PREDICTION_LOSS, METHOD, rank_feature_ids
 from physint.sae import load_sae
 from physint.split import assign_split, split_sha
 from physint.stats import feature_is_real, is_usable
@@ -59,6 +62,18 @@ _FEATURE_KEYS = {
 }
 _JSONL_KEYS = _FEATURE_KEYS | {"label_model", "top"}
 _TOP_KEYS = {"clip_id", "window", "t", "value"}
+_CANDIDATE_KEYS = {
+    "method",
+    "objective",
+    "shortlist_only",
+    "prefilter_k",
+    "rank_by",
+    "ranked",
+    "candidates",
+    "seconds",
+}
+_RANKED_KEYS = {"rank", "feature_id", "label", "score", "abs_score"}
+_SECOND_KEYS = {"attribution", "ablation", "random_controls"}
 _SAE_CONFIG_KEYS = {
     "d_model",
     "n_features",
@@ -267,26 +282,39 @@ def _check_feature_fields(feature: dict, usable: bool, where: str, errors: list[
     holds = feature.get("label_holds_heldout")
     if holds is not None and not isinstance(holds, bool):
         errors.append(f"{where}.label_holds_heldout must be true, false, or null")
-    if not _is_number(feature.get("ablation_effect")) or float(feature["ablation_effect"]) < -1e-5:
-        errors.append(f"{where}.ablation_effect must be a non-negative number")
+    effect = feature.get("ablation_effect")
     pct = feature.get("random_percentile")
-    if not _is_number(pct) or not 0.0 <= float(pct) <= 100.0:
-        errors.append(f"{where}.random_percentile must be in [0, 100]")
-    if not _is_int(feature.get("n_random")) or feature["n_random"] < N_RANDOM_FEATURES:
-        errors.append(f"{where}.n_random must be an integer >= {N_RANDOM_FEATURES}")
+    if (effect is None) != (pct is None):
+        errors.append(f"{where} ablation_effect and random_percentile must both be numbers or both null")
+    elif effect is None:
+        if feature.get("n_random") != 0:
+            errors.append(f"{where}.n_random must be 0 when the feature was not ablated")
+    else:
+        if not _is_number(effect) or float(effect) < -1e-5:
+            errors.append(f"{where}.ablation_effect must be a non-negative number")
+        if not _is_number(pct) or not 0.0 <= float(pct) <= 100.0:
+            errors.append(f"{where}.random_percentile must be in [0, 100]")
+        if not _is_int(feature.get("n_random")) or feature["n_random"] < N_RANDOM_FEATURES:
+            errors.append(f"{where}.n_random must be an integer >= {N_RANDOM_FEATURES}")
     absent = feature.get("absent_in_random_init")
     if absent is not None and not isinstance(absent, bool):
         errors.append(f"{where}.absent_in_random_init must be true, false, or null")
     if not isinstance(feature.get("real"), bool):
         errors.append(f"{where}.real must be a boolean")
         return
-    if not _is_int(feature.get("distinct_clips_top20")) or not _is_number(pct):
+    if not _is_int(feature.get("distinct_clips_top20")):
+        return
+    if effect is None and pct is None:
+        percentile_arg = None
+    elif _is_number(pct):
+        percentile_arg = float(pct)
+    else:
         return
     expected = feature_is_real(
         usable=usable,
         distinct_clips_top20=int(feature["distinct_clips_top20"]),
         label_holds_heldout=holds if isinstance(holds, bool) or holds is None else None,
-        random_percentile=float(pct),
+        random_percentile=percentile_arg,
         absent_in_random_init=absent if isinstance(absent, bool) or absent is None else None,
     )
     if feature["real"] != expected:
@@ -444,8 +472,14 @@ def _check_feature_files(run_dir: Path, manifest: dict, scoreboard: dict, errors
 
     if acts_path.is_file():
         _check_feature_acts(acts_path, manifest, len(features), errors)
+    measured = [
+        int(feature["id"])
+        for feature in features
+        if isinstance(feature, dict) and feature.get("ablation_effect") is not None
+    ]
     if effects_path.is_file():
-        _check_effects(effects_path, manifest, len(features), errors)
+        _check_effects(effects_path, manifest, len(features), measured, errors)
+    _check_attribution(run_dir, manifest, len(features), errors)
 
 
 def _check_feature_acts(path: Path, manifest: dict, n_features: int, errors: list[str]) -> None:
@@ -490,7 +524,7 @@ def _check_feature_acts(path: Path, manifest: dict, n_features: int, errors: lis
             return
 
 
-def _check_effects(path: Path, manifest: dict, n_features: int, errors: list[str]) -> None:
+def _check_effects(path: Path, manifest: dict, n_features: int, measured: list[int], errors: list[str]) -> None:
     try:
         table = pq.read_table(path)
     except Exception as exc:  # noqa: BLE001
@@ -557,15 +591,30 @@ def _check_effects(path: Path, manifest: dict, n_features: int, errors: list[str
     for fid, clip_id, window, t in ablation_keys:
         per_clip[clip_id].add(fid)
         per_clip_rows[clip_id].append((fid, window, t))
-    expected_k = min(TOP_K_ABLATION_PER_CLIP, n_features)
-    for clip_id in clip_ids:
-        got = per_clip.get(clip_id, set())
-        if len(got) != expected_k:
-            errors.append(f"{clip_id} must ablate exactly {expected_k} features, got {len(got)}")
-            continue
-        expected_rows = {(fid, window, t) for fid in got for window in windows for t in range(int(grid["t"]))}
-        if set(per_clip_rows[clip_id]) != expected_rows:
-            errors.append(f"{clip_id} ablation rows must cover every frame of the ablated features")
+    if len(measured) == n_features:
+        expected_k = min(TOP_K_ABLATION_PER_CLIP, n_features)
+        for clip_id in clip_ids:
+            got = per_clip.get(clip_id, set())
+            if len(got) != expected_k:
+                errors.append(f"{clip_id} must ablate exactly {expected_k} features, got {len(got)}")
+                continue
+            expected_rows = {(fid, window, t) for fid in got for window in windows for t in range(int(grid["t"]))}
+            if set(per_clip_rows[clip_id]) != expected_rows:
+                errors.append(f"{clip_id} ablation rows must cover every frame of the ablated features")
+    else:
+        expected_ids = set(measured)
+        for clip_id in clip_ids:
+            got = per_clip.get(clip_id, set())
+            if got != expected_ids:
+                errors.append(
+                    f"{clip_id} must ablate exactly the prefiltered features {sorted(expected_ids)}, got {sorted(got)}"
+                )
+                continue
+            expected_rows = {
+                (fid, window, t) for fid in expected_ids for window in windows for t in range(int(grid["t"]))
+            }
+            if set(per_clip_rows[clip_id]) != expected_rows:
+                errors.append(f"{clip_id} ablation rows must cover every frame of the prefiltered features")
     if not estimate_keys or not ablation_keys:
         errors.append("clip_effects must contain both estimate and ablation rows")
 
@@ -750,6 +799,125 @@ def _same_json(left: object, right: object, where: str, errors: list[str]) -> No
         return
     if left != right:
         errors.append(f"{where} expected {right!r} but stored {left!r}")
+
+
+
+def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: list[str]) -> None:
+    path = run_dir / "features" / "attribution.parquet"
+    candidates_path = run_dir / "features" / "candidates.json"
+    if not path.is_file():
+        errors.append("missing features/attribution.parquet")
+    if not candidates_path.is_file():
+        errors.append("missing features/candidates.json")
+        return
+    if not path.is_file():
+        return
+    try:
+        table = pq.read_table(path)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"attribution.parquet: {exc}")
+        return
+    if tuple(table.column_names) != ATTRIBUTION_COLUMNS:
+        errors.append(f"attribution columns must be {ATTRIBUTION_COLUMNS}")
+        return
+    recorded = read_attribution_objective(path)
+    if recorded != PREDICTION_LOSS:
+        errors.append(
+            f"attribution.parquet objective metadata must be {PREDICTION_LOSS!r} on a scored run, got {recorded!r}"
+        )
+    frame = table.to_pydict()
+    clip_ids = [clip["clip_id"] for clip in manifest["clips"] if isinstance(clip, dict)]
+    seen: set[tuple[int, str]] = set()
+    sums = {feature_id: 0.0 for feature_id in range(n_features)}
+    counts = {feature_id: 0 for feature_id in range(n_features)}
+    for feature_id, clip_id, score in zip(frame["feature_id"], frame["clip_id"], frame["score"], strict=True):
+        if not _is_int(feature_id) or not 0 <= int(feature_id) < n_features:
+            errors.append("attribution feature_id out of range")
+            return
+        if clip_id not in clip_ids:
+            errors.append("attribution clip_id is not in the manifest")
+            return
+        if not _is_number(score):
+            errors.append("attribution score must be finite")
+            return
+        key = (int(feature_id), str(clip_id))
+        if key in seen:
+            errors.append(f"duplicate attribution row for feature {feature_id} clip {clip_id}")
+            return
+        seen.add(key)
+        sums[int(feature_id)] += float(score)
+        counts[int(feature_id)] += 1
+    expected = {(feature_id, clip_id) for feature_id in range(n_features) for clip_id in clip_ids}
+    if seen != expected:
+        errors.append("attribution rows must cover every feature and clip exactly once")
+        return
+    mean = np.array([sums[feature_id] / counts[feature_id] for feature_id in range(n_features)], dtype=np.float64)
+    try:
+        document = read_json(candidates_path)
+    except (OSError, ValueError) as exc:
+        errors.append(f"candidates.json: {exc}")
+        return
+    if not isinstance(document, dict):
+        errors.append("candidates.json must be a JSON object")
+        return
+    _exact_keys(document, _CANDIDATE_KEYS, "candidates.json", errors)
+    if document.get("method") != METHOD:
+        errors.append(f"candidates.json method must be {METHOD}")
+    if document.get("objective") != PREDICTION_LOSS:
+        errors.append(f"candidates.json objective must be {PREDICTION_LOSS!r} on a scored run")
+    if document.get("shortlist_only") is not True:
+        errors.append("candidates are a shortlist and must be confirmed by a real ablation")
+    if not isinstance(document.get("rank_by"), str) or not document["rank_by"]:
+        errors.append("candidates.json rank_by must be a non-empty string")
+    prefilter_k = document.get("prefilter_k")
+    ranked = document.get("ranked")
+    shortlist = document.get("candidates")
+    if not _is_int(prefilter_k) or not 1 <= int(prefilter_k) <= n_features:
+        errors.append("candidates.json prefilter_k must be an integer in 1..n_features")
+        return
+    if not isinstance(ranked, list) or len(ranked) != n_features:
+        errors.append("candidates.json ranked must list every feature once")
+        return
+    if not isinstance(shortlist, list) or shortlist != [row.get("feature_id") for row in ranked[: int(prefilter_k)]]:
+        errors.append("candidates.json candidates must be the first prefilter_k ranked feature ids")
+    expected_order = rank_feature_ids(mean)
+    got_ids = []
+    for index, row in enumerate(ranked):
+        if not isinstance(row, dict):
+            errors.append(f"candidates.json ranked[{index}] must be an object")
+            return
+        _exact_keys(row, _RANKED_KEYS, f"candidates.json ranked[{index}]", errors)
+        if row.get("rank") != index + 1:
+            errors.append(f"candidates.json ranks must be 1..n in order")
+        if not isinstance(row.get("label"), str):
+            errors.append(f"candidates.json ranked[{index}].label must be a string")
+        feature_id = row.get("feature_id")
+        if not _is_int(feature_id):
+            errors.append(f"candidates.json ranked[{index}].feature_id must be an integer")
+            return
+        got_ids.append(int(feature_id))
+        if not _is_number(row.get("score")) or not _is_number(row.get("abs_score")):
+            errors.append(f"candidates.json ranked[{index}] scores must be finite")
+            continue
+        if abs(float(row["abs_score"]) - abs(float(row["score"]))) > 1e-8:
+            errors.append(f"candidates.json ranked[{index}].abs_score must be |score|")
+        if abs(float(row["score"]) - float(mean[int(feature_id)])) > 1e-5:
+            errors.append(
+                f"candidates.json ranked[{index}] score does not match the mean attribution parquet row"
+            )
+    if got_ids != expected_order:
+        errors.append("candidates.json is not sorted by descending |mean attribution| (ties: smaller feature id)")
+    seconds = document.get("seconds")
+    if not isinstance(seconds, dict):
+        errors.append("candidates.json seconds must be an object")
+        return
+    _exact_keys(seconds, _SECOND_KEYS, "candidates.json seconds", errors)
+    for key in _SECOND_KEYS:
+        value = seconds.get(key)
+        if value is not None and (not _is_number(value) or float(value) < 0):
+            errors.append(f"candidates.json seconds.{key} must be a non-negative number or null")
+
+
 
 
 def _read_object(path: Path, errors: list[str]) -> dict | None:

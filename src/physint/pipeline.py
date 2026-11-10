@@ -28,7 +28,21 @@ import torch
 from physint import __version__
 from physint.adapters import get_adapter
 from physint.adapters.fake import CUE_NAMES, cue_volume
-from physint.artifacts import CLIP_EFFECT_COLUMNS, FEATURE_ACT_COLUMNS, read_json, write_json
+from physint.artifacts import (
+    ATTRIBUTION_COLUMNS,
+    CLIP_EFFECT_COLUMNS,
+    FEATURE_ACT_COLUMNS,
+    read_json,
+    write_attribution,
+    write_json,
+)
+from physint.attribute import (
+    PREDICTION_LOSS,
+    attribution_by_clip,
+    candidates_document,
+    rank_feature_ids,
+    summarize_attribution,
+)
 from physint.clips import file_sha256, list_clip_meta, load_clip
 from physint.device import pick_device
 from physint.labelers import FakeCueLabeller, NullLabeller
@@ -53,6 +67,7 @@ from physint.thresholds import (
     DEAD_ACT_EPS,
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
+    DEFAULT_PREFILTER_K,
     DEFAULT_SEED,
     LABEL_ASSIGN_MIN_CORR,
     LABEL_HOLD_MIN_CORR,
@@ -135,6 +150,7 @@ def execute_pipeline(
     seed: int = DEFAULT_SEED,
     heldout_frac: float = DEFAULT_HELDOUT_FRAC,
     tiny: bool = False,
+    prefilter: int | None = None,
     gpu_cost_per_hour: float | None = None,
     score: bool = True,
     serve: bool = True,
@@ -150,6 +166,9 @@ def execute_pipeline(
         raise ValueError(f"heldout_frac must be in (0, 1), got {heldout_frac}")
     if tiny and adapter_name != "vjepa2":
         raise ValueError("--tiny is only supported for the vjepa2 adapter")
+    if prefilter is not None and int(prefilter) < 1:
+        raise ValueError(f"prefilter K must be >= 1, got {prefilter}")
+    prefilter = None if prefilter is None else int(prefilter)
 
     torch.set_num_threads(1)
     device = pick_device()
@@ -219,7 +238,12 @@ def execute_pipeline(
         _write_complete(out / "features" / "complete.json", feature_inputs, measured["metrics"])
 
     stats_path = out / "features" / "stats.json"
-    score_inputs = _with_kind(feature_inputs, "score", stats_sha=file_sha256(stats_path))
+    score_inputs = _with_kind(
+        feature_inputs,
+        "score",
+        stats_sha=file_sha256(stats_path),
+        prefilter=prefilter,
+    )
     scoreboard = _read_scoreboard(out)
     if not score:
         log("skip score")
@@ -243,6 +267,7 @@ def execute_pipeline(
                 capture_inputs,
                 log,
                 tiny=tiny,
+                prefilter=prefilter,
             )
             measured["rows"] = effect_rows
             measured["tokens"] = int(read_json(out / "acts" / "stream" / "meta.json")["n"])
@@ -522,6 +547,7 @@ def _score(
     capture_inputs,
     log,
     tiny: bool = False,
+    prefilter: int | None = None,
 ) -> tuple[dict, int]:
     stats = json.loads((out / "features" / "stats.json").read_text(encoding="utf-8"))
     manifest = read_json(out / "manifest.json")
@@ -587,6 +613,21 @@ def _score(
         f"loss_recovered={recovered:.4f}  dead_frac={dead:.3f}  usable={usable}"
     )
 
+    _clear_cache(adapter)
+    attribution_started = time.perf_counter()
+    by_clip = attribution_by_clip(adapter, model, [load_clip(item) for item in meta], objective=PREDICTION_LOSS)
+    attribution_seconds = time.perf_counter() - attribution_started
+    _clear_cache(adapter)
+    attr_rows, mean_scores = summarize_attribution(by_clip)
+    ranked_ids = rank_feature_ids(mean_scores)
+    if prefilter is None:
+        selected = None
+        reported_k = min(DEFAULT_PREFILTER_K, n_features)
+    else:
+        reported_k = min(int(prefilter), n_features)
+        selected = set(ranked_ids[:reported_k])
+        log(f"prefilter K={reported_k}  candidates={ranked_ids[:reported_k]}")
+
     top_k = min(TOP_K_ABLATION_PER_CLIP, n_features)
     effects_path = out / "features" / "clip_effects.parquet"
     effect_writer = _ColumnBatch(effects_path, _EFFECT_SCHEMA)
@@ -596,6 +637,7 @@ def _score(
             clip_id: [int(index) for index in np.argsort(-np.asarray(scores), kind="stable")[:top_k]]
             for clip_id, scores in rank.items()
         }
+        ablation_started = time.perf_counter()
         held_total, held_count = _ablation_rows(
             adapter,
             model,
@@ -604,7 +646,9 @@ def _score(
             chosen,
             n_features,
             effect_writer,
+            only=selected,
         )
+        ablation_seconds = time.perf_counter() - ablation_started
         effects = effect_writer.close()
     except Exception:
         effect_writer.abort()
@@ -619,25 +663,35 @@ def _score(
         records = []
         jsonl = []
         real_labels = []
+        control_seconds = 0.0
         for feature_id in range(n_features):
             info = stats["features"][feature_id]
             labelled = labels[feature_id]
-            if int(held_count[feature_id]) == 0:
-                effect = 0.0
+            measured = selected is None or feature_id in selected
+            if not measured:
+                effect = None
+                percentile = None
+                n_random = 0
             else:
-                effect = float(held_total[feature_id] / held_count[feature_id])
-            fires = _fire_values(connection, fire_source, feature_id)
-            percentile = _random_percentile(
-                adapter=adapter,
-                sae=model,
-                feature_id=feature_id,
-                real_effect=effect,
-                fires=fires,
-                pool=pool,
-                meta=meta,
-                heldout_meta=heldout_meta,
-                seed=int(seed),
-            )
+                if int(held_count[feature_id]) == 0:
+                    effect = 0.0
+                else:
+                    effect = float(held_total[feature_id] / held_count[feature_id])
+                started_controls = time.perf_counter()
+                fires = _fire_values(connection, fire_source, feature_id)
+                percentile = _random_percentile(
+                    adapter=adapter,
+                    sae=model,
+                    feature_id=feature_id,
+                    real_effect=effect,
+                    fires=fires,
+                    pool=pool,
+                    meta=meta,
+                    heldout_meta=heldout_meta,
+                    seed=int(seed),
+                )
+                control_seconds += time.perf_counter() - started_controls
+                n_random = N_RANDOM_FEATURES
             absent_flag = bool(absent[feature_id])
             real = feature_is_real(
                 usable=usable,
@@ -652,8 +706,8 @@ def _score(
                 "distinct_clips_top20": int(info["distinct_clips_top20"]),
                 "label_holds_heldout": labelled["label_holds_heldout"],
                 "ablation_effect": effect,
-                "random_percentile": float(percentile),
-                "n_random": N_RANDOM_FEATURES,
+                "random_percentile": None if percentile is None else float(percentile),
+                "n_random": n_random,
                 "absent_in_random_init": absent_flag,
                 "real": bool(real),
             }
@@ -667,18 +721,20 @@ def _score(
                     "distinct_clips_top20": int(info["distinct_clips_top20"]),
                     "label_holds_heldout": labelled["label_holds_heldout"],
                     "ablation_effect": effect,
-                    "random_percentile": float(percentile),
-                    "n_random": N_RANDOM_FEATURES,
+                    "random_percentile": None if percentile is None else float(percentile),
+                    "n_random": n_random,
                     "absent_in_random_init": absent_flag,
                     "real": bool(real),
                 }
             )
             if real:
                 real_labels.append(labelled["label"])
+            pct_text = f"{float(percentile):6.1f}" if percentile is not None else "     -"
+            abl_text = f"{effect:.5f}" if effect is not None else "skipped"
             log(
                 f"feature {feature_id:02d}  label={labelled['label'] or '-':<8}  real={str(bool(real)).lower():<5}  "
                 f"distinct={int(info['distinct_clips_top20']):<3}  holds={labelled['label_holds_heldout']}  "
-                f"pct={float(percentile):6.1f}  absent={absent_flag}  abl={effect:.5f}"
+                f"pct={pct_text}  absent={absent_flag}  abl={abl_text}"
             )
     finally:
         connection.close()
@@ -706,6 +762,25 @@ def _score(
     }
     write_json(out / "scoreboard.json", scoreboard)
     _write_jsonl(out / "features" / "features.jsonl", jsonl)
+    write_attribution(out / "features" / "attribution.parquet", attr_rows, objective=PREDICTION_LOSS)
+    write_json(
+        out / "features" / "candidates.json",
+        candidates_document(
+            mean_scores,
+            reported_k,
+            objective=PREDICTION_LOSS,
+            labels=[row["label"] for row in labels],
+            seconds={
+                "attribution": attribution_seconds,
+                "ablation": ablation_seconds,
+                "random_controls": control_seconds,
+            },
+        ),
+    )
+    log(
+        f"attribution {attribution_seconds:.3f}s  ablation {ablation_seconds:.3f}s  "
+        f"random_controls {control_seconds:.3f}s"
+    )
     log(f"wrote {out}  real={len(real_labels)} {real_labels}")
     return scoreboard, int(effects)
 
@@ -888,15 +963,29 @@ def _estimate_rows(adapter, sae, meta, writer: "_ColumnBatch", n_features: int) 
     return scores
 
 
-def _ablation_rows(adapter, sae, meta, membership, chosen, n_features: int, writer: "_ColumnBatch"):
+def _ablation_rows(
+    adapter,
+    sae,
+    meta,
+    membership,
+    chosen,
+    n_features: int,
+    writer: "_ColumnBatch",
+    only: set[int] | None = None,
+):
     held_total = np.zeros(n_features, dtype=np.float64)
     held_count = np.zeros(n_features, dtype=np.int64)
     for item in meta:
         top = set(chosen[item["clip_id"]])
         heldout = membership[item["clip_id"]]["split"] == "heldout"
-        feature_ids = list(range(n_features)) if heldout else sorted(top)
+        if only is None:
+            feature_ids = list(range(n_features)) if heldout else sorted(top)
+            record_ids = top
+        else:
+            feature_ids = sorted(only)
+            record_ids = set(only)
 
-        def visit(clip, top=top, heldout=heldout, feature_ids=feature_ids):
+        def visit(clip, record_ids=record_ids, heldout=heldout, feature_ids=feature_ids):
             windows = adapter.windows(clip)
             baselines = []
             masks = []
@@ -912,7 +1001,7 @@ def _ablation_rows(adapter, sae, meta, membership, chosen, n_features: int, writ
                     if heldout:
                         held_total[feature_id] += float(dist.sum())
                         held_count[feature_id] += int(dist.numel())
-                    if feature_id not in top:
+                    if feature_id not in record_ids:
                         continue
                     coords = mask.detach().cpu().nonzero(as_tuple=False)
                     for t_index in range(int(adapter.grid().t)):
@@ -1393,12 +1482,10 @@ def _features_ready(out: Path, inputs: dict) -> bool:
         return False
     stats_path = out / "features" / "stats.json"
     acts_path = out / "features" / "feature_acts.parquet"
-    candidates_path = out / "features" / "candidates.json"
-    if not stats_path.is_file() or not acts_path.is_file() or not candidates_path.is_file():
+    if not stats_path.is_file() or not acts_path.is_file():
         return False
     try:
         stats = json.loads(stats_path.read_text(encoding="utf-8"))
-        candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
         schema = pq.read_schema(acts_path)
         rows = pq.ParquetFile(acts_path).metadata.num_rows
         store = json.loads((out / "acts" / "stream" / "meta.json").read_text(encoding="utf-8"))
@@ -1406,7 +1493,7 @@ def _features_ready(out: Path, inputs: dict) -> bool:
         return False
     if tuple(schema.names) != FEATURE_ACT_COLUMNS:
         return False
-    if not isinstance(candidates, list) or not isinstance(stats.get("features"), list):
+    if not isinstance(stats.get("features"), list):
         return False
     if int(stats.get("n_tokens", -1)) != int(store["n"]):
         return False
@@ -1420,7 +1507,15 @@ def _score_ready(out: Path, inputs: dict, n_features: int, n_clips: int, grid: d
         return False
     effects = out / "features" / "clip_effects.parquet"
     jsonl = out / "features" / "features.jsonl"
-    if not (out / "scoreboard.json").is_file() or not effects.is_file() or not jsonl.is_file():
+    attribution = out / "features" / "attribution.parquet"
+    candidates = out / "features" / "candidates.json"
+    if (
+        not (out / "scoreboard.json").is_file()
+        or not effects.is_file()
+        or not jsonl.is_file()
+        or not attribution.is_file()
+        or not candidates.is_file()
+    ):
         return False
     try:
         scoreboard = read_json(out / "scoreboard.json")
@@ -1428,9 +1523,16 @@ def _score_ready(out: Path, inputs: dict, n_features: int, n_clips: int, grid: d
         effect_rows = pq.ParquetFile(effects).metadata.num_rows
         lines = _count_lines(jsonl)
         store = json.loads((out / "acts" / "stream" / "meta.json").read_text(encoding="utf-8"))
+        attr_schema = pq.read_schema(attribution)
+        document = json.loads(candidates.read_text(encoding="utf-8"))
     except (OSError, ValueError, KeyError, AttributeError):
         return False
     if tuple(schema.names) != CLIP_EFFECT_COLUMNS:
+        return False
+    if tuple(attr_schema.names) != ATTRIBUTION_COLUMNS:
+        return False
+    ranked = document.get("ranked") if isinstance(document, dict) else None
+    if not isinstance(ranked, list) or len(ranked) != n_features:
         return False
     features = scoreboard.get("features")
     if not isinstance(features, list) or len(features) != n_features or lines != n_features:
@@ -1552,6 +1654,8 @@ def _invalidate(out: Path, stage: str) -> None:
             out / "view.complete.json",
             out / "features" / "features.jsonl",
             out / "features" / "clip_effects.parquet",
+            out / "features" / "attribution.parquet",
+            out / "features" / "candidates.json",
         ]
     else:
         targets = []

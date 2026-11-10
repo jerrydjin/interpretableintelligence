@@ -9,9 +9,12 @@ This lane is the contract, the scoring core, the V-JEPA 2 adapter, and a local c
 1. **Split** clips with a fixed seed. Holdout is by clip.
 2. **Capture** the instrumented layer through `hook(..., mode="capture")` and write activation shards. Rows are appended to a float32 cache and contract shards are emitted in slices. The full activation matrix is not a tensor.
 3. **Train** a ReLU SAE on train rows only, one batch at a time from that cache.
-4. **Features.** Encode in chunks, write sparse `feature_acts.parquet`, and write `candidates.json`.
-5. **Score** (skipped with `--no-score`, or when `scoreboard.json` is already valid). Explained variance, spliced predictor loss, dead features, per-feature ablations, matched random features, and a random-init control. The fake adapter uses `fake-cue-v1`, which reads planted cue channels back out of the clip. `LLMLabeller` is a stub and raises rather than calling a network.
-6. **Serve** the folder. `GET /api/run` is the health check. `--no-serve` stops after the report.
+4. **Features.** Encode in chunks, write sparse `feature_acts.parquet`, and write a frequency list that scoring replaces.
+5. **Attribute.** One forward and backward per window scores every SAE feature (`activation × ∂objective/∂activation`, summed over tokens and windows) and writes `features/attribution.parquet` plus `features/candidates.json`. The adapter supplies the scalar: `prediction_loss`, or `action_loglik` when success is the log-likelihood of the taken action. `activation` is the magnitude baseline and does not backprop. `physint rank` stops at the shortlist. `physint run --prefilter K` sends only that shortlist to the ablation sweep, and every one of those picks is confirmed by a real ablation.
+6. **Score** (skipped with `--no-score`, or when `scoreboard.json` is already valid). Explained variance, spliced predictor loss, dead features, per-feature ablations, matched random features, and a random-init control. Without `--prefilter`, every feature is ablated. With `--prefilter K`, held-out ablations and the matched random controls run only for the top K; the others keep a null ablation and cannot be `real`. The fake adapter uses `fake-cue-v1`, which reads planted cue channels back out of the clip. `LLMLabeller` is a stub and raises rather than calling a network.
+7. **Serve** the folder. `GET /api/run` is the health check. `--no-serve` stops after the report.
+
+`scripts/compare_attribution_vs_ablation.py` reads a run folder that has both the attribution file and measured ablations and prints Spearman correlation and top-K overlap for the attribution, next to the same numbers for an activation-magnitude baseline.
 
 Each stage records wall time, peak RSS, device, and row/token counts on `manifest.stages` and is skipped when its outputs still match the clips, seed, and upstream weights. `physint validate` checks the folder in `SCHEMA.md`, including that `real` follows the four gates. The printed cost per hour of footage is `stage_seconds * gpu_cost_per_hour / video_seconds`.
 
@@ -28,6 +31,7 @@ Thresholds are constants in `src/physint/thresholds.py`. Changing them changes t
 | `hook(layer, mode, fn=None)` | `capture`, `edit`, or `zero`. Context manager. |
 | `encode(clip, window)` | Run the window and return layer activations `[t, h, w, d_model]`. |
 | `predict_masked(clip, window, edit=None)` | `(pred, target)` on masked cells, row-major `(t, h, w)`. |
+| `attribution_objective(clip, window, objective, edit=None)` | Scalar the prefilter backprops into: `prediction_loss` or `action_loglik`. |
 | `mask(window)` | Bool grid of those cells. |
 | `grid()` | `{t, h, w, tubelet, patch_px}`. |
 | `raw_activations(clip, window)` | Layer residual before hooks, `[t, h, w, d_model]`. The straight-through estimate reads it. |

@@ -289,6 +289,15 @@ class VJEPA2Adapter:
             pred = pred.detach()
         return pred, target.detach()
 
+    def attribution_objective(self, clip: Clip, window: Window, objective: str, edit=None) -> torch.Tensor:
+        """Masked predictor MSE. V-JEPA has no action log-likelihood."""
+        if objective != "prediction_loss":
+            raise ValueError(
+                f"vjepa2 attribution objective must be prediction_loss, got {objective!r}"
+            )
+        pred, target = self.predict_masked(clip, window, edit=edit)
+        return ((pred - target) ** 2).mean()
+
     def encoder_output(self, clip: Clip, window: Window) -> torch.Tensor:
         """Target-encoder hidden states after the encoder layernorm, ``[t, h, w, d]``.
 

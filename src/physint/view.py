@@ -1180,7 +1180,11 @@ def _read_candidates(path: Path) -> list[dict]:
         return []
     payload = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(payload, dict):
-        payload = payload.get("candidates") or payload.get("features") or []
+        ranked = payload.get("ranked")
+        if isinstance(ranked, list) and ranked and isinstance(ranked[0], dict):
+            payload = ranked
+        else:
+            payload = payload.get("candidates") or payload.get("features") or []
     if not isinstance(payload, list):
         return []
     return [row for row in payload if isinstance(row, dict) and _is_int(row.get("feature_id"))]

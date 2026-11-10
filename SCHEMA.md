@@ -20,6 +20,8 @@ runs/<run_id>/
   sae/config.json
   features/feature_acts.parquet
   features/clip_effects.parquet
+  features/attribution.parquet
+  features/candidates.json
   features/features.jsonl
   scoreboard.json
 ```
@@ -119,7 +121,42 @@ Columns, in order:
 `effect_kind` is `estimate` or `ablation`.
 
 - `estimate`: activation × ∂(mean masked predictor MSE)/∂(feature activation), averaged over `h, w` in that frame. Straight-through: the forward value is the true layer activation, and the gradient flows through the decoder. One row for every feature, clip, window, and frame.
-- `ablation`: the feature is actually zeroed by subtracting `f_i * decoder_i` from the layer. Rows exist for the top 10 features per clip (or every feature, if the dictionary is smaller), ranked by mean absolute estimate on that clip, and for every frame of those features. The stored effect is the mean cosine distance of the predictor output over the masked spatial cells in that frame.
+- `ablation`: the feature is actually zeroed by subtracting `f_i * decoder_i` from the layer. On a full run, rows exist for the top 10 features per clip (or every feature, if the dictionary is smaller), ranked by mean absolute estimate on that clip, and for every frame of those features. `physint run --prefilter K` instead ablates exactly those K features on every clip and frame. The stored effect is the mean cosine distance of the predictor output over the masked spatial cells in that frame.
+
+## features/attribution.parquet
+
+Cheap prefilter scores, one row per feature and clip. Columns, in order:
+
+`feature_id` int32, `clip_id` string, `score` float32.
+
+The objective is recorded in the parquet schema metadata as `objective`. For `prediction_loss` and `action_loglik`, `score` is the sum over that clip's windows and tokens of `activation × ∂(objective)/∂(activation)`, from one forward and one backward per window. For `activation` there is no backward, and `score` is the sum of `|activation|`.
+
+- `prediction_loss`: mean masked predictor MSE. This is what `physint run` writes, and it matches `effect_kind="estimate"`.
+- `action_loglik`: mean log-likelihood of the action the policy took. Use this when success is not differentiable.
+- `activation`: no backward. The score is the sum of `|activation|`, a magnitude baseline.
+
+`physint rank --objective` selects which one. A scored run's metadata is `prediction_loss`. The file is a shortlist, not a confirmation.
+
+## features/candidates.json
+
+The ranking of those scores and the shortlist expensive ablations should run on.
+
+```json
+{
+  "method": "attribution_patching",
+  "objective": "prediction_loss",
+  "shortlist_only": true,
+  "prefilter_k": 10,
+  "rank_by": "abs(mean over clips of the per-clip score); ties break toward the smaller feature id",
+  "ranked": [
+    {"rank": 1, "feature_id": 9, "label": "stripe", "score": -0.0004, "abs_score": 0.0004}
+  ],
+  "candidates": [9, 0, 3],
+  "seconds": {"attribution": 0.01, "ablation": 0.02, "random_controls": 1.5}
+}
+```
+
+`ranked` lists every feature once, ordered by descending `|mean score over clips|`. `candidates` is the first `prefilter_k` feature ids. `shortlist_only` is true: every candidate still has to be confirmed by a real ablation before it can count as causal. `seconds.ablation` and `seconds.random_controls` are null when `physint rank` did not ablate. A feature outside a `--prefilter` shortlist has `ablation_effect: null`, `random_percentile: null`, and `n_random: 0` in the scoreboard; `real` is then false.
 
 ## features/features.jsonl
 
@@ -194,7 +231,7 @@ One record per run. No extra keys.
 
 ### Feature block
 
-`ablation_effect` is the mean cosine distance between the original predictor output and the output after the feature is zeroed, over held-out masked tokens. Masked rows come from `predict_masked` in row-major `(t, h, w)` order of the adapter mask. Cosine distance is `1 - cos`. A zero vector against a nonzero vector counts as distance 1; two zero vectors count as 0.
+`ablation_effect` is the mean cosine distance between the original predictor output and the output after the feature is zeroed, over held-out masked tokens. Masked rows come from `predict_masked` in row-major `(t, h, w)` order of the adapter mask. Cosine distance is `1 - cos`. A zero vector against a nonzero vector counts as distance 1; two zero vectors count as 0. It is `null` when `physint run --prefilter` did not ablate that feature. `random_percentile` is `null` in that case and `n_random` is 0. `null` is not a pass.
 
 `random_percentile` compares that effect to `n_random` (≥ 100) random features matched on held-out firing count and on `(decoder L2 norm × mean firing activation)`. Each control uses a random unit direction scaled to the same decoder norm, the same multiset of activation values, and a random subset of held-out tokens of the same size. The percentile is the percentage of control effects that are `<=` the feature's effect (ties do not count as a win for the control).
 
