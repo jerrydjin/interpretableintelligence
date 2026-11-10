@@ -12,9 +12,19 @@ import pyarrow.parquet as pq
 from physint.artifacts import (
     CLIP_EFFECT_COLUMNS,
     FEATURE_ACT_COLUMNS,
+    ROLLOUT_COLUMNS,
     load_activation_shards,
     read_json,
     read_jsonl,
+    read_rollout_episodes,
+)
+from physint.rollout import (
+    CONDITION_KEYS,
+    FEATURE_KEYS,
+    SUMMARY_KEYS,
+    config_from_summary,
+    make_episode_id,
+    summarize,
 )
 from physint.sae import load_sae
 from physint.split import assign_split, split_sha
@@ -73,7 +83,11 @@ def validate_run(run_dir: Path) -> list[str]:
     if manifest is None or split is None or scoreboard is None:
         return errors
 
-    _exact_keys(manifest, _MANIFEST_KEYS, "manifest", errors)
+    schema_version = _schema_version(manifest, errors)
+    expected_manifest = set(_MANIFEST_KEYS)
+    if "schema_version" in manifest:
+        expected_manifest.add("schema_version")
+    _exact_keys(manifest, expected_manifest, "manifest", errors)
     _exact_keys(split, _SPLIT_FILE_KEYS, "split.json", errors)
     _exact_keys(scoreboard, _SCOREBOARD_KEYS, "scoreboard", errors)
     if errors:
@@ -131,6 +145,7 @@ def validate_run(run_dir: Path) -> list[str]:
     _check_sae(run_dir, manifest, scoreboard, errors)
     _check_shards(run_dir, manifest, errors)
     _check_feature_files(run_dir, manifest, scoreboard, errors)
+    _check_rollouts(run_dir, schema_version, errors)
     return errors
 
 
@@ -549,6 +564,188 @@ def _check_effects(path: Path, manifest: dict, n_features: int, errors: list[str
             errors.append(f"{clip_id} ablation rows must cover every frame of the ablated features")
     if not estimate_keys or not ablation_keys:
         errors.append("clip_effects must contain both estimate and ablation rows")
+
+
+def _schema_version(manifest: dict, errors: list[str]) -> int:
+    if "schema_version" not in manifest:
+        return 0
+    value = manifest["schema_version"]
+    if isinstance(value, bool) or not isinstance(value, int) or value not in (0, 1):
+        errors.append("manifest.schema_version must be 0 or 1")
+        return -1
+    return int(value)
+
+
+def _check_rollouts(run_dir: Path, schema_version: int, errors: list[str]) -> None:
+    rollout_dir = run_dir / "rollouts"
+    has_rollouts = rollout_dir.exists()
+    if schema_version == 1 and not has_rollouts:
+        errors.append("schema_version 1 requires rollouts/")
+        return
+    if has_rollouts and schema_version != 1:
+        errors.append("rollouts/ requires manifest.schema_version 1")
+        return
+    if schema_version != 1:
+        return
+    if not rollout_dir.is_dir():
+        errors.append("rollouts/ must be a directory")
+        return
+    episodes_path = rollout_dir / "episodes.parquet"
+    summary_path = rollout_dir / "summary.json"
+    if not episodes_path.is_file() or not summary_path.is_file():
+        errors.append("rollouts/episodes.parquet and rollouts/summary.json are required")
+        return
+    try:
+        rows = read_rollout_episodes(episodes_path)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"rollouts/episodes.parquet: {exc}")
+        return
+    try:
+        summary = read_json(summary_path)
+    except (OSError, ValueError) as exc:
+        errors.append(f"rollouts/summary.json: {exc}")
+        return
+    if not isinstance(summary, dict):
+        errors.append("rollouts/summary.json must be a JSON object")
+        return
+    _exact_keys(summary, SUMMARY_KEYS, "rollouts/summary.json", errors)
+    if errors and any(error.startswith("rollouts/summary.json keys") for error in errors):
+        return
+    if summary.get("schema_version") != 1:
+        errors.append("rollouts/summary.json schema_version must be 1")
+    _check_rollout_rows(rows, summary, errors)
+    if any(error.startswith("rollouts/episodes") for error in errors):
+        return
+    try:
+        config = config_from_summary(summary)
+        rebuilt = summarize(rows, config)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        errors.append(f"rollouts summary does not match the episode schedule: {exc}")
+        return
+    _same_json(summary, rebuilt, "rollouts/summary.json", errors)
+
+
+def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> None:
+    if not rows:
+        errors.append("rollouts/episodes must contain at least one episode")
+        return
+    seen: set[str] = set()
+    policy = summary.get("policy")
+    for index, row in enumerate(rows):
+        where = f"rollouts/episodes[{index}]"
+        if tuple(row) != ROLLOUT_COLUMNS and set(row) != set(ROLLOUT_COLUMNS):
+            errors.append(f"{where} is missing rollout columns")
+            return
+        episode_id = row["episode_id"]
+        if not isinstance(episode_id, str) or not episode_id:
+            errors.append(f"{where}.episode_id must be a non-empty string")
+            return
+        if episode_id in seen:
+            errors.append(f"duplicate episode_id {episode_id}")
+            return
+        seen.add(episode_id)
+        if not isinstance(row["task_id"], str) or not row["task_id"]:
+            errors.append(f"{where}.task_id must be a non-empty string")
+            return
+        if isinstance(row["seed"], bool) or not isinstance(row["seed"], int):
+            errors.append(f"{where}.seed must be an integer")
+            return
+        condition = row["condition"]
+        feature_ids = row["feature_ids"]
+        if not isinstance(feature_ids, list) or any(isinstance(item, bool) or not isinstance(item, int) for item in feature_ids):
+            errors.append(f"{where}.feature_ids must be a list of integers")
+            return
+        if condition == "baseline":
+            if feature_ids or row["kind"] is not None or row["value"] is not None or row["layer"] is not None:
+                errors.append(f"{where} baseline rows have an empty intervention spec")
+                return
+        elif condition == "intervention":
+            if not feature_ids:
+                errors.append(f"{where} intervention rows need at least one feature id")
+                return
+            if row["kind"] not in {"ablate", "scale", "clamp"}:
+                errors.append(f"{where}.kind must be ablate, scale, or clamp")
+                return
+            if isinstance(row["layer"], bool) or not isinstance(row["layer"], int) or row["layer"] < 0:
+                errors.append(f"{where}.layer must be a non-negative integer")
+                return
+            if not _is_number(row["value"]):
+                errors.append(f"{where}.value must be finite")
+                return
+        else:
+            errors.append(f"{where}.condition must be baseline or intervention")
+            return
+        if not isinstance(row["success"], bool):
+            errors.append(f"{where}.success must be a boolean")
+            return
+        if isinstance(row["steps"], bool) or not isinstance(row["steps"], int) or row["steps"] < 1:
+            errors.append(f"{where}.steps must be a positive integer")
+            return
+        if not _is_number(row["wall_time_s"]) or float(row["wall_time_s"]) < 0.0:
+            errors.append(f"{where}.wall_time_s must be >= 0")
+            return
+        if isinstance(policy, str):
+            expected_id = make_episode_id(
+                policy=policy,
+                condition=condition,
+                task_id=row["task_id"],
+                seed=row["seed"],
+                feature_ids=feature_ids,
+                layer=row["layer"],
+                kind=row["kind"],
+                value=row["value"],
+            )
+            if episode_id != expected_id:
+                errors.append(f"{where}.episode_id does not match the intervention spec")
+                return
+    for block_name, keys in (("conditions", CONDITION_KEYS), ("features", FEATURE_KEYS)):
+        block = summary.get(block_name)
+        if not isinstance(block, list) or not block:
+            errors.append(f"rollouts/summary.json {block_name} must be a non-empty list")
+            continue
+        for index, item in enumerate(block):
+            if not isinstance(item, dict):
+                errors.append(f"rollouts/summary.json {block_name}[{index}] must be an object")
+                continue
+            _exact_keys(item, keys, f"rollouts/summary.json {block_name}[{index}]", errors)
+
+
+def _same_json(left: object, right: object, where: str, errors: list[str]) -> None:
+    if isinstance(left, bool) or isinstance(right, bool):
+        if left is not right:
+            errors.append(f"{where} expected {right!r} but stored {left!r}")
+        return
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        if isinstance(left, float) or isinstance(right, float):
+            if not math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=1e-8):
+                errors.append(f"{where} expected {right!r} but stored {left!r}")
+        elif left != right:
+            errors.append(f"{where} expected {right!r} but stored {left!r}")
+        return
+    if left is None or right is None:
+        if left is not right:
+            errors.append(f"{where} expected {right!r} but stored {left!r}")
+        return
+    if isinstance(left, str) and isinstance(right, str):
+        if left != right:
+            errors.append(f"{where} expected {right!r} but stored {left!r}")
+        return
+    if isinstance(left, list) and isinstance(right, list):
+        if len(left) != len(right):
+            errors.append(f"{where} length {len(left)} != {len(right)}")
+            return
+        for index, (item_left, item_right) in enumerate(zip(left, right, strict=True)):
+            _same_json(item_left, item_right, f"{where}[{index}]", errors)
+        return
+    if isinstance(left, dict) and isinstance(right, dict):
+        if set(left) != set(right):
+            errors.append(f"{where} keys mismatch missing={sorted(set(right) - set(left))} extra={sorted(set(left) - set(right))}")
+            return
+        for key in left:
+            _same_json(left[key], right[key], f"{where}.{key}", errors)
+        return
+    if left != right:
+        errors.append(f"{where} expected {right!r} but stored {left!r}")
 
 
 def _read_object(path: Path, errors: list[str]) -> dict | None:

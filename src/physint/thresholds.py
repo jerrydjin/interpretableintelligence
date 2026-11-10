@@ -39,3 +39,24 @@ DEAD_ACT_EPS = 1e-5
 
 # Vector norms below this are treated as zero in cosine distance.
 COSINE_EPS = 1e-6
+
+# Rollout causal gate (schema v1). Independent of `real`.
+# delta is baseline success minus intervention success on paired seeds.
+# A feature is causal only when the drop clears this floor, the exact paired
+# test clears the run's alpha, and the drop beats this percentile of controls.
+# Null (no controls) never passes.
+CAUSAL_DELTA_MIN = 0.15
+CAUSAL_CONTROL_PERCENTILE = 95.0
+
+DEFAULT_ROLLOUT_EPISODES = 32
+DEFAULT_ROLLOUT_CONTROLS = 10
+DEFAULT_ROLLOUT_ALPHA = 0.05
+DEFAULT_ROLLOUT_MIN_EPISODES = 8
+DEFAULT_ROLLOUT_BATCH = 4
+DEFAULT_ROLLOUT_WORKERS = 1
+
+# SPRT alternative for a discordant pair: P(control succeeds, candidate fails)
+# among discordant pairs is (1 + SPRT_LAMBDA) / 2. Any fixed lambda in (0, 1)
+# keeps the type I error of the stop rule at alpha; 0.6 powers the test for
+# an 0.80 one-sided discordant probability. It is not fit to a seed.
+SPRT_LAMBDA = 0.6

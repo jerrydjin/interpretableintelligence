@@ -777,7 +777,7 @@ wheels = [
 
 [[package]]
 name = "physint"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "av", version = "18.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -817,6 +817,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.32" },
 ]
+provides-extras = ["robots"]
 
 [package.metadata.requires-dev]
 dev = [

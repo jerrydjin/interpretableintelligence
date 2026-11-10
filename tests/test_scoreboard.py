@@ -86,6 +86,43 @@ def test_validate_rejects_a_usable_flag_that_misses_the_visible_mean_floor(demo_
     assert any("usable" in error for error in errors)
 
 
+def test_version_0_stays_valid_and_rollouts_bump_it_to_version_1(demo_run: Path, tmp_path: Path):
+    copied = tmp_path / "demo"
+    shutil.copytree(demo_run, copied)
+    assert validate_run(copied) == []
+    (copied / "rollouts").mkdir()
+    refused = validate_run(copied)
+    assert any("schema_version" in error for error in refused)
+    shutil.rmtree(copied / "rollouts")
+
+    ran = runner.invoke(
+        app,
+        [
+            "rollouts",
+            str(copied),
+            "--policy",
+            "fake",
+            "--episodes",
+            "8",
+            "--features",
+            "3",
+            "--controls",
+            "2",
+            "--min-episodes",
+            "8",
+            "--workers",
+            "1",
+        ],
+    )
+    assert ran.exit_code == 0, ran.output
+    manifest = json.loads((copied / "manifest.json").read_text())
+    assert manifest["schema_version"] == 1
+    assert validate_run(copied) == []
+    # Version 0 files are still the scoreboard contract.
+    scoreboard = json.loads((copied / "scoreboard.json").read_text())
+    assert {feature["label"] for feature in scoreboard["features"] if feature["real"]} == CAUSAL
+
+
 def test_unknown_adapter_is_rejected(tmp_path: Path):
     clips = tmp_path / "clips"
     generated = runner.invoke(app, ["generate-clips", "--out", str(clips), "--n", "20", "--seed", "0"])

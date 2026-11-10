@@ -6,6 +6,8 @@ A feature is marked `real` only when the SAE is good enough to splice back into 
 
 `fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. pi0.5 is still a later lane.
 
+`physint rollouts` is the causal check on a policy. It runs paired baseline and intervention episodes, plus matched random-feature controls, and writes `rollouts/` into the run folder (schema version 1). The fake policy is a reacher whose planted feature drops success from about 0.80 to about 0.30 when ablated; other features do not move it. LIBERO, OpenVLA, and pi0.5 sit behind the optional `robots` extra as stubs. That extra installs no simulator and no GPU package.
+
 Runs on CPU and Apple Silicon (MPS). PyTorch is the only tensor library; nothing here requires CUDA.
 
 ## Quickstart
@@ -46,8 +48,11 @@ uv run physint validate runs/vjepa-tiny
 ```
 
 ```bash
+uv run physint rollouts runs/demo --policy fake --episodes 32 --features 3 --controls 10 --workers 2
 uv run pytest
 ```
+
+Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early when a sequential probability ratio test separates their discordant pairs from the candidate at `--alpha`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
 
 ## Layout
 
@@ -62,6 +67,8 @@ uv run pytest
 | `src/physint/score.py` | Explained variance, loss recovered, ablations, random controls |
 | `src/physint/run.py` | `capture → SAE → label → score → run folder` |
 | `src/physint/view.py` | Local clip viewer over a finished run folder |
+| `src/physint/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
+| `src/physint/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |
 | `SCHEMA.md` | Run-folder contract |
 | `ARCHITECTURE.md` | What this lane owns, and the next lanes |
 

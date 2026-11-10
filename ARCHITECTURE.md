@@ -45,9 +45,19 @@ Clips are float32 arrays shaped `[16, 16, 16, 8]` (frames, height, width, channe
 
 The reference run (`--layer 16 --seed 0 --heldout-frac 0.2`, 30 clips) is the acceptance test: exactly the three causal labels are `real`, and each decoy fails only the causal percentile while passing diversity, label transfer, and the random-init check.
 
+## Rollouts
+
+`physint rollouts` asks a different question from the scoreboard: if this SAE feature is edited inside a policy, does task success move? The run folder gains `rollouts/` and `manifest.schema_version` becomes 1. Scoreboard files are not rewritten.
+
+`PolicyEnv` is `reset`, `act`, `step`, and `intervene`. `act` encodes the instrumented layer, applies the intervention to SAE latents, and decodes before the controller runs. Kinds are `ablate` (set to 0), `scale` (multiply by `value`), and `clamp` (set to `value`).
+
+The shipped pair is `fake`: a point-mass reacher with one planted coordinate. Baseline success is about 0.80. Ablating the planted feature drops it to about 0.30. Ablating any other feature copies the baseline trajectory. `fake-null` turns the planted effect off: the controller ignores latents and the success bit is a fair coin of the post-intervention code, so arms are exchangeable and not identical. `libero`, `openvla`, and `pi0.5` are stubs behind the optional `robots` extra, which depends on nothing.
+
+The schedule is paired on seed. Baseline and candidate features run all `N` episodes. After each batch a control is dropped once a sequential probability ratio test on its discordant pairs separates it from every candidate (`--alpha`, and not before `--min-episodes`). The boundary is a Ville threshold, so the type I error of stopping stays at `alpha` across looks. The summary reports the success delta, a paired Wald interval, an exact McNemar p-value, the average-rank percentile against controls (ties score 50, not 100), episodes used against the fixed `N` budget, and rollouts per feature flagged causal.
+
 ## Next lanes
 
-1. **pi0.5.** V-JEPA 2 is `src/physint/adapters/vjepa2`. The remaining real adapter is pi0.5. It must run on MPS and CPU. It does not change the run folder or the gates.
+1. **pi0.5.** V-JEPA 2 is `src/physint/adapters/vjepa2`. The remaining world-model adapter is pi0.5, and the policy stubs for LIBERO / OpenVLA / pi0.5 still need real simulators. They must run on MPS and CPU. They do not change the run folder or the gates.
 2. **Clip-first viewer.** Shipped as `physint view runs/<run_id>`. Video on the left, features that fire on the current frame on the right, activation maps from `feature_acts.parquet`, effects from `clip_effects.parquet` when that file exists. Clip files come from a path on the manifest or from `--clips` (filename stem, then sha256). The patch heatmap is drawn over the video frame. It only reads the contract.
 3. **Hosted ingest.** Upload a run folder into Postgres plus object storage. Shards and weights go to objects; manifest, scoreboard, and feature rows go to tables. Ingest reuses `physint validate` and refuses a folder that fails it.
 4. **Failed-clip API.** Implemented locally in `physint.explain`. `physint explain --run runs/<run_id> --clip <path>` and `physint serve` (`POST /explain`, `GET /runs`, `GET /features/{id}`) share that module. The response cites only features with `real: true`, and only effects with `effect_kind: "ablation"`. Estimates rank which features to ablate; they are not evidence. A run whose SAE is not usable is refused. Hosting is a proposal in `docs/HOSTING.md`, not a deployment.
