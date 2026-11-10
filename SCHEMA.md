@@ -50,6 +50,13 @@ runs/<run_id>/
 - `split.sha` equals `split.json`'s `sha`.
 - `grid` is the activation lattice: `t` time bins, `h`×`w` patches, each bin pooling `tubelet` frames and `patch_px` pixels.
 
+Two optional manifest fields are not part of the contract readers must understand:
+
+- `clips_dir`: absolute directory the capture read. The viewer uses it when `--clips` is omitted.
+- `stages`: one object per finished stage (`capture`, `sae`, `features`, `score`, `view`). Each object has exactly `wall_s` (seconds), `peak_ram_bytes`, `device`, `rows`, and `tokens`. These are measurements from that stage, not estimates.
+
+`acts/stream/` is a float32 row cache the pipeline uses to resume training and encoding without loading every shard. It is not part of the contract. Shards remain the activation record.
+
 ## split.json
 
 ```json

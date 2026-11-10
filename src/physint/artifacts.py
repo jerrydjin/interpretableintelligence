@@ -30,7 +30,11 @@ ROLLOUT_COLUMNS = (
 
 
 def write_json(path: Path, payload: dict) -> None:
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    """Write JSON atomically so a crash cannot leave a half-written contract file."""
+    text = json.dumps(payload, indent=2) + "\n"
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:

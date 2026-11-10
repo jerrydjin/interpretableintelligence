@@ -336,6 +336,8 @@ def test_tiny_run_on_synthetic_mp4_clips(tmp_path: Path):
             "0.2",
             "--out",
             str(out),
+            "--no-serve",
+            "--no-open",
         ],
     )
     assert ran.exit_code == 0, ran.output

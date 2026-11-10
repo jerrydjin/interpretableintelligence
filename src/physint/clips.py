@@ -6,6 +6,9 @@ them for V-JEPA 2: every frame, short edge resampled to the processor size
 the container frame rate kept. The adapter then takes its window from that
 stream (stride 2 when the clip is long enough). A 4K file is never expanded
 to raw frames first.
+
+``list_clip_meta`` records shape without keeping the pixels. ``load_clip``
+reads one clip when a stage needs its frames.
 """
 
 from __future__ import annotations
@@ -31,7 +34,8 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_clips(path: Path) -> list[Clip]:
+def list_clip_meta(path: Path) -> list[dict]:
+    """Clip id, path, fps, sha256, and shape. Does not keep pixel values."""
     if not path.is_dir():
         raise FileNotFoundError(f"clips directory not found: {path}")
     index_path = path / "clips.json"
@@ -45,7 +49,7 @@ def load_clips(path: Path) -> list[Clip]:
     if not entries:
         files = _clip_files(path)
         entries = [{"clip_id": file.stem, "file": file.name, "fps": default_fps} for file in files]
-    clips: list[Clip] = []
+    found: list[dict] = []
     seen: set[str] = set()
     for entry in entries:
         clip_id = str(entry["clip_id"])
@@ -55,26 +59,57 @@ def load_clips(path: Path) -> list[Clip]:
         file_path = path / str(entry["file"])
         if not file_path.is_file():
             raise FileNotFoundError(f"missing clip file {file_path}")
-        if file_path.suffix.lower() in VIDEO_SUFFIXES:
+        suffix = file_path.suffix.lower()
+        if suffix in VIDEO_SUFFIXES:
             decoded, video_fps = decode_video(file_path, short_edge=VJEPA_SHORT_EDGE)
-            frames = np.ascontiguousarray(decoded, dtype=np.float32)
+            shape = tuple(int(dim) for dim in decoded.shape)
             fps = float(video_fps)
-        else:
-            frames = np.ascontiguousarray(np.load(file_path), dtype=np.float32)
+        elif suffix == ".npy":
+            shape = _npy_shape(file_path)
             fps = float(entry.get("fps", default_fps))
-        clips.append(
-            Clip(
-                clip_id=clip_id,
-                path=file_path,
-                frames=frames,
-                fps=fps,
-                sha256=file_sha256(file_path),
-            )
+        else:
+            raise ValueError(f"unsupported clip file {file_path.name}")
+        if len(shape) < 1 or int(shape[0]) <= 0:
+            raise ValueError(f"{file_path.name} has no frames")
+        if not fps > 0:
+            raise ValueError(f"{clip_id} fps must be positive")
+        found.append(
+            {
+                "clip_id": clip_id,
+                "path": file_path,
+                "fps": fps,
+                "sha256": file_sha256(file_path),
+                "n_frames": int(shape[0]),
+                "shape": shape,
+            }
         )
-    clips.sort(key=lambda clip: clip.clip_id)
-    if not clips:
+    found.sort(key=lambda item: item["clip_id"])
+    if not found:
         raise ValueError(f"no clips in {path}")
-    return clips
+    return found
+
+
+def load_clip(meta: dict) -> Clip:
+    """Load one clip's frames. The caller drops the clip when the window is written."""
+    path = Path(meta["path"])
+    if path.suffix.lower() in VIDEO_SUFFIXES:
+        decoded, video_fps = decode_video(path, short_edge=VJEPA_SHORT_EDGE)
+        frames = np.ascontiguousarray(decoded, dtype=np.float32)
+        fps = float(video_fps)
+    else:
+        frames = np.ascontiguousarray(np.load(path), dtype=np.float32)
+        fps = float(meta["fps"])
+    return Clip(
+        clip_id=str(meta["clip_id"]),
+        path=path,
+        frames=frames,
+        fps=fps,
+        sha256=str(meta["sha256"]),
+    )
+
+
+def load_clips(path: Path) -> list[Clip]:
+    return [load_clip(meta) for meta in list_clip_meta(path)]
 
 
 def _clip_files(path: Path) -> list[Path]:
@@ -118,3 +153,14 @@ def decode_video(path: Path, short_edge: int = VJEPA_SHORT_EDGE) -> tuple[np.nda
     if not frames:
         raise ValueError(f"no frames decoded from {path}")
     return np.stack(frames), fps
+
+
+def _npy_shape(path: Path) -> tuple[int, ...]:
+    array = np.load(path, mmap_mode="r")
+    try:
+        return tuple(int(dim) for dim in array.shape)
+    finally:
+        mapped = getattr(array, "_mmap", None)
+        del array
+        if mapped is not None:
+            mapped.close()
