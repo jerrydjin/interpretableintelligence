@@ -1,6 +1,6 @@
 //! The download-lib DuckDB build links `libduckdb.so` without an rpath.
 //! Point the server binary at that library, and also copy it beside the
-//! executable so `target/debug/physint-server` runs outside `cargo run`.
+//! executable so `target/debug/interpretableintelligence-server` runs outside `cargo run`.
 
 use std::path::{Path, PathBuf};
 

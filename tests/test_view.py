@@ -22,10 +22,10 @@ import pyarrow.parquet as pq
 import pytest
 from typer.testing import CliRunner
 
-from physint.artifacts import write_clip_effects, write_feature_acts, write_json, write_jsonl
-from physint.cli import app
-from physint.clips import file_sha256
-from physint.view import (
+from interpretableintelligence.artifacts import write_clip_effects, write_feature_acts, write_json, write_jsonl
+from interpretableintelligence.cli import app
+from interpretableintelligence.clips import file_sha256
+from interpretableintelligence.view import (
     STATIC_DIR,
     badge_for,
     bind_server,
@@ -598,12 +598,12 @@ def test_viewer_source_does_not_import_adapters():
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.append(node.module)
-    forbidden = [name for name in modules if name.startswith("physint.adapters") or name == "torch"]
+    forbidden = [name for name in modules if name.startswith("interpretableintelligence.adapters") or name == "torch"]
     assert forbidden == []
 
 
 def inspect_view_path() -> Path:
-    import physint.view as view
+    import interpretableintelligence.view as view
 
     return Path(view.__file__)
 
@@ -1202,7 +1202,7 @@ def viewer_url(fresh_fake_run: tuple[Path, Path]):
         [
             sys.executable,
             "-m",
-            "physint",
+            "interpretableintelligence",
             "view",
             str(out),
             "--clips",
@@ -1347,7 +1347,7 @@ def _view_server(run: Path, clips: Path):
         [
             sys.executable,
             "-m",
-            "physint",
+            "interpretableintelligence",
             "view",
             str(run),
             "--clips",
@@ -1636,7 +1636,7 @@ def test_ten_million_acts_bind_under_five_seconds_and_one_point_five_gb(tmp_path
     script.write_text(
         "import json, sys, time\n"
         "from pathlib import Path\n"
-        "from physint.view import bind_server, load_run\n"
+        "from interpretableintelligence.view import bind_server, load_run\n"
         "def hwm():\n"
         "    for line in Path('/proc/self/status').read_text().splitlines():\n"
         "        if line.startswith('VmHWM:'):\n"

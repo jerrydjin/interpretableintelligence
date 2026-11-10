@@ -2,7 +2,7 @@
 
 import pytest
 
-from physint.stats import feature_is_real, is_usable, loss_recovered, spearman
+from interpretableintelligence.stats import feature_is_real, is_usable, loss_recovered, spearman
 
 
 def test_loss_recovered_scale():

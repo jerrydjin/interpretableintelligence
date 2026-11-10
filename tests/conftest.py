@@ -9,7 +9,7 @@ from typing import NamedTuple
 import pytest
 from typer.testing import CliRunner
 
-from physint.cli import app
+from interpretableintelligence.cli import app
 
 runner = CliRunner()
 
@@ -21,8 +21,8 @@ class Demo(NamedTuple):
 
 @pytest.fixture(scope="session")
 def demo(tmp_path_factory) -> Demo:
-    os.environ.setdefault("PHYSINT_DEVICE", "cpu")
-    root = tmp_path_factory.mktemp("physint")
+    os.environ.setdefault("II_DEVICE", "cpu")
+    root = tmp_path_factory.mktemp("interpretableintelligence")
     clips = root / "clips"
     out = root / "runs" / "demo"
     generated = runner.invoke(app, ["generate-clips", "--out", str(clips), "--n", "30", "--seed", "0"])

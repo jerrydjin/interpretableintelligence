@@ -776,7 +776,7 @@ wheels = [
 ]
 
 [[package]]
-name = "physint"
+name = "interpretableintelligence"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [

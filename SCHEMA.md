@@ -1,13 +1,13 @@
 # Run folder contract
 
-A finished `physint run` writes one directory. Later lanes (viewers, ingest, the failed-clip API) read this directory and nothing else from the training process. `physint validate <run>` checks the rules below.
+A finished `interpretableintelligence run` writes one directory. Later lanes (viewers, ingest, the failed-clip API) read this directory and nothing else from the training process. `interpretableintelligence validate <run>` checks the rules below.
 
 ## Versions
 
 The contract has two versions. Version 1 reads version 0.
 
-- **Version 0.** The tree below, and no `rollouts/` directory. `manifest.json` omits `schema_version` (an explicit `0` is the same thing). `physint run` writes this.
-- **Version 1.** Version 0 plus `manifest.schema_version` equal to `1` and a `rollouts/` directory. Nothing from version 0 is removed or renamed. `physint rollouts` bumps an existing manifest to version 1 after it writes `rollouts/`.
+- **Version 0.** The tree below, and no `rollouts/` directory. `manifest.json` omits `schema_version` (an explicit `0` is the same thing). `interpretableintelligence run` writes this.
+- **Version 1.** Version 0 plus `manifest.schema_version` equal to `1` and a `rollouts/` directory. Nothing from version 0 is removed or renamed. `interpretableintelligence rollouts` bumps an existing manifest to version 1 after it writes `rollouts/`.
 
 A version-0 folder still validates. A folder that grew `rollouts/` without the version bump does not.
 
@@ -26,7 +26,7 @@ runs/<run_id>/
   scoreboard.json
 ```
 
-`run_id` is the directory name. Thresholds cited below live in `src/physint/thresholds.py` and are part of the contract.
+`run_id` is the directory name. Thresholds cited below live in `src/interpretableintelligence/thresholds.py` and are part of the contract.
 
 ## manifest.json
 
@@ -121,7 +121,7 @@ Columns, in order:
 `effect_kind` is one of:
 
 - `estimate`: activation × ∂(mean masked predictor MSE)/∂(feature activation), averaged over `h, w` in that frame. Straight-through: the forward value is the true layer activation, and the gradient flows through the decoder. One row for every feature, clip, window, and frame.
-- `ablation`: the feature is actually zeroed by subtracting `f_i * decoder_i` from the layer. On a full run, rows exist for the top 10 features per clip (or every feature, if the dictionary is smaller), ranked by mean absolute estimate on that clip, and for every frame of those features. `physint run --prefilter K` instead ablates exactly those K features on every clip and frame. The stored effect is the mean cosine distance of the predictor output over the masked spatial cells in that frame. This is the original single-feature score. The scoreboard's `ablation_effect` is the mean of these distances over held-out masked tokens.
+- `ablation`: the feature is actually zeroed by subtracting `f_i * decoder_i` from the layer. On a full run, rows exist for the top 10 features per clip (or every feature, if the dictionary is smaller), ranked by mean absolute estimate on that clip, and for every frame of those features. `interpretableintelligence run --prefilter K` instead ablates exactly those K features on every clip and frame. The stored effect is the mean cosine distance of the predictor output over the masked spatial cells in that frame. This is the original single-feature score. The scoreboard's `ablation_effect` is the mean of these distances over held-out masked tokens.
 - `loss_video`: same single-feature zeroing, scored as the change in the model's own masked prediction loss (edited MSE minus clean MSE) over every window of the clip. The stored number is the mean per-token loss increase inside that frame. The video-level effect is the token-weighted mean of the frame rows.
 - `loss_window`: the same loss change restricted to one window.
 - `group_loss_video`: the co-active group (default size 3) is zeroed together, and the loss change is taken over every window. Each member feature gets a copy of the group's per-frame loss increase.
@@ -137,11 +137,11 @@ Cheap prefilter scores, one row per feature and clip. Columns, in order:
 
 The objective is recorded in the parquet schema metadata as `objective`. For `prediction_loss` and `action_loglik`, `score` is the sum over that clip's windows and tokens of `activation × ∂(objective)/∂(activation)`, from one forward and one backward per window. For `activation` there is no backward, and `score` is the sum of `|activation|`.
 
-- `prediction_loss`: mean masked predictor MSE. This is what `physint run` writes, and it matches `effect_kind="estimate"`.
+- `prediction_loss`: mean masked predictor MSE. This is what `interpretableintelligence run` writes, and it matches `effect_kind="estimate"`.
 - `action_loglik`: mean log-likelihood of the action the policy took. Use this when success is not differentiable.
 - `activation`: no backward. The score is the sum of `|activation|`, a magnitude baseline.
 
-`physint rank --objective` selects which one. A scored run's metadata is `prediction_loss`. The file is a shortlist, not a confirmation.
+`interpretableintelligence rank --objective` selects which one. A scored run's metadata is `prediction_loss`. The file is a shortlist, not a confirmation.
 
 ## features/candidates.json
 
@@ -162,7 +162,7 @@ The ranking of those scores and the shortlist expensive ablations should run on.
 }
 ```
 
-`ranked` lists every feature once, ordered by descending `|mean score over clips|`. `candidates` is the first `prefilter_k` feature ids. `shortlist_only` is true: every candidate still has to be confirmed by a real ablation before it can count as causal. `seconds.ablation` and `seconds.random_controls` are null when `physint rank` did not ablate. A feature outside a `--prefilter` shortlist has `ablation_effect: null`, `random_percentile: null`, and `n_random: 0` in the scoreboard; `real` is then false.
+`ranked` lists every feature once, ordered by descending `|mean score over clips|`. `candidates` is the first `prefilter_k` feature ids. `shortlist_only` is true: every candidate still has to be confirmed by a real ablation before it can count as causal. `seconds.ablation` and `seconds.random_controls` are null when `interpretableintelligence rank` did not ablate. A feature outside a `--prefilter` shortlist has `ablation_effect: null`, `random_percentile: null`, and `n_random: 0` in the scoreboard; `real` is then false.
 
 ## features/features.jsonl
 
@@ -237,7 +237,7 @@ One record per run. No extra keys.
 
 ### Feature block
 
-`ablation_effect` is the mean cosine distance between the original predictor output and the output after the feature is zeroed, over held-out masked tokens. Masked rows come from `predict_masked` in row-major `(t, h, w)` order of the adapter mask. Cosine distance is `1 - cos`. A zero vector against a nonzero vector counts as distance 1; two zero vectors count as 0. It is `null` when `physint run --prefilter` did not ablate that feature. `random_percentile` is `null` in that case and `n_random` is 0. `null` is not a pass.
+`ablation_effect` is the mean cosine distance between the original predictor output and the output after the feature is zeroed, over held-out masked tokens. Masked rows come from `predict_masked` in row-major `(t, h, w)` order of the adapter mask. Cosine distance is `1 - cos`. A zero vector against a nonzero vector counts as distance 1; two zero vectors count as 0. It is `null` when `interpretableintelligence run --prefilter` did not ablate that feature. `random_percentile` is `null` in that case and `n_random` is 0. `null` is not a pass.
 
 `random_percentile` compares that effect to `n_random` (≥ 100) random features matched on held-out firing count and on `(decoder L2 norm × mean firing activation)`. Each control uses a random unit direction scaled to the same decoder norm, the same multiset of activation values, and a random subset of held-out tokens of the same size. The percentile is the percentage of control effects that are `<=` the feature's effect (ties do not count as a win for the control).
 
@@ -260,7 +260,7 @@ One record per run. No extra keys.
 
 ## rollouts/ (version 1)
 
-`physint rollouts` measures whether an intervention on SAE latents changes task success. It writes two files:
+`interpretableintelligence rollouts` measures whether an intervention on SAE latents changes task success. It writes two files:
 
 ```
 rollouts/episodes.parquet
@@ -303,4 +303,4 @@ For each candidate and each control the summary stores the paired success rates 
 - `p_value <= alpha`
 - `control_percentile >= 95`
 
-Null does not pass. `validated_feature_ids` lists the feature ids with `causal: true`. These thresholds live next to the scoreboard gates in `src/physint/thresholds.py` and are not the `real` rule: a rollout never rewrites `scoreboard.json`.
+Null does not pass. `validated_feature_ids` lists the feature ids with `causal: true`. These thresholds live next to the scoreboard gates in `src/interpretableintelligence/thresholds.py` and are not the `real` rule: a rollout never rewrites `scoreboard.json`.

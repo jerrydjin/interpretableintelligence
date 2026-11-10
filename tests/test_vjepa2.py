@@ -15,13 +15,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from physint.adapters.base import Clip
-from physint.adapters.vjepa2 import WEIGHT_ALLOW_PATTERNS, VJEPA2Adapter, fetch_checkpoint, generate_tiny_clips
-from physint.clips import VJEPA_SHORT_EDGE, decode_video, load_clips
-from physint.device import ensure_mps_fallback
-from physint.sae import SAE
-from physint.score import estimate_effects, mean_predictor_loss, mean_visible_baseline_loss
-from physint.stats import loss_recovered
+from interpretableintelligence.adapters.base import Clip
+from interpretableintelligence.adapters.vjepa2 import WEIGHT_ALLOW_PATTERNS, VJEPA2Adapter, fetch_checkpoint, generate_tiny_clips
+from interpretableintelligence.clips import VJEPA_SHORT_EDGE, decode_video, load_clips
+from interpretableintelligence.device import ensure_mps_fallback
+from interpretableintelligence.sae import SAE
+from interpretableintelligence.score import estimate_effects, mean_predictor_loss, mean_visible_baseline_loss
+from interpretableintelligence.stats import loss_recovered
 
 CPU = torch.device("cpu")
 
@@ -310,7 +310,7 @@ def test_tiny_run_on_synthetic_mp4_clips(tmp_path: Path):
     """
     from typer.testing import CliRunner
 
-    from physint.cli import app
+    from interpretableintelligence.cli import app
 
     clips_dir = tmp_path / "clips"
     clips_dir.mkdir()

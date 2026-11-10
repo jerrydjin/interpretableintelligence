@@ -1,4 +1,4 @@
-//! Read API for physint run folders.
+//! Read API for interpretableintelligence run folders.
 //!
 //! Parquet is queried through DuckDB. JSON files (manifest, scoreboard,
 //! features.jsonl) are read directly. POST /explain is proxied to Python.

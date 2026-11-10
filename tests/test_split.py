@@ -1,4 +1,4 @@
-from physint.split import assign_split, split_sha
+from interpretableintelligence.split import assign_split, split_sha
 
 
 def test_holdout_is_by_clip_and_hashed():

@@ -13,14 +13,14 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from physint.cli import app
-from physint.policies import get_policy
-from physint.policies.base import Intervention
-from physint.policies.fake import PLANTED_FEATURE_ID, TASK_ID, FakePolicyEnv
-from physint.policies.robots import RobotPolicyStub
-from physint.artifacts import read_rollout_episodes, write_rollout_episodes
-from physint.rollout import declared_stop
-from physint.rollout_stats import (
+from interpretableintelligence.cli import app
+from interpretableintelligence.policies import get_policy
+from interpretableintelligence.policies.base import Intervention
+from interpretableintelligence.policies.fake import PLANTED_FEATURE_ID, TASK_ID, FakePolicyEnv
+from interpretableintelligence.policies.robots import RobotPolicyStub
+from interpretableintelligence.artifacts import read_rollout_episodes, write_rollout_episodes
+from interpretableintelligence.rollout import declared_stop
+from interpretableintelligence.rollout_stats import (
     control_percentile,
     discordant_counts,
     feature_is_causal,
@@ -31,7 +31,7 @@ from physint.rollout_stats import (
     sprt_threshold,
     wilson_interval,
 )
-from physint.thresholds import SPRT_FAMILY_POWER, SPRT_LAMBDA
+from interpretableintelligence.thresholds import SPRT_FAMILY_POWER, SPRT_LAMBDA
 
 # Wilson early stop measured 184 on seed 0 and reused alpha at every look.
 # The two-sided SPRT measured 264. The efficacy SPRT needs 14 discordant

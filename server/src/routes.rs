@@ -18,9 +18,9 @@ use crate::error::ApiError;
 use crate::model::{self, RunContext};
 use crate::AppState;
 
-static STATIC_FILES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../src/physint/static");
+static STATIC_FILES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../src/interpretableintelligence/static");
 
-const EXPLAIN_UNAVAILABLE: &str = "POST /explain runs in the Python service because it has to load the model. Start `physint serve` and set PHYSINT_EXPLAIN_URL (or pass --explain-url) to that service's base URL.";
+const EXPLAIN_UNAVAILABLE: &str = "POST /explain runs in the Python service because it has to load the model. Start `interpretableintelligence serve` and set II_EXPLAIN_URL (or pass --explain-url) to that service's base URL.";
 
 #[derive(Debug, Deserialize)]
 struct RunQuery {
@@ -460,7 +460,7 @@ mod tests {
         assert!(payload["detail"]["error"]
             .as_str()
             .unwrap()
-            .contains("PHYSINT_EXPLAIN_URL"));
+            .contains("II_EXPLAIN_URL"));
     }
 
     #[tokio::test]

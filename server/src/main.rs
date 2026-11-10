@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use physint_server::{bench, open_state, router};
+use interpretableintelligence_server::{bench, open_state, router};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(
-    name = "physint-server",
+    name = "interpretableintelligence-server",
     version,
-    about = "Read API over a physint run folder"
+    about = "Read API over an interpretableintelligence run folder"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -32,8 +32,8 @@ enum Command {
         /// Use 0 to bind an ephemeral port. The bound URL is printed to stdout.
         #[arg(long, default_value_t = 8080)]
         port: u16,
-        /// Base URL of `physint serve`. When unset, POST /explain returns 501.
-        #[arg(long, env = "PHYSINT_EXPLAIN_URL")]
+        /// Base URL of `interpretableintelligence serve`. When unset, POST /explain returns 501.
+        #[arg(long, env = "II_EXPLAIN_URL")]
         explain_url: Option<String>,
     },
     /// Time frame lookup and top_clips on 1,000,000 synthetic rows.
@@ -115,7 +115,7 @@ fn serve(
                 return ExitCode::from(1);
             }
         };
-        println!("physint-server listening on http://{addr}");
+        println!("interpretableintelligence-server listening on http://{addr}");
         let _ = io::stdout().flush();
         if let Err(err) = axum::serve(listener, app).await {
             eprintln!("error: {err}");

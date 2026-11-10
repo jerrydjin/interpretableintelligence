@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "physint"
+name = "interpretableintelligence"
 version = "0.2.0"
 description = "Mechanistic interpretability for physical AI models: shared run format, scoring core, and causal rollouts."
 readme = "README.md"
@@ -29,7 +29,8 @@ dependencies = [
 robots = []
 
 [project.scripts]
-physint = "physint.cli:app"
+interpretableintelligence = "interpretableintelligence.cli:app"
+ii = "interpretableintelligence.cli:app"
 
 [dependency-groups]
 dev = [

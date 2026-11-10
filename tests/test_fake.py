@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from physint.adapters.base import Clip
-from physint.adapters.fake import FakeAdapter, cue_volume, render_clip
+from interpretableintelligence.adapters.base import Clip
+from interpretableintelligence.adapters.fake import FakeAdapter, cue_volume, render_clip
 
 
 def test_painted_cues_roundtrip():

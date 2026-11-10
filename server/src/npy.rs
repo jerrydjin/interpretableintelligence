@@ -1,6 +1,6 @@
 //! Enough of the NumPy `.npy` header to check rank, length, and that the file is intact.
 //!
-//! This matches `numpy.load(..., allow_pickle=False)` for the arrays physint writes:
+//! This matches `numpy.load(..., allow_pickle=False)` for the arrays interpretableintelligence writes:
 //! a little-endian numeric dtype and a C-order shape.
 
 use std::fs::File;

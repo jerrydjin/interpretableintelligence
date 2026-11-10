@@ -6,8 +6,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from physint.cli import app
-from physint.validate import validate_run
+from interpretableintelligence.cli import app
+from interpretableintelligence.validate import validate_run
 
 CAUSAL = {"stripe", "pulse", "corner"}
 DECOY = {"flicker", "band", "speckle"}

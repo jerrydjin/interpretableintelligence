@@ -11,27 +11,27 @@ import pytest
 
 import torch
 
-from physint.adapters.base import Clip
-from physint.adapters.fake import (
+from interpretableintelligence.adapters.base import Clip
+from interpretableintelligence.adapters.fake import (
     POLICY_LOUD_SCALE,
     POLICY_QUIET_SCALE,
     FakeAdapter,
     render_clip,
 )
-from physint.artifacts import read_attribution_objective, write_attribution, write_feature_acts, write_json
-from physint.attribute import (
+from interpretableintelligence.artifacts import read_attribution_objective, write_attribution, write_feature_acts, write_json
+from interpretableintelligence.attribute import (
     attribution_by_clip,
     compare_run,
     format_report,
     rank_feature_ids,
     summarize_attribution,
 )
-from physint.sae import SAE
-from physint.score import ablate_edit
+from interpretableintelligence.sae import SAE
+from interpretableintelligence.score import ablate_edit
 from typer.testing import CliRunner
 
-from physint.cli import app
-from physint.validate import validate_run
+from interpretableintelligence.cli import app
+from interpretableintelligence.validate import validate_run
 
 runner = CliRunner()
 

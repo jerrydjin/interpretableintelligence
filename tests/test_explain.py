@@ -10,10 +10,10 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from physint.adapters.fake import render_clip, render_cues
-from physint.api import create_app
-from physint.cli import app
-from physint.explain import SAEUnusable, cites_feature, explain_clip
+from interpretableintelligence.adapters.fake import render_clip, render_cues
+from interpretableintelligence.api import create_app
+from interpretableintelligence.cli import app
+from interpretableintelligence.explain import SAEUnusable, cites_feature, explain_clip
 
 
 def _client(runs_dir: Path) -> TestClient:

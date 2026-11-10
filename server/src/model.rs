@@ -1,4 +1,4 @@
-//! JSON documents. Field meanings match `physint.view` and `physint.explain`.
+//! JSON documents. Field meanings match `interpretableintelligence.view` and `interpretableintelligence.explain`.
 //! Key order is not significant; the contract test sorts keys.
 
 use std::collections::{BTreeMap, HashMap};

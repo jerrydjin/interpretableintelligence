@@ -17,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from physint.attribute import compare_run, format_report
+from interpretableintelligence.attribute import compare_run, format_report
 
 
 def main(argv: list[str] | None = None) -> int:

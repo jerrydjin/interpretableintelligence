@@ -1,28 +1,28 @@
 # Architecture
 
-This lane is the contract, the scoring core, the V-JEPA 2 adapter, and a local clip viewer. It loads a model only through an adapter. The adapters here are `fake` and `vjepa2`. It does not talk to a database. `physint view` reads a finished run folder only: the manifest, plus clip effects, `features.jsonl`, and the scoreboard when those files are present. Feature acts stay in parquet and are queried per clip and per feature; the file is not loaded into memory. The viewer does not import adapters. mp4 and webm play natively; other containers are transcoded with ffmpeg. Clip files match the manifest `name` (exact filename), then the stem, then sha256. A token `(window, t)` maps to source frame `window_start + t * tubelet * stride`. The patch heatmap is drawn on the centre square of a V-JEPA frame (`side = min(H, W)` from the clip's `hw`), unless `manifest.extra.crop` gives the rectangle. When the manifest has no per-clip starts, `manifest.extra` (`frames`, `stride`, `windows`) places the windows; a clip shorter than `frames * stride` uses stride 1.
+This lane is the contract, the scoring core, the V-JEPA 2 adapter, and a local clip viewer. It loads a model only through an adapter. The adapters here are `fake` and `vjepa2`. It does not talk to a database. `interpretableintelligence view` reads a finished run folder only: the manifest, plus clip effects, `features.jsonl`, and the scoreboard when those files are present. Feature acts stay in parquet and are queried per clip and per feature; the file is not loaded into memory. The viewer does not import adapters. mp4 and webm play natively; other containers are transcoded with ffmpeg. Clip files match the manifest `name` (exact filename), then the stem, then sha256. A token `(window, t)` maps to source frame `window_start + t * tubelet * stride`. The patch heatmap is drawn on the centre square of a V-JEPA frame (`side = min(H, W)` from the clip's `hw`), unless `manifest.extra.crop` gives the rectangle. When the manifest has no per-clip starts, `manifest.extra` (`frames`, `stride`, `windows`) places the windows; a clip shorter than `frames * stride` uses stride 1.
 
 ## Pipeline
 
-`physint run <adapter> --clips DIR --out runs/<run_id> [--gpu-cost-per-hour X]` does one job, then serves the viewer:
+`interpretableintelligence run <adapter> --clips DIR --out runs/<run_id> [--gpu-cost-per-hour X]` does one job, then serves the viewer:
 
 1. **Split** clips with a fixed seed. Holdout is by clip.
 2. **Capture** the instrumented layer through `hook(..., mode="capture")` and write activation shards. Rows are appended to a float32 cache and contract shards are emitted in slices. The full activation matrix is not a tensor.
 3. **Train** a ReLU SAE on train rows only, one batch at a time from that cache.
 4. **Features.** Encode in chunks, write sparse `feature_acts.parquet`, and write a frequency list that scoring replaces.
-5. **Attribute.** One forward and backward per window scores every SAE feature (`activation × ∂objective/∂activation`, summed over tokens and windows) and writes `features/attribution.parquet` plus `features/candidates.json`. The adapter supplies the scalar: `prediction_loss`, or `action_loglik` when success is the log-likelihood of the taken action. `activation` is the magnitude baseline and does not backprop. `physint rank` stops at the shortlist. `physint run --prefilter K` sends only that shortlist to the ablation sweep, and every one of those picks is confirmed by a real ablation.
+5. **Attribute.** One forward and backward per window scores every SAE feature (`activation × ∂objective/∂activation`, summed over tokens and windows) and writes `features/attribution.parquet` plus `features/candidates.json`. The adapter supplies the scalar: `prediction_loss`, or `action_loglik` when success is the log-likelihood of the taken action. `activation` is the magnitude baseline and does not backprop. `interpretableintelligence rank` stops at the shortlist. `interpretableintelligence run --prefilter K` sends only that shortlist to the ablation sweep, and every one of those picks is confirmed by a real ablation.
 6. **Score** (skipped with `--no-score`, or when `scoreboard.json` is already valid). Explained variance, spliced predictor loss, dead features, per-feature ablations, matched random features, and a random-init control. The default ablation is single-feature cosine distance. Without `--prefilter`, every feature is ablated. With `--prefilter K`, held-out ablations and the matched random controls run only for the top K; the others keep a null ablation and cannot be `real`. `--extra-effects loss,group` also writes full-video loss changes for single features and for co-active groups, each against matched controls of the same size and activation mass. The cosine scoreboard is unchanged. The fake adapter uses `fake-cue-v1`, which reads planted cue channels back out of the clip. `LLMLabeller` is a stub and raises rather than calling a network.
 7. **Serve** the folder. `GET /api/run` is the health check. `--no-serve` stops after the report.
 
 `scripts/compare_attribution_vs_ablation.py` reads a run folder that has both the attribution file and measured ablations and prints Spearman correlation and top-K overlap for the attribution, next to the same numbers for an activation-magnitude baseline.
 
-Each stage records wall time, peak RSS, device, and row/token counts on `manifest.stages` and is skipped when its outputs still match the clips, seed, and upstream weights. `physint validate` checks the folder in `SCHEMA.md`, including that `real` follows the four gates. The printed cost per hour of footage is `stage_seconds * gpu_cost_per_hour / video_seconds`.
+Each stage records wall time, peak RSS, device, and row/token counts on `manifest.stages` and is skipped when its outputs still match the clips, seed, and upstream weights. `interpretableintelligence validate` checks the folder in `SCHEMA.md`, including that `real` follows the four gates. The printed cost per hour of footage is `stage_seconds * gpu_cost_per_hour / video_seconds`.
 
-Thresholds are constants in `src/physint/thresholds.py`. Changing them changes the meaning of `real`.
+Thresholds are constants in `src/interpretableintelligence/thresholds.py`. Changing them changes the meaning of `real`.
 
 ## Adapter protocol
 
-`physint.adapters.base.Adapter`:
+`interpretableintelligence.adapters.base.Adapter`:
 
 | method | role |
 | --- | --- |
@@ -48,13 +48,13 @@ The scorer only talks to this surface. It does not know whether the model is a w
 - `load(random_init=True)` applies a fixed token permutation before a random encoder, so cue identity no longer lines up with position. An SAE on that model does not reproduce the planted patterns (`absent_in_random_init`).
 - `plant="group"` is a separate fixture: three co-active features share a `max` readout, so each marginal ablation is small and the joint ablation is not. It uses two windows. `plant="null"` fires features the predictor does not read. Neither fixture is the default acceptance model.
 
-Clips are float32 arrays shaped `[16, 16, 16, 8]` (frames, height, width, channels), one channel per cue plus two distractor channels. `physint generate-clips` writes them. The head adds a bias orthogonal to the cue subspace so cosine distance measures a real rotation of the output rather than a collapse to zero.
+Clips are float32 arrays shaped `[16, 16, 16, 8]` (frames, height, width, channels), one channel per cue plus two distractor channels. `interpretableintelligence generate-clips` writes them. The head adds a bias orthogonal to the cue subspace so cosine distance measures a real rotation of the output rather than a collapse to zero.
 
 The reference run (`--layer 16 --seed 0 --heldout-frac 0.2`, 30 clips) is the acceptance test: exactly the three causal labels are `real`, and each decoy fails only the causal percentile while passing diversity, label transfer, and the random-init check.
 
 ## Rollouts
 
-`physint rollouts` asks a different question from the scoreboard: if this SAE feature is edited inside a policy, does task success move? The run folder gains `rollouts/` and `manifest.schema_version` becomes 1. Scoreboard files are not rewritten.
+`interpretableintelligence rollouts` asks a different question from the scoreboard: if this SAE feature is edited inside a policy, does task success move? The run folder gains `rollouts/` and `manifest.schema_version` becomes 1. Scoreboard files are not rewritten.
 
 `PolicyEnv` is `reset`, `act`, `step`, and `intervene`. `act` encodes the instrumented layer, applies the intervention to SAE latents, and decodes before the controller runs. Kinds are `ablate` (set to 0), `scale` (multiply by `value`), and `clamp` (set to `value`).
 
@@ -64,7 +64,7 @@ The schedule is paired on seed. Baseline and candidate features run all `N` epis
 
 ## Next lanes
 
-1. **pi0.5.** V-JEPA 2 is `src/physint/adapters/vjepa2`. The remaining world-model adapter is pi0.5, and the policy stubs for LIBERO / OpenVLA / pi0.5 still need real simulators. They must run on MPS and CPU. They do not change the run folder or the gates.
-2. **Clip-first viewer.** Shipped as `physint view runs/<run_id>`. Video on the left, features that fire on the current frame on the right, activation maps from `feature_acts.parquet`, effects from `clip_effects.parquet` when that file exists. Clip files come from a path on the manifest or from `--clips` (filename stem, then sha256). The patch heatmap is drawn over the video frame. It only reads the contract.
-3. **Hosted ingest.** Upload a run folder into Postgres plus object storage. Shards and weights go to objects; manifest, scoreboard, and feature rows go to tables. Ingest reuses `physint validate` and refuses a folder that fails it.
-4. **Failed-clip API.** `POST /explain` still runs in Python (`physint.explain`): it has to capture the layer and ablate features. `physint explain` and `physint serve` share that module. The read API is `server/` (`physint-server`), which queries the run folder's parquet with DuckDB and matches `physint.api`. An explanation may cite only features with `real: true`, and only effects with `effect_kind: "ablation"`. Estimates rank which features to ablate; they are not evidence. A run whose SAE is not usable is refused. A feature that is not real is labelled `unverified`. Hosting is a proposal in `docs/HOSTING.md`, not a deployment.
+1. **pi0.5.** V-JEPA 2 is `src/interpretableintelligence/adapters/vjepa2`. The remaining world-model adapter is pi0.5, and the policy stubs for LIBERO / OpenVLA / pi0.5 still need real simulators. They must run on MPS and CPU. They do not change the run folder or the gates.
+2. **Clip-first viewer.** Shipped as `interpretableintelligence view runs/<run_id>`. Video on the left, features that fire on the current frame on the right, activation maps from `feature_acts.parquet`, effects from `clip_effects.parquet` when that file exists. Clip files come from a path on the manifest or from `--clips` (filename stem, then sha256). The patch heatmap is drawn over the video frame. It only reads the contract.
+3. **Hosted ingest.** Upload a run folder into Postgres plus object storage. Shards and weights go to objects; manifest, scoreboard, and feature rows go to tables. Ingest reuses `interpretableintelligence validate` and refuses a folder that fails it.
+4. **Failed-clip API.** `POST /explain` still runs in Python (`interpretableintelligence.explain`): it has to capture the layer and ablate features. `interpretableintelligence explain` and `interpretableintelligence serve` share that module. The read API is `server/` (`interpretableintelligence-server`), which queries the run folder's parquet with DuckDB and matches `interpretableintelligence.api`. An explanation may cite only features with `real: true`, and only effects with `effect_kind: "ablation"`. Estimates rank which features to ablate; they are not evidence. A run whose SAE is not usable is refused. A feature that is not real is labelled `unverified`. Hosting is a proposal in `docs/HOSTING.md`, not a deployment.

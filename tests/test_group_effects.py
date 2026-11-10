@@ -12,11 +12,11 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
-from physint.adapters.base import Clip
-from physint.adapters.fake import FakeAdapter, render_clip
-from physint.artifacts import write_clip_effects
-from physint.sae import SAE
-from physint.score import (
+from interpretableintelligence.adapters.base import Clip
+from interpretableintelligence.adapters.fake import FakeAdapter, render_clip
+from interpretableintelligence.artifacts import write_clip_effects
+from interpretableintelligence.sae import SAE
+from interpretableintelligence.score import (
     ablate_edit,
     ablate_features_edit,
     capture_activations,
@@ -27,8 +27,8 @@ from physint.score import (
     random_percentile,
     score_loss_ablation,
 )
-from physint.stats import monte_carlo_pvalue, wilson_interval
-from physint.thresholds import EFFECT_ALPHA, EFFECT_POS_EPS, N_RANDOM_FEATURES, RANDOM_PERCENTILE_MIN
+from interpretableintelligence.stats import monte_carlo_pvalue, wilson_interval
+from interpretableintelligence.thresholds import EFFECT_ALPHA, EFFECT_POS_EPS, N_RANDOM_FEATURES, RANDOM_PERCENTILE_MIN
 
 
 def _clips(n: int) -> list[Clip]:
@@ -209,7 +209,7 @@ def test_group_is_real_singles_miss_and_random_groups_are_not(capsys):
     )
     for key in rows:
         rows[key].extend(single_loss_rows[key])
-    path = Path("/tmp/physint-group-effects.parquet")
+    path = Path("/tmp/interpretableintelligence-group-effects.parquet")
     write_clip_effects(path, rows)
     table = pq.read_table(path)
     kinds = set(table.column("effect_kind").to_pylist())
@@ -242,7 +242,7 @@ def test_group_is_real_singles_miss_and_random_groups_are_not(capsys):
 
 
 def test_run_helper_writes_both_loss_kinds():
-    from physint.run import _extra_effect_rows
+    from interpretableintelligence.run import _extra_effect_rows
 
     adapter, sae, clips, _tokens, features = _prepared("group", n_clips=2)
     ablated = {(clips[0].clip_id, 0), (clips[1].clip_id, 1)}
@@ -253,7 +253,7 @@ def test_run_helper_writes_both_loss_kinds():
 
 
 def test_unknown_extra_effect_is_rejected(tmp_path: Path):
-    from physint.run import execute_run
+    from interpretableintelligence.run import execute_run
 
     with pytest.raises(ValueError, match="extra_effects"):
         execute_run("fake", tmp_path, tmp_path / "out", extra_effects=("nope",))

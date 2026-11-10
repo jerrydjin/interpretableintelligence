@@ -13,8 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from physint.pipeline import REPORT_BEGIN, REPORT_END, footage_cost
-from physint.store import STREAM_CHUNK, ActivationWriter, RowSource
+from interpretableintelligence.pipeline import REPORT_BEGIN, REPORT_END, footage_cost
+from interpretableintelligence.store import STREAM_CHUNK, ActivationWriter, RowSource
 
 
 def test_footage_cost_is_measured_stage_time_over_video_time():
@@ -55,7 +55,7 @@ def test_fake_run_serves_then_skips_every_stage(tmp_path: Path):
     clips = tmp_path / "clips"
     out = tmp_path / "demo"
     generated = subprocess.run(
-        [sys.executable, "-m", "physint", "generate-clips", "--out", str(clips), "--n", "30", "--seed", "0"],
+        [sys.executable, "-m", "interpretableintelligence", "generate-clips", "--out", str(clips), "--n", "30", "--seed", "0"],
         check=False,
         capture_output=True,
         text=True,
@@ -64,7 +64,7 @@ def test_fake_run_serves_then_skips_every_stage(tmp_path: Path):
     command = [
         sys.executable,
         "-m",
-        "physint",
+        "interpretableintelligence",
         "run",
         "fake",
         "--clips",

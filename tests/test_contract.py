@@ -1,7 +1,7 @@
 """The Rust read API returns the same JSON as the Python read API.
 
 Floats may differ by at most 1e-9. Key order is ignored. The fake-run case is a
-fresh ``physint run fake`` folder; a smaller synthetic folder fails faster when
+fresh ``interpretableintelligence run fake`` folder; a smaller synthetic folder fails faster when
 the shapes drift.
 """
 
@@ -22,7 +22,7 @@ import pyarrow.parquet as pq
 import pytest
 import uvicorn
 
-from physint.api import create_app
+from interpretableintelligence.api import create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 FLOAT_TOLERANCE = 1e-9
@@ -118,16 +118,16 @@ class _RustServer:
 
 
 def _server_bin() -> Path:
-    override = os.environ.get("PHYSINT_SERVER")
+    override = os.environ.get("II_SERVER")
     if override:
         return Path(override)
-    debug = ROOT / "target" / "debug" / "physint-server"
-    release = ROOT / "target" / "release" / "physint-server"
+    debug = ROOT / "target" / "debug" / "interpretableintelligence-server"
+    release = ROOT / "target" / "release" / "interpretableintelligence-server"
     if debug.is_file():
         return debug
     if release.is_file():
         return release
-    subprocess.check_call(["cargo", "build", "-p", "physint-server"], cwd=ROOT)
+    subprocess.check_call(["cargo", "build", "-p", "interpretableintelligence-server"], cwd=ROOT)
     return debug
 
 

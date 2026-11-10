@@ -1,16 +1,16 @@
 [package]
-name = "physint-server"
+name = "interpretableintelligence-server"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Read API for a physint run folder. Queries parquet with DuckDB."
+description = "Read API for an interpretableintelligence run folder. Queries parquet with DuckDB."
 
 [[bin]]
-name = "physint-server"
+name = "interpretableintelligence-server"
 path = "src/main.rs"
 
 [lib]
-name = "physint_server"
+name = "interpretableintelligence_server"
 path = "src/lib.rs"
 
 [dependencies]
