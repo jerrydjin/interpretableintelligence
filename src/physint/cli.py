@@ -116,7 +116,7 @@ def rollouts(
         float,
         typer.Option(
             "--alpha",
-            help="Type I level of the control SPRT and of the causal McNemar test.",
+            help="Family-wise type I level of the control SPRT, and the causal McNemar level.",
         ),
     ] = DEFAULT_ROLLOUT_ALPHA,
     min_episodes: Annotated[

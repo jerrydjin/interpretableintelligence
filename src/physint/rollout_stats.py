@@ -1,9 +1,11 @@
 """Paired tests and the control early-stop SPRT.
 
-No scipy. A control stops when a two-sided sequential probability ratio test
-on its discordant pairs separates it from every candidate. The threshold is
-a Ville bound, so repeated looks keep the type I error at ``alpha``. The
-final causal call is still a single McNemar test on the episodes that ran.
+No scipy. A control stops only for efficacy: a one-sided sequential
+probability ratio test on discordant pairs, in the direction where the
+control succeeds and the candidate fails. There is no futility boundary.
+The threshold is the Wald boundary at a Bonferroni share of ``alpha`` and at
+the per-control beta that keeps family-wise power at ``SPRT_FAMILY_POWER``.
+The final causal call is still a single McNemar test on the episodes that ran.
 """
 
 from __future__ import annotations
@@ -11,7 +13,12 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
-from physint.thresholds import CAUSAL_CONTROL_PERCENTILE, CAUSAL_DELTA_MIN, SPRT_LAMBDA
+from physint.thresholds import (
+    CAUSAL_CONTROL_PERCENTILE,
+    CAUSAL_DELTA_MIN,
+    SPRT_FAMILY_POWER,
+    SPRT_LAMBDA,
+)
 
 # Deltas closer than this are the same effect for the percentile.
 _PERCENTILE_TIE_ATOL = 1e-9
@@ -88,16 +95,35 @@ def wilson_interval(successes: int, n: int, alpha: float) -> tuple[float, float]
     return max(0.0, center - margin), min(1.0, center + margin)
 
 
-def sprt_threshold(alpha: float) -> float:
-    """Log likelihood-ratio boundary for a two-sided test at level ``alpha``.
+def family_sprt_error_rates(alpha: float, n_controls: int) -> tuple[float, float]:
+    """Per-control ``(alpha, beta)`` inside a family of ``n_controls``.
 
-    Each one-sided martingale is compared with ``2 / alpha``. Ville's
-    inequality bounds that side by ``alpha / 2``, so the union is at most
-    ``alpha`` at every look, including looks that stop early.
+    Alpha is split by Bonferroni, so the family-wise type I error of stopping
+    a control is at most ``alpha``. Beta solves
+    ``(1 - beta) ** n_controls = SPRT_FAMILY_POWER``, so the probability that
+    every control stops under the design alternative is the family-wise power.
+    For 10 controls that beta is about 0.022.
     """
     if not 0.0 < alpha < 1.0:
         raise ValueError(f"alpha must be in (0, 1), got {alpha}")
-    return math.log(2.0 / alpha)
+    if n_controls < 1:
+        raise ValueError(f"n_controls must be positive, got {n_controls}")
+    alpha_per = alpha / n_controls
+    beta = 1.0 - SPRT_FAMILY_POWER ** (1.0 / n_controls)
+    if not 0.0 < beta < 1.0:
+        raise ValueError(f"per-control beta must be in (0, 1), got {beta}")
+    return alpha_per, beta
+
+
+def sprt_threshold(alpha: float, n_controls: int) -> float:
+    """Log likelihood-ratio boundary for one control, efficacy only.
+
+    ``log((1 - beta) / alpha_per)``. A control crosses it only in the
+    efficacy direction. Paths that never cross run to the episode cap;
+    there is no boundary that accepts the null early.
+    """
+    alpha_per, beta = family_sprt_error_rates(alpha, n_controls)
+    return math.log((1.0 - beta) / alpha_per)
 
 
 def _check_lambda(lam: float) -> None:
@@ -110,15 +136,15 @@ def sprt_log_lr(
     candidate: list[bool],
     lam: float = SPRT_LAMBDA,
 ) -> float:
-    """Path-maximum two-sided log likelihood ratio on discordant pairs.
+    """Path-maximum one-sided log likelihood ratio for efficacy.
 
-    A pair is ``+1`` when the control succeeds and the candidate fails, and
-    ``-1`` the other way. Concordant pairs are skipped. Under the null that
-    the arms are exchangeable, the signs are fair. The alternative for the
-    positive martingale is ``P(sign = +1) = (1 + lam) / 2``; the negative
-    martingale swaps that. The return value is the largest log wealth either
-    martingale reached on this prefix. It starts at 0 when there are no
-    discordant pairs.
+    A discordant pair is ``+1`` when the control succeeds and the candidate
+    fails, and ``-1`` the other way. Concordant pairs are skipped. The
+    alternative is ``P(+1) = (1 + lam) / 2`` against the null ``1/2``. Only
+    the efficacy direction can cross the boundary: a run of ``-1`` pairs
+    drives the likelihood ratio down. The return value is the largest log
+    likelihood ratio reached on this prefix, and it is 0 when the path
+    never rose above its starting value.
     """
     _check_lambda(lam)
     control_flags = [bool(item) for item in control]
@@ -127,21 +153,20 @@ def sprt_log_lr(
         raise ValueError(
             f"sprt lengths differ: control {len(control_flags)} vs candidate {len(cand_flags)}"
         )
-    log_pos = 0.0
-    log_neg = 0.0
+    theta1 = (1.0 + lam) / 2.0
+    log_up = math.log(theta1 / 0.5)
+    log_down = math.log((1.0 - theta1) / 0.5)
+    llr = 0.0
     best = 0.0
-    log_up = math.log(1.0 + lam)
-    log_down = math.log(1.0 - lam)
     for left, right in zip(control_flags, cand_flags, strict=True):
         if left == right:
             continue
         if left and not right:
-            log_pos += log_up
-            log_neg += log_down
+            llr += log_up
         else:
-            log_pos += log_down
-            log_neg += log_up
-        best = max(best, log_pos, log_neg)
+            llr += log_down
+        if llr > best:
+            best = llr
     return best
 
 
@@ -150,16 +175,19 @@ def sprt_separated(
     candidates: list[list[bool]],
     alpha: float,
     lam: float = SPRT_LAMBDA,
+    *,
+    n_controls: int,
 ) -> bool:
-    """True when the control is separated from every candidate at level ``alpha``.
+    """True when efficacy has separated this control from every candidate.
 
-    Separation is ``sprt_log_lr >= sprt_threshold(alpha)``. An empty prefix
-    or an empty candidate list does not separate.
+    Separation is ``sprt_log_lr >= sprt_threshold(alpha, n_controls)``.
+    An empty prefix or an empty candidate list does not separate. The
+    opposite discordant direction never separates a control.
     """
     if not control or not candidates:
         return False
     n = len(control)
-    threshold = sprt_threshold(alpha)
+    threshold = sprt_threshold(alpha, n_controls)
     for candidate in candidates:
         if len(candidate) < n:
             raise ValueError("candidate successes are shorter than the control prefix")
@@ -173,18 +201,20 @@ def binding_sprt(
     candidates: list[list[bool]],
     alpha: float,
     lam: float = SPRT_LAMBDA,
+    *,
+    n_controls: int,
 ) -> tuple[float, float, float]:
-    """Gap and log likelihood ratio against the hardest candidate.
+    """Gap and efficacy log likelihood ratio against the hardest candidate.
 
     The hardest candidate is the one with the smallest path-maximum log
     likelihood ratio. The gap is the control success rate minus that
     candidate's success rate on the shared prefix. The third value is the
-    log threshold ``log(2 / alpha)``.
+    efficacy log threshold.
     """
     if not control or not candidates:
         raise ValueError("binding_sprt needs a control prefix and at least one candidate")
     n = len(control)
-    threshold = sprt_threshold(alpha)
+    threshold = sprt_threshold(alpha, n_controls)
     best_lr: float | None = None
     best_gap = 0.0
     control_rate = sum(bool(item) for item in control) / n

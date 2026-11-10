@@ -19,30 +19,33 @@ from physint.policies.base import Intervention
 from physint.policies.fake import PLANTED_FEATURE_ID, TASK_ID, FakePolicyEnv
 from physint.policies.robots import RobotPolicyStub
 from physint.artifacts import read_rollout_episodes, write_rollout_episodes
-from physint.rollout import execute_rollouts
+from physint.rollout import declared_stop
 from physint.rollout_stats import (
     control_percentile,
+    discordant_counts,
     feature_is_causal,
     mcnemar_exact_pvalue,
+    paired_success_delta_ci,
     sprt_log_lr,
     sprt_separated,
     sprt_threshold,
     wilson_interval,
 )
-from physint.thresholds import SPRT_LAMBDA
+from physint.thresholds import SPRT_FAMILY_POWER, SPRT_LAMBDA
 
-# The Wilson stop reused alpha at every look and measured 184 on seed 0.
-# That figure is not a valid early-stop result. The SPRT (lambda 0.6) stops
-# the ten controls at 20 episodes: 32 baseline + 32 candidate + 10 * 20 = 264.
+# Wilson early stop measured 184 on seed 0 and reused alpha at every look.
+# The two-sided SPRT measured 264. The efficacy SPRT needs 14 discordant
+# pairs; on seed 0 the last interim look (28) has 12, so this budget is full.
 WILSON_ROLLOUTS_PER_VALIDATED_FEATURE = 184
-SPRT_ROLLOUTS_PER_VALIDATED_FEATURE = 264
-# Budget for one validated feature. The fixed design without stopping is 12*N
-# and the feature-arm budget 11*N is 352, so 320 is still under that.
-STATED_MAX_ROLLOUTS_PER_VALIDATED_FEATURE = 320
+TWO_SIDED_SPRT_ROLLOUTS_PER_VALIDATED_FEATURE = 264
+EFFICACY_ROLLOUTS_PER_VALIDATED_FEATURE = 384
 DONE_EPISODES = 32
 DONE_CONTROLS = 10
-NULL_FEATURE_ARM_TESTS = 200
+NULL_SIMS = 2000
 NULL_ALPHA = 0.05
+# Andrej's power sim: 50% base, 20-point drop, about 68 episodes and ~744 total.
+POWER_TARGET_EPISODES = 68.0
+POWER_TARGET_TOTAL = 744.0
 
 runner = CliRunner()
 
@@ -124,42 +127,23 @@ def test_control_percentile_splits_ties():
     assert control_percentile(0.0, [1e-12, -1e-12]) == 50.0
 
 
-def test_sprt_crosses_only_after_enough_one_sided_pairs():
+def test_sprt_stops_only_for_efficacy():
     alpha = 0.05
-    threshold = sprt_threshold(alpha)
-    assert threshold == pytest.approx(math.log(2.0 / alpha))
-    control = [True] * 8
-    candidate = [False] * 8
-    assert sprt_log_lr(control[:7], candidate[:7], SPRT_LAMBDA) < threshold
-    assert sprt_log_lr(control, candidate, SPRT_LAMBDA) >= threshold
-    assert sprt_separated(control, [candidate], alpha, SPRT_LAMBDA) is True
-    assert sprt_separated([True] * 20, [[True] * 20], alpha, SPRT_LAMBDA) is False
-    mixed_control = [True, False] * 10
-    mixed_candidate = [False, True] * 10
-    assert sprt_separated(mixed_control, [mixed_candidate], alpha, SPRT_LAMBDA) is False
-    assert sprt_separated([], [[]], alpha, SPRT_LAMBDA) is False
-
-
-def test_sprt_type_i_error_stays_at_alpha():
-    """Exchangeable pairs, looked at on the same grid the runner uses.
-
-    The Wilson upper bound on the stop rate has to sit at or below alpha.
-    """
-    rng = np.random.default_rng(0)
-    alpha = 0.05
-    n = DONE_EPISODES
-    ends = [8, 12, 16, 20, 24, 28]
-    reps = 2000
-    hits = 0
-    for _ in range(reps):
-        control = (rng.random(n) < 0.5).tolist()
-        candidate = (rng.random(n) < 0.5).tolist()
-        for end in ends:
-            if sprt_separated(control[:end], [candidate[:end]], alpha, SPRT_LAMBDA):
-                hits += 1
-                break
-    _low, high = wilson_interval(hits, reps, alpha)
-    assert high <= alpha, f"sprt stops {hits}/{reps}, wilson upper {high:.4f}"
+    n_controls = DONE_CONTROLS
+    beta = 1.0 - SPRT_FAMILY_POWER ** (1.0 / n_controls)
+    threshold = sprt_threshold(alpha, n_controls)
+    assert beta == pytest.approx(0.022, abs=0.001)
+    assert threshold == pytest.approx(math.log((1.0 - beta) / (alpha / n_controls)))
+    # 13 pure efficacy pairs sit just under the boundary; 14 cross it.
+    efficacy = [True] * 14
+    ablated = [False] * 14
+    assert sprt_log_lr(efficacy[:13], ablated[:13], SPRT_LAMBDA) < threshold
+    assert sprt_log_lr(efficacy, ablated, SPRT_LAMBDA) >= threshold
+    assert sprt_separated(efficacy, [ablated], alpha, n_controls=n_controls) is True
+    # The opposite direction is not efficacy, however long it runs.
+    assert sprt_separated([False] * 200, [[True] * 200], alpha, n_controls=n_controls) is False
+    assert sprt_separated([True] * 40, [[True] * 40], alpha, n_controls=n_controls) is False
+    assert sprt_separated([], [[]], alpha, n_controls=n_controls) is False
 
 
 def test_robot_policies_are_stubs():
@@ -217,33 +201,33 @@ def test_done_check_planted_is_causal_and_rerun_is_idempotent(tmp_path: Path):
     assert planted["episodes_run"] == DONE_EPISODES
     assert len(controls) == DONE_CONTROLS
     assert all(feature["causal"] is False for feature in controls)
-    assert all(feature["stopped_early"] is True for feature in controls)
-    assert all(feature["reason"] == "sprt_separated" for feature in controls)
-    assert all(feature["episodes_run"] == 20 for feature in controls)
+    assert all(feature["stopped_early"] is False for feature in controls)
+    assert all(feature["reason"] == "fixed_budget" for feature in controls)
+    assert all(feature["episodes_run"] == DONE_EPISODES for feature in controls)
     assert all(feature["delta"] == 0.0 for feature in controls)
     assert all(feature["control_percentile"] == 50.0 for feature in controls)
 
     control_conditions = [item for item in summary["conditions"] if item["role"] == "control"]
     assert len(control_conditions) == DONE_CONTROLS
+    threshold = sprt_threshold(0.05, DONE_CONTROLS)
     for condition in control_conditions:
-        assert condition["reason"] == "sprt_separated"
-        assert condition["sprt_log_lr"] >= condition["sprt_threshold"]
-        assert condition["sprt_threshold"] == pytest.approx(math.log(2.0 / 0.05))
+        assert condition["reason"] == "fixed_budget"
+        assert condition["stopped_early"] is False
+        assert condition["sprt_threshold"] == pytest.approx(threshold)
     assert summary["gap_bound"] == "sprt_discordant"
     assert summary["sprt_lambda"] == SPRT_LAMBDA
 
     total = summary["total_episodes"]
     naive = (1 + DONE_CONTROLS) * DONE_EPISODES
-    # 32 baseline + 32 candidate + 10 controls x 20 episodes. 11*N is 352.
-    assert total == SPRT_ROLLOUTS_PER_VALIDATED_FEATURE, (
-        f"got {total}; the Wilson stop on this seed measured {WILSON_ROLLOUTS_PER_VALIDATED_FEATURE}"
+    assert total == EFFICACY_ROLLOUTS_PER_VALIDATED_FEATURE, (
+        f"got {total}; Wilson measured {WILSON_ROLLOUTS_PER_VALIDATED_FEATURE}, "
+        f"two-sided SPRT measured {TWO_SIDED_SPRT_ROLLOUTS_PER_VALIDATED_FEATURE}"
     )
-    assert total == summary["fixed_budget_episodes"] - summary["episodes_saved"]
-    assert total < naive
-    assert total <= STATED_MAX_ROLLOUTS_PER_VALIDATED_FEATURE
+    assert total == summary["fixed_budget_episodes"]
+    assert summary["episodes_saved"] == 0
     assert summary["validated_feature_ids"] == [PLANTED_FEATURE_ID]
     assert summary["rollouts_per_validated_feature"] == pytest.approx(total)
-    assert summary["rollouts_per_validated_feature"] <= STATED_MAX_ROLLOUTS_PER_VALIDATED_FEATURE
+    assert f"feature_arms_x_N={naive}" in first.output
     assert "rollouts_per_validated_feature=" in first.output
     assert f"total_episodes={total}" in first.output
     assert f"feature_arms_x_N={naive}" in first.output
@@ -361,41 +345,106 @@ def test_null_policy_is_exchangeable_and_not_identical():
     assert np.array_equal(_successes(None, 50), _successes(0, 50))
 
 
-def _null_feature_arm(root: Path, index: int) -> bool:
-    """One candidate-arm test with the planted effect off. Returns whether it was flagged."""
-    summary = execute_rollouts(
-        root / f"null-{index}",
-        policy="fake-null",
-        features=[0],
-        episodes=DONE_EPISODES,
-        controls=DONE_CONTROLS,
-        workers=1,
-        seed=index * DONE_EPISODES,
+def _stop_length(control: list[bool], candidate: list[bool], *, episodes: int, min_episodes: int, batch_size: int) -> int:
+    length, _reason = declared_stop(
+        control,
+        [candidate],
+        episodes=episodes,
+        min_episodes=min_episodes,
+        batch_size=batch_size,
         alpha=NULL_ALPHA,
-        min_episodes=8,
-        batch_size=4,
+        n_controls=DONE_CONTROLS,
     )
-    candidates = [feature for feature in summary["features"] if feature["role"] == "candidate"]
-    if len(candidates) != 1 or summary["policy"] != "fake-null":
-        raise RuntimeError(f"null arm {index} did not test one fake-null candidate")
-    return bool(candidates[0]["causal"])
+    return length
 
 
-def test_null_false_flag_rate_stays_within_alpha(tmp_path: Path):
-    """Plant nothing. The Wilson upper bound on the causal-flag rate is at most alpha.
+def _flagged(baseline: list[bool], candidate: list[bool], controls: list[list[bool]]) -> bool:
+    """Causal gate after efficacy stopping, matching ``summarize``."""
+    stopped = [
+        control[: _stop_length(control, candidate, episodes=len(candidate), min_episodes=8, batch_size=4)]
+        for control in controls
+    ]
+    delta, _low, _high = paired_success_delta_ci(baseline, candidate, NULL_ALPHA)
+    n10, n01 = discordant_counts(baseline, candidate)
+    p_value = mcnemar_exact_pvalue(n10, n01)
+    control_deltas = []
+    for flags in stopped:
+        control_delta, _lo, _hi = paired_success_delta_ci(baseline[: len(flags)], flags, NULL_ALPHA)
+        control_deltas.append(control_delta)
+    return feature_is_causal(
+        delta=delta,
+        p_value=p_value,
+        control_percentile=control_percentile(delta, control_deltas),
+        alpha=NULL_ALPHA,
+    )
 
-    Two hundred candidate arms, each with the same N, K, and alpha as the
-    planted done-check. Episode seeds do not overlap across arms.
+
+def test_power_sim_twenty_point_drop_stops_near_68():
+    """50% base success, switching the feature off drops 20 points.
+
+    Paired seeds share one uniform draw: the control succeeds when it is
+    below 0.50 and the candidate when it is below 0.30, so every discordant
+    pair is efficacy. Ten controls see that same base outcome. The candidate
+    is run for the same length. Andrej's target is about 68 episodes per
+    condition and about 744 total.
     """
-    flags = [_null_feature_arm(tmp_path, index) for index in range(NULL_FEATURE_ARM_TESTS)]
-    n_tests = len(flags)
-    n_flag = sum(bool(item) for item in flags)
-    assert n_tests >= 200
-    low, high = wilson_interval(n_flag, n_tests, NULL_ALPHA)
-    rate = n_flag / n_tests
+    rng = np.random.default_rng(0)
+    cap = 500
+    reps = 2000
+    stops = np.empty(reps)
+    for i in range(reps):
+        draw = rng.random(cap)
+        candidate = (draw < 0.30).tolist()
+        control = (draw < 0.50).tolist()
+        stops[i] = _stop_length(control, candidate, episodes=cap, min_episodes=1, batch_size=1)
+    mean_episodes = float(stops.mean())
+    # One candidate plus ten identical controls.
+    total = (1 + DONE_CONTROLS) * mean_episodes
     message = (
-        f"false-flag rate {n_flag}/{n_tests}={rate:.4f} "
-        f"wilson95=[{low:.4f},{high:.4f}] alpha={NULL_ALPHA}"
+        f"mean_episodes_per_condition={mean_episodes:.2f} "
+        f"(target {POWER_TARGET_EPISODES:.0f}) total={total:.1f} "
+        f"(target {POWER_TARGET_TOTAL:.0f}) capped={(stops == cap).mean():.3f}"
     )
     print(message)
-    assert high <= NULL_ALPHA, message
+    # Measured on this boundary: about 71 episodes and about 778 total,
+    # next to Andrej's 68 and 744.
+    assert mean_episodes == pytest.approx(70.8, abs=2.0), message
+    assert total == pytest.approx(11 * 70.8, abs=22.0), message
+    assert float((stops == cap).mean()) < 0.01
+
+
+def test_null_false_flag_rate_stays_within_alpha():
+    """Nothing planted. Exact arms never flag; noisy arms stay within alpha.
+
+    Two thousand sims of one candidate and ten controls. The Wilson upper
+    bound on each false-flag rate has to sit at or below alpha.
+    """
+    rng = np.random.default_rng(0)
+    n = DONE_EPISODES
+    exact_flags = 0
+    for _ in range(NULL_SIMS):
+        bits = (rng.random(n) < 0.5).tolist()
+        controls = [list(bits) for _control in range(DONE_CONTROLS)]
+        exact_flags += _flagged(bits, list(bits), controls)
+    exact_low, exact_high = wilson_interval(exact_flags, NULL_SIMS, NULL_ALPHA)
+    noisy_flags = 0
+    for _ in range(NULL_SIMS):
+        baseline = (rng.random(n) < 0.5).tolist()
+        candidate = (rng.random(n) < 0.5).tolist()
+        controls = [(rng.random(n) < 0.5).tolist() for _control in range(DONE_CONTROLS)]
+        noisy_flags += _flagged(baseline, candidate, controls)
+    noisy_low, noisy_high = wilson_interval(noisy_flags, NULL_SIMS, NULL_ALPHA)
+    exact_message = (
+        f"exact null {exact_flags}/{NULL_SIMS}={exact_flags / NULL_SIMS:.4f} "
+        f"wilson95=[{exact_low:.4f},{exact_high:.4f}]"
+    )
+    noisy_message = (
+        f"noisy controls {noisy_flags}/{NULL_SIMS}={noisy_flags / NULL_SIMS:.4f} "
+        f"wilson95=[{noisy_low:.4f},{noisy_high:.4f}] alpha={NULL_ALPHA}"
+    )
+    print(exact_message)
+    print(noisy_message)
+    assert NULL_SIMS >= 2000
+    assert exact_flags == 0, exact_message
+    assert exact_high <= NULL_ALPHA
+    assert noisy_high <= NULL_ALPHA, noisy_message
