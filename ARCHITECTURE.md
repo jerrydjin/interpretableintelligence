@@ -1,6 +1,6 @@
 # Architecture
 
-This lane is the contract and the scoring core. It does not load V-JEPA 2 or pi0.5, it does not open a viewer, and it does not talk to a database.
+This lane is the contract, the scoring core, and a local clip viewer. It does not load V-JEPA 2 or pi0.5, and it does not talk to a database. `physint view` reads a finished run folder only: the manifest, plus clip effects, `features.jsonl`, and the scoreboard when those files are present. Feature acts stay in parquet and are queried per clip and per feature; the file is not loaded into memory. It does not import adapters. mp4 and webm play natively; other containers are transcoded with ffmpeg. Clip files match the manifest `name` (exact filename), then the stem, then sha256. A token `(window, t)` maps to source frame `window_start + t * tubelet * stride`. The patch heatmap is drawn on the centre square of a V-JEPA frame (`side = min(H, W)` from the clip's `hw`), unless `manifest.extra.crop` gives the rectangle. When the manifest has no per-clip starts, `manifest.extra` (`frames`, `stride`, `windows`) places the windows; a clip shorter than `frames * stride` uses stride 1.
 
 ## Pipeline
 
@@ -46,6 +46,6 @@ The reference run (`--layer 16 --seed 0 --heldout-frac 0.2`, 30 clips) is the ac
 ## Next lanes
 
 1. **Real adapters.** Implement the protocol for V-JEPA 2 and pi0.5. They must run on MPS and CPU. They replace `fake`; they do not change the run folder or the gates.
-2. **Clip-first viewer.** A local web UI that opens a run folder: video on the left, the feature list from `features.jsonl` and `scoreboard.json` on the right, activation maps from `feature_acts.parquet`. It only reads the contract.
+2. **Clip-first viewer.** Shipped as `physint view runs/<run_id>`. Video on the left, features that fire on the current frame on the right, activation maps from `feature_acts.parquet`, effects from `clip_effects.parquet` when that file exists. Clip files come from a path on the manifest or from `--clips` (filename stem, then sha256). The patch heatmap is drawn over the video frame. It only reads the contract.
 3. **Hosted ingest.** Upload a run folder into Postgres plus object storage. Shards and weights go to objects; manifest, scoreboard, and feature rows go to tables. Ingest reuses `physint validate` and refuses a folder that fails it.
 4. **Failed-clip API.** Implemented locally in `physint.explain`. `physint explain --run runs/<run_id> --clip <path>` and `physint serve` (`POST /explain`, `GET /runs`, `GET /features/{id}`) share that module. The response cites only features with `real: true`, and only effects with `effect_kind: "ablation"`. Estimates rank which features to ablate; they are not evidence. A run whose SAE is not usable is refused. Hosting is a proposal in `docs/HOSTING.md`, not a deployment.
