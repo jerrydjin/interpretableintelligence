@@ -168,7 +168,8 @@ class FakeAdapter:
 
     name = "fake"
 
-    def __init__(self, layer: int, device: torch.device | None = None) -> None:
+    def __init__(self, layer: int, device: torch.device | None = None, *, tiny: bool = False) -> None:
+        del tiny
         if layer < 0:
             raise ValueError(f"layer must be >= 0, got {layer}")
         self.layer = int(layer)
@@ -238,6 +239,18 @@ class FakeAdapter:
         h = torch.arange(GRID.h, device=self.device)
         w = torch.arange(GRID.w, device=self.device)
         return (t[:, None, None] + h[None, :, None] + w[None, None, :]) % 2 == 0
+
+    def visible_mean_baseline(self, clip: Clip, window: Window) -> torch.Tensor:
+        """Mean of the unmasked target vectors, repeated on the masked cells."""
+        del clip
+        self._ensure_loaded()
+        target = self._target(window)
+        keep = self.mask(window)
+        visible = target[~keep]
+        if visible.shape[0] == 0:
+            raise RuntimeError("mask leaves no visible patches")
+        mean = visible.mean(dim=0)
+        return mean.expand_as(target[keep]).clone()
 
     @contextmanager
     def hook(self, layer: int, mode: str = "capture", fn=None):

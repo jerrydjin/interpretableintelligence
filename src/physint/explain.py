@@ -442,13 +442,21 @@ def _refuse_if_unusable(ctx: RunContext) -> None:
             layer=ctx.layer,
         )
     recovered = sae.get("loss_recovered")
-    recovered_ok = isinstance(recovered, (int, float)) and not isinstance(recovered, bool) and is_usable(float(recovered))
-    if sae.get("usable") is True and recovered_ok:
+    loss_sae = sae.get("loss_sae")
+    loss_visible_mean = sae.get("loss_visible_mean")
+    numbers_ok = all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in (recovered, loss_sae, loss_visible_mean)
+    )
+    floor_ok = numbers_ok and is_usable(float(recovered), float(loss_sae), float(loss_visible_mean))
+    if sae.get("usable") is True and floor_ok:
         return
     raise SAEUnusable(
         f"refusing to explain: the SAE for run {ctx.run_id} is not usable "
-        f"(usable={sae.get('usable')!r}, loss_recovered={recovered!r}; "
-        f"need usable true and loss_recovered >= {USABLE_LOSS_RECOVERED:.2f}). "
+        f"(usable={sae.get('usable')!r}, loss_recovered={recovered!r}, "
+        f"loss_sae={loss_sae!r}, loss_visible_mean={loss_visible_mean!r}; "
+        f"need usable true, loss_recovered >= {USABLE_LOSS_RECOVERED:.2f}, "
+        "and loss_sae < loss_visible_mean). "
         "No features were cited.",
         run_id=ctx.run_id,
         model_sha=ctx.model_sha,

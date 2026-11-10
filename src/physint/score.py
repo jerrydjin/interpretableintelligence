@@ -153,6 +153,30 @@ def clean_predictions(adapter: Adapter, clips: list[Clip]) -> dict[tuple[str, in
     return out
 
 
+def mean_visible_baseline_loss(adapter: Adapter, clips: list[Clip]) -> float:
+    """MSE of guessing every masked token as the mean of the visible patches.
+
+    Same reduction as ``mean_predictor_loss``: sum of squares over the feature
+    axis, averaged over masked tokens.
+    """
+    sse = 0.0
+    count = 0
+    with torch.no_grad():
+        for clip in clips:
+            for window in adapter.windows(clip):
+                baseline = adapter.visible_mean_baseline(clip, window)
+                _pred, target = adapter.predict_masked(clip, window)
+                if tuple(baseline.shape) != tuple(target.shape):
+                    raise RuntimeError(
+                        f"visible-mean baseline shape {tuple(baseline.shape)} != target {tuple(target.shape)}"
+                    )
+                sse += float(((baseline - target) ** 2).sum())
+                count += int(target.shape[0])
+    if count == 0:
+        raise RuntimeError("no masked tokens to score")
+    return sse / count
+
+
 def mean_predictor_loss(adapter: Adapter, clips: list[Clip], edit=None, zero: bool = False) -> float:
     sse = 0.0
     count = 0

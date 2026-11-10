@@ -32,7 +32,7 @@ _CLIP_KEYS = {"clip_id", "sha256", "fps", "n_frames", "split"}
 _SPLIT_FILE_KEYS = {"seed", "heldout_frac", "train", "heldout", "sha"}
 _SCOREBOARD_KEYS = {"run", "sae", "features"}
 _RUN_KEYS = {"model_sha", "layer", "split_sha", "seed", "n_train_clips", "n_heldout_clips"}
-_SAE_KEYS = {"ev_heldout", "loss_recovered", "dead_frac", "usable"}
+_SAE_KEYS = {"ev_heldout", "loss_recovered", "loss_sae", "loss_visible_mean", "dead_frac", "usable"}
 _FEATURE_KEYS = {
     "id",
     "label",
@@ -213,8 +213,17 @@ def _check_scoreboard_shape(scoreboard: dict, manifest: dict, errors: list[str])
         errors.append("scoreboard.sae.ev_heldout must be a finite number <= 1")
     if not _is_number(sae.get("loss_recovered")):
         errors.append("scoreboard.sae.loss_recovered must be finite")
-    elif not isinstance(sae.get("usable"), bool) or sae["usable"] != is_usable(float(sae["loss_recovered"])):
-        errors.append("scoreboard.sae.usable does not match loss_recovered >= 0.70")
+    elif not _is_number(sae.get("loss_sae")) or not _is_number(sae.get("loss_visible_mean")):
+        errors.append("scoreboard.sae.loss_sae and loss_visible_mean must be finite")
+    elif not isinstance(sae.get("usable"), bool) or sae["usable"] != is_usable(
+        float(sae["loss_recovered"]),
+        float(sae["loss_sae"]),
+        float(sae["loss_visible_mean"]),
+    ):
+        errors.append(
+            "scoreboard.sae.usable must be true only when loss_recovered >= 0.70 "
+            "and loss_sae < loss_visible_mean"
+        )
     if not _is_number(sae.get("dead_frac")) or not 0.0 <= float(sae["dead_frac"]) <= 1.0:
         errors.append("scoreboard.sae.dead_frac must be in [0, 1]")
     if not features:

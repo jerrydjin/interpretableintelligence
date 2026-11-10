@@ -94,6 +94,22 @@ class Adapter(Protocol):
 
     def mask(self, window: Window) -> torch.Tensor: ...
 
+    def raw_activations(self, clip: Clip, window: Window) -> torch.Tensor:
+        """Layer residual before hooks, ``[t, h, w, d_model]``.
+
+        The straight-through feature estimate reads this tensor.
+        """
+        ...
+
+    def visible_mean_baseline(self, clip: Clip, window: Window) -> torch.Tensor:
+        """Masked-token prediction equal to the mean of the visible patches.
+
+        Same shape and token order as ``predict_masked``'s target. The scorer
+        records the loss of this guess and refuses a usable SAE that does not
+        beat it.
+        """
+        ...
+
     def model_sha(self) -> str: ...
 
     @property

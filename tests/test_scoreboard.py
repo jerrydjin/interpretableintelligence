@@ -20,6 +20,7 @@ def test_planted_causal_features_are_real_and_decoys_are_not(demo_run: Path):
     rendered = json.dumps(features, indent=2)
     assert scoreboard["sae"]["usable"] is True
     assert scoreboard["sae"]["loss_recovered"] >= 0.70
+    assert scoreboard["sae"]["loss_sae"] < scoreboard["sae"]["loss_visible_mean"]
 
     real = [feature for feature in features if feature["real"]]
     assert len(real) == 3, rendered
@@ -72,14 +73,27 @@ def test_run_rejects_too_few_clips(tmp_path: Path):
     assert "20" in output
 
 
+def test_validate_rejects_a_usable_flag_that_misses_the_visible_mean_floor(demo_run: Path, tmp_path: Path):
+    copied = tmp_path / "demo"
+    shutil.copytree(demo_run, copied)
+    scoreboard_path = copied / "scoreboard.json"
+    scoreboard = json.loads(scoreboard_path.read_text())
+    scoreboard["sae"]["loss_sae"] = float(scoreboard["sae"]["loss_visible_mean"])
+    scoreboard["sae"]["usable"] = True
+    scoreboard_path.write_text(json.dumps(scoreboard, indent=2) + "\n")
+    errors = validate_run(copied)
+    assert errors
+    assert any("usable" in error for error in errors)
+
+
 def test_unknown_adapter_is_rejected(tmp_path: Path):
     clips = tmp_path / "clips"
     generated = runner.invoke(app, ["generate-clips", "--out", str(clips), "--n", "20", "--seed", "0"])
     assert generated.exit_code == 0, generated.output
     ran = runner.invoke(
         app,
-        ["run", "vjepa2", "--clips", str(clips), "--out", str(tmp_path / "runs" / "nope")],
+        ["run", "pi05", "--clips", str(clips), "--out", str(tmp_path / "runs" / "nope")],
     )
     output = ran.output + (ran.stderr or "")
     assert ran.exit_code != 0
-    assert "fake" in output
+    assert "pi05" in output

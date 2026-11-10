@@ -48,7 +48,7 @@ def generate_clips_cmd(
 
 @app.command()
 def run(
-    adapter: Annotated[str, typer.Argument(help="Adapter name. This lane ships 'fake'.")],
+    adapter: Annotated[str, typer.Argument(help="Adapter name: fake or vjepa2.")],
     clips: Annotated[Path, typer.Option("--clips", exists=True, file_okay=False, help="Clip directory.")],
     out: Annotated[Path, typer.Option("--out", help="Run folder, e.g. runs/demo.")],
     layer: Annotated[int, typer.Option("--layer", min=0, help="Layer to instrument.")] = DEFAULT_LAYER,
@@ -57,6 +57,13 @@ def run(
         float,
         typer.Option("--heldout-frac", help="Fraction of clips held out."),
     ] = DEFAULT_HELDOUT_FRAC,
+    tiny: Annotated[
+        bool,
+        typer.Option(
+            "--tiny",
+            help="V-JEPA 2 CPU smoke path: tiny random config, no weight download. Pass --layer 1.",
+        ),
+    ] = False,
 ) -> None:
     """Capture activations, train an SAE, label features, score them, write a run folder."""
     try:
@@ -67,6 +74,7 @@ def run(
             layer=layer,
             seed=seed,
             heldout_frac=heldout_frac,
+            tiny=tiny,
         )
     except (ValueError, RuntimeError, FileNotFoundError) as exc:
         typer.echo(f"error: {exc}", err=True)
