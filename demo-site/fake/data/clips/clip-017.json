@@ -1,0 +1,957 @@
+{
+ "clip_id": "clip-017",
+ "fps": 8.0,
+ "n_frames": 16,
+ "split": "heldout",
+ "pixels": "ok",
+ "media": "frames",
+ "message": "",
+ "width": 16,
+ "height": 16,
+ "hw": [
+  16.0,
+  16.0
+ ],
+ "crop": null,
+ "window_starts": [
+  0
+ ],
+ "stride": 1,
+ "grid": {
+  "t": 8,
+  "h": 4,
+  "w": 4,
+  "tubelet": 2,
+  "patch_px": 4
+ },
+ "frames": [
+  {
+   "frame": 0,
+   "window": 0,
+   "t": 0,
+   "features": [
+    {
+     "id": 3,
+     "label": "corner",
+     "badge": "real",
+     "status": null,
+     "activation": 0.9680498242378235,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.002555638551712036
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -3.068348451051861e-05
+      }
+     ]
+    },
+    {
+     "id": 11,
+     "label": "flicker",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.3653767704963684,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 0,
+     "label": "pulse",
+     "badge": "real",
+     "status": null,
+     "activation": 0.3572523891925812,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0003578066825866699
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -4.844547675020294e-06
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 1,
+   "window": 0,
+   "t": 0,
+   "features": [
+    {
+     "id": 3,
+     "label": "corner",
+     "badge": "real",
+     "status": null,
+     "activation": 0.9680498242378235,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.002555638551712036
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -3.068348451051861e-05
+      }
+     ]
+    },
+    {
+     "id": 11,
+     "label": "flicker",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.3653767704963684,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 0,
+     "label": "pulse",
+     "badge": "real",
+     "status": null,
+     "activation": 0.3572523891925812,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0003578066825866699
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -4.844547675020294e-06
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 2,
+   "window": 0,
+   "t": 1,
+   "features": [
+    {
+     "id": 10,
+     "label": "speckle",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.38060054183006287,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 0,
+     "label": "pulse",
+     "badge": "real",
+     "status": null,
+     "activation": 0.3113402724266052,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.00027213990688323975
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -3.7806314594490686e-06
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 3,
+   "window": 0,
+   "t": 1,
+   "features": [
+    {
+     "id": 10,
+     "label": "speckle",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.38060054183006287,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 0,
+     "label": "pulse",
+     "badge": "real",
+     "status": null,
+     "activation": 0.3113402724266052,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.00027213990688323975
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -3.7806314594490686e-06
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 4,
+   "window": 0,
+   "t": 2,
+   "features": [
+    {
+     "id": 11,
+     "label": "flicker",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.4225393533706665,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 1.4976702100710781e-09
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "label": "band",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.3691047728061676,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 9,
+     "label": "stripe",
+     "badge": "real",
+     "status": null,
+     "activation": 0.36225828528404236,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0003680214285850525
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -4.592485311150085e-06
+      }
+     ]
+    },
+    {
+     "id": 10,
+     "label": "speckle",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.3138154447078705,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 5,
+   "window": 0,
+   "t": 2,
+   "features": [
+    {
+     "id": 11,
+     "label": "flicker",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.4225393533706665,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 1.4976702100710781e-09
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "label": "band",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.3691047728061676,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 9,
+     "label": "stripe",
+     "badge": "real",
+     "status": null,
+     "activation": 0.36225828528404236,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0003680214285850525
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -4.592485311150085e-06
+      }
+     ]
+    },
+    {
+     "id": 10,
+     "label": "speckle",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.3138154447078705,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 6,
+   "window": 0,
+   "t": 3,
+   "features": [
+    {
+     "id": 9,
+     "label": "stripe",
+     "badge": "real",
+     "status": null,
+     "activation": 0.41643214225769043,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "label": "corner",
+     "badge": "real",
+     "status": null,
+     "activation": 0.31256163120269775,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 7,
+   "window": 0,
+   "t": 3,
+   "features": [
+    {
+     "id": 9,
+     "label": "stripe",
+     "badge": "real",
+     "status": null,
+     "activation": 0.41643214225769043,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "label": "corner",
+     "badge": "real",
+     "status": null,
+     "activation": 0.31256163120269775,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 8,
+   "window": 0,
+   "t": 4,
+   "features": [
+    {
+     "id": 9,
+     "label": "stripe",
+     "badge": "real",
+     "status": null,
+     "activation": 0.9594135880470276,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 10,
+     "label": "speckle",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.429861843585968,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -1.8370152066182754e-09
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "label": "band",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.41668927669525146,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 9,
+   "window": 0,
+   "t": 4,
+   "features": [
+    {
+     "id": 9,
+     "label": "stripe",
+     "badge": "real",
+     "status": null,
+     "activation": 0.9594135880470276,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 10,
+     "label": "speckle",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.429861843585968,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -1.8370152066182754e-09
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "label": "band",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.41668927669525146,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 10,
+   "window": 0,
+   "t": 5,
+   "features": [
+    {
+     "id": 10,
+     "label": "speckle",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.9740232229232788,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -3.319762909015367e-09
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "label": "band",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.31610262393951416,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 11,
+     "label": "flicker",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.300261914730072,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 11,
+   "window": 0,
+   "t": 5,
+   "features": [
+    {
+     "id": 10,
+     "label": "speckle",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.9740232229232788,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -3.319762909015367e-09
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "label": "band",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.31610262393951416,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 11,
+     "label": "flicker",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.300261914730072,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 12,
+   "window": 0,
+   "t": 6,
+   "features": [
+    {
+     "id": 0,
+     "label": "pulse",
+     "badge": "real",
+     "status": null,
+     "activation": 0.9799944162368774,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.002615109086036682
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -2.8411433959263377e-05
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "label": "band",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.9628602266311646,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.1920928955078125e-07
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -8.571555909497874e-09
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "label": "corner",
+     "badge": "real",
+     "status": null,
+     "activation": 0.40893837809562683,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 9,
+     "label": "stripe",
+     "badge": "real",
+     "status": null,
+     "activation": 0.31527993083000183,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 13,
+   "window": 0,
+   "t": 6,
+   "features": [
+    {
+     "id": 0,
+     "label": "pulse",
+     "badge": "real",
+     "status": null,
+     "activation": 0.9799944162368774,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.002615109086036682
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -2.8411433959263377e-05
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "label": "band",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.9628602266311646,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.1920928955078125e-07
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": -8.571555909497874e-09
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "label": "corner",
+     "badge": "real",
+     "status": null,
+     "activation": 0.40893837809562683,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 9,
+     "label": "stripe",
+     "badge": "real",
+     "status": null,
+     "activation": 0.31527993083000183,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 1.4901161193847656e-08
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 14,
+   "window": 0,
+   "t": 7,
+   "features": [
+    {
+     "id": 11,
+     "label": "flicker",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.9713636636734009,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 0,
+     "label": "pulse",
+     "badge": "real",
+     "status": null,
+     "activation": 0.43334734439849854,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "label": "corner",
+     "badge": "real",
+     "status": null,
+     "activation": 0.36406028270721436,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "frame": 15,
+   "window": 0,
+   "t": 7,
+   "features": [
+    {
+     "id": 11,
+     "label": "flicker",
+     "badge": "unverified",
+     "status": null,
+     "activation": 0.9713636636734009,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 0,
+     "label": "pulse",
+     "badge": "real",
+     "status": null,
+     "activation": 0.43334734439849854,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "label": "corner",
+     "badge": "real",
+     "status": null,
+     "activation": 0.36406028270721436,
+     "effects": [
+      {
+       "effect_kind": "ablation",
+       "effect": 0.0
+      },
+      {
+       "effect_kind": "estimate",
+       "effect": 0.0
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -11,6 +11,7 @@ import typer
 from interpretableintelligence import __version__
 from interpretableintelligence.adapters.fake import generate_clips
 from interpretableintelligence.explain import ExplainError, explain_clip
+from interpretableintelligence.export_site import export_site
 from interpretableintelligence.pipeline import execute_pipeline
 from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
 from interpretableintelligence.run import execute_rank
@@ -346,6 +347,27 @@ def rollouts(
         raise typer.Exit(code=1) from exc
     typer.echo(format_report(summary))
     typer.echo(f"wrote {run_dir / 'rollouts'}")
+
+
+@app.command("export-site")
+def export_site_cmd(
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the static site into.")] = Path("demo-site"),
+    vjepa: Annotated[
+        Path,
+        typer.Option("--vjepa", help="V-JEPA slim bundle: scoreboard, clips, viz, random-init."),
+    ] = Path("demo-data/vjepa-slim"),
+    picker: Annotated[
+        Path,
+        typer.Option("--picker", help="Directory with synth_results.json and synth_results_extra.json."),
+    ] = Path("demo-data/picker"),
+) -> None:
+    """Regenerate the static demo site from a fresh fake run and the vendored measurements."""
+    try:
+        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {dest}")
 
 
 @app.command()

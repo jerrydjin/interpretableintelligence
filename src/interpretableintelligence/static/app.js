@@ -8,9 +8,33 @@ const state = {
   timer: null,
   token: 0,
   heatToken: 0,
+  heatPack: null,
+  heatClip: null,
 };
 
 const app = document.getElementById("app");
+
+function iiRoot() {
+  const root = document.documentElement.getAttribute("data-ii-root");
+  return root ? root.replace(/\/$/, "") : "";
+}
+
+function apiUrl(path) {
+  const root = iiRoot();
+  if (!root) return path;
+  if (path === "/api/run") return `${root}/run.json`;
+  let match = path.match(/^\/api\/features\/(\d+)$/);
+  if (match) return `${root}/features/${match[1]}.json`;
+  match = path.match(/^\/api\/features\/(\d+)\/viz$/);
+  if (match) return `${root}/features/${match[1]}.png`;
+  match = path.match(/^\/api\/clips\/([^/]+)$/);
+  if (match) return `${root}/clips/${match[1]}.json`;
+  match = path.match(/^\/api\/clips\/([^/]+)\/frames\/(\d+)\.png$/);
+  if (match) return `${root}/clips/${match[1]}/frames/${match[2]}.png`;
+  match = path.match(/^\/api\/clips\/([^/]+)\/media$/);
+  if (match) return `${root}/clips/${match[1]}/media.mp4`;
+  return path;
+}
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -69,7 +93,7 @@ function badge(feature) {
 
 async function boot() {
   try {
-    const response = await fetch("/api/run", { cache: "no-store" });
+    const response = await fetch(apiUrl("/api/run"), { cache: "no-store" });
     if (!response.ok) throw new Error(`run request failed (${response.status})`);
     state.run = await response.json();
   } catch (error) {
@@ -198,7 +222,7 @@ function renderMoments() {
 
 async function showFeature(id) {
   const token = ++state.token;
-  const response = await fetch(`/api/features/${id}`, { cache: "no-store" });
+  const response = await fetch(apiUrl(`/api/features/${id}`), { cache: "no-store" });
   if (token !== state.token) return;
   if (!response.ok) {
     renderError(`Feature ${id} is not in this run.`);
@@ -225,7 +249,7 @@ function renderFeature(feature) {
   for (const clip of feature.top_clips) {
     const image = el("img", {
       alt: `${clip.clip_id} frame ${clip.frame}`,
-      src: `/api/clips/${encodeURIComponent(clip.clip_id)}/frames/${clip.frame}.png`,
+      src: apiUrl(`/api/clips/${encodeURIComponent(clip.clip_id)}/frames/${clip.frame}.png`),
       "data-testid": "top-thumb-image",
     });
     image.addEventListener("error", () => {
@@ -251,7 +275,7 @@ function renderFeature(feature) {
       el("div", { class: "feature-title" }, [el("h1", {}, displayLabel(feature)), badge(feature)]),
       feature.label_model ? el("p", { class: "label-model" }, feature.label_model) : null,
       feature.viz
-        ? el("img", { class: "viz", alt: "", src: `/api/features/${feature.id}/viz`, "data-testid": "feature-viz" })
+        ? el("img", { class: "viz", alt: "", src: apiUrl(`/api/features/${feature.id}/viz`), "data-testid": "feature-viz" })
         : null,
       feature.scored === false
         ? el("p", { class: "kicker", "data-testid": "scoreboard-missing" }, "No scoreboard record. Shown as unverified.")
@@ -307,7 +331,7 @@ async function showClip(clipId, frame, featureParam) {
   const token = ++state.token;
   const same = Boolean(state.clip && state.clipId === clipId);
   if (!same) {
-    const response = await fetch(`/api/clips/${encodeURIComponent(clipId)}`, { cache: "no-store" });
+    const response = await fetch(apiUrl(`/api/clips/${encodeURIComponent(clipId)}`), { cache: "no-store" });
     if (token !== state.token) return;
     if (!response.ok) {
       renderError(`Clip ${clipId} is not in this run.`);
@@ -502,7 +526,7 @@ function renderFrame(options) {
     image.hidden = true;
     image.removeAttribute("src");
     video.hidden = false;
-    const src = `/api/clips/${encodeURIComponent(clip.clip_id)}/media`;
+    const src = apiUrl(`/api/clips/${encodeURIComponent(clip.clip_id)}/media`);
     if (video.getAttribute("src") !== src) video.src = src;
     if (seek && !state.playing) {
       const fps = clip.fps > 0 ? clip.fps : 8;
@@ -522,7 +546,7 @@ function renderFrame(options) {
       video.hidden = true;
       video.removeAttribute("src");
     }
-    const src = `/api/clips/${encodeURIComponent(clip.clip_id)}/frames/${state.frame}.png`;
+    const src = apiUrl(`/api/clips/${encodeURIComponent(clip.clip_id)}/frames/${state.frame}.png`);
     if (image.getAttribute("src") !== src) image.src = src;
     image.hidden = false;
   } else {
@@ -650,6 +674,15 @@ function placeCrop(clip) {
   if (shade) shade.hidden = covers;
 }
 
+async function heatPack(clipId) {
+  if (state.heatClip === clipId && state.heatPack) return state.heatPack;
+  const response = await fetch(`${iiRoot()}/clips/${encodeURIComponent(clipId)}/heat.json`, { cache: "no-store" });
+  const pack = response.ok ? await response.json() : {};
+  state.heatClip = clipId;
+  state.heatPack = pack;
+  return pack;
+}
+
 async function renderHeat(feature) {
   const grid = document.querySelector("[data-testid=heatmap]");
   if (!grid) return;
@@ -660,6 +693,15 @@ async function renderHeat(feature) {
   else delete grid.dataset.featureId;
   if (!feature) return;
   if (feature.inactive) drawHeat(emptyHeat(state.clip));
+  if (iiRoot()) {
+    const pack = await heatPack(state.clipId);
+    if (token !== state.heatToken) return;
+    const rows = (pack && pack[`${frame}:${feature.id}`]) || emptyHeat(state.clip);
+    drawHeat(rows);
+    const hot = rows.some((row) => row.some((value) => value > 0));
+    if (feature.inactive && hot) paintCaption({ ...feature, inactive: false });
+    return;
+  }
   const response = await fetch(
     `/api/clips/${encodeURIComponent(state.clipId)}/heatmap?frame=${frame}&feature=${feature.id}`,
     { cache: "no-store" },

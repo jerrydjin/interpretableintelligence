@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V-JEPA 2 · interpretableintelligence</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/demo.css">
+  <link rel="icon" href="/favicon.ico">
+</head>
+<body>
+  <header class="top">
+    <div class="brand-row">
+      <a class="wordmark" href="/">interpretableintelligence</a>
+      <nav class="nav"><a href="/fake/">Fake</a><a href="/picker/">Picker</a><a href="/vjepa/" aria-current="page">V-JEPA 2</a><a href="/groot/">GR00T</a></nav>
+    </div>
+  </header>
+  <main class="prose">
+    <h1>V-JEPA 2 on DROID</h1>
+    <p class="meta-line">facebook/vjepa2-vitl-fpc64-256 · layer 16 · run droid100-L16 · SAE usable True · loss_recovered 0.970131560648</p>
+    <p>Opened on held-out <code>droid_ep068.mp4</code> window 0. <code>split.json</code> marks that file <code>heldout</code> and <code>droid_ep067.mp4</code> <code>train</code>.</p>
+    <div class="clip-row">
+      <figure>
+        <div class="stage" style="aspect-ratio: 320 / 180">
+          <video src="media/droid_ep068.mp4" controls playsinline data-testid="ep068"></video>
+        </div>
+        <figcaption>droid_ep068.mp4 · window 0 · source frames 0–30 · Take the lid off the smaller pot</figcaption>
+      </figure>
+      <article class="feature-card" data-testid="feature-270" data-status="failed: random_percentile">
+        <p class="kicker">Feature 270</p>
+        <div class="feature-title"><h2>robot gripper / wrist (end effector and its cable)</h2> <span class="badge badge-status" data-testid="status-270">failed: random_percentile</span></div>
+        <img class="viz" alt="Feature 270 activations" src="viz/feature_00270.png">
+        <dl class="score">
+          <div><dt>random_percentile</dt><dd>40</dd></div>
+          <div><dt>n_random</dt><dd>10</dd></div>
+          <div><dt>ablation_effect</dt><dd>2.15865343142e-05</dd></div>
+          <div><dt>real</dt><dd>False</dd></div>
+        </dl>
+      </article>
+    </div>
+    <p>The other clip in this bundle, <code>droid_ep067.mp4</code>, is the train split above.</p>
+    <div class="stage" style="aspect-ratio: 320 / 180">
+      <video src="media/droid_ep067.mp4" controls playsinline data-testid="ep067"></video>
+    </div>
+    <h2>Ten candidates</h2>
+    <p>Scoreboard threshold for the random-control gate is <code>&gt;=95 vs ~10 matched controls (so must beat all of them)</code>. Candidates at or above 95: 3574 at 100.0. <code>real</code> is true for no feature.</p>
+    <table class="score-table" data-testid="candidates">
+      <thead><tr><th>Feature</th><th>Status</th><th>random_percentile</th><th>real</th></tr></thead>
+      <tbody><tr><td>991</td><td>failed: random_percentile</td><td>20</td><td>False</td></tr><tr><td>3446</td><td>failed: random_percentile</td><td>90</td><td>False</td></tr><tr><td>7476</td><td>failed: random_percentile</td><td>0</td><td>False</td></tr><tr><td>7563</td><td>failed: label_holds_heldout, random_percentile</td><td>70</td><td>False</td></tr><tr><td>3574</td><td>failed: label_holds_heldout</td><td>100</td><td>False</td></tr><tr><td>998</td><td>failed: random_percentile</td><td>30</td><td>False</td></tr><tr><td>3180</td><td>failed: random_percentile</td><td>0</td><td>False</td></tr><tr><td>336</td><td>failed: random_percentile</td><td>0</td><td>False</td></tr><tr><td>224</td><td>failed: random_percentile</td><td>90</td><td>False</td></tr><tr><td>270</td><td>failed: random_percentile</td><td>40</td><td>False</td></tr></tbody>
+    </table>
+    <p>The random-init SAE still fires 6112 features, and <code>random_init/candidates.json</code> still lists 10 candidates. Nothing here is claimed real.</p>
+    </main>
+</body>
+</html>

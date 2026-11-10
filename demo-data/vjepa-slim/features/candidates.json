@@ -1,0 +1,72 @@
+[
+ {
+  "feature_id": 991,
+  "distinct_clips_top20": 19,
+  "freq": 0.000309188473183391,
+  "max_act": 0.05910269543528557,
+  "viz": "runs/droid100-L16/features/viz/feature_00991.png"
+ },
+ {
+  "feature_id": 3446,
+  "distinct_clips_top20": 18,
+  "freq": 0.0006065500648788927,
+  "max_act": 0.2666897773742676,
+  "viz": "runs/droid100-L16/features/viz/feature_03446.png"
+ },
+ {
+  "feature_id": 7476,
+  "distinct_clips_top20": 18,
+  "freq": 0.000505176794982699,
+  "max_act": 0.0780549943447113,
+  "viz": "runs/droid100-L16/features/viz/feature_07476.png"
+ },
+ {
+  "feature_id": 7563,
+  "distinct_clips_top20": 18,
+  "freq": 0.0002720182742214533,
+  "max_act": 0.07620914280414581,
+  "viz": "runs/droid100-L16/features/viz/feature_07563.png"
+ },
+ {
+  "feature_id": 3574,
+  "distinct_clips_top20": 18,
+  "freq": 0.00016557634083044982,
+  "max_act": 0.06819093227386475,
+  "viz": "runs/droid100-L16/features/viz/feature_03574.png"
+ },
+ {
+  "feature_id": 998,
+  "distinct_clips_top20": 20,
+  "freq": 0.02749412035034602,
+  "max_act": 0.49161630868911743,
+  "viz": "runs/droid100-L16/features/viz/feature_00998.png"
+ },
+ {
+  "feature_id": 3180,
+  "distinct_clips_top20": 20,
+  "freq": 0.008420739619377162,
+  "max_act": 0.26117533445358276,
+  "viz": "runs/droid100-L16/features/viz/feature_03180.png"
+ },
+ {
+  "feature_id": 336,
+  "distinct_clips_top20": 19,
+  "freq": 0.014232807093425606,
+  "max_act": 0.5169167518615723,
+  "viz": "runs/droid100-L16/features/viz/feature_00336.png"
+ },
+ {
+  "feature_id": 224,
+  "distinct_clips_top20": 19,
+  "freq": 0.01858509948096886,
+  "max_act": 0.4435563087463379,
+  "viz": "runs/droid100-L16/features/viz/feature_00224.png"
+ },
+ {
+  "feature_id": 270,
+  "distinct_clips_top20": 19,
+  "freq": 0.01826746323529412,
+  "max_act": 0.376789927482605,
+  "viz": "runs/droid100-L16/features/viz/feature_00270.png"
+ }
+]
