@@ -171,9 +171,11 @@ def mean_predictor_loss(adapter: Adapter, clips: list[Clip], edit=None, zero: bo
     return sse / count
 
 
-def estimate_effects(adapter: Adapter, sae: SAE, clip: Clip, window) -> torch.Tensor:
-    """Activation × ∂(mean predictor loss)/∂(feature) at every grid cell.
+def estimate_effects(adapter: Adapter, sae: SAE, clip: Clip, window, objective: str = "prediction_loss") -> torch.Tensor:
+    """Activation × ∂(objective)/∂(feature) at every grid cell.
 
+    ``objective`` is an adapter scalar: ``prediction_loss`` (mean masked MSE)
+    or ``action_loglik`` (mean log-likelihood of the taken action).
     Straight-through: the forward value is the true activation, and the
     gradient flows through the SAE decoder. Returns [t, h, w, n_features].
     """
@@ -188,11 +190,12 @@ def estimate_effects(adapter: Adapter, sae: SAE, clip: Clip, window) -> torch.Te
             recon_det = sae.decode(features.detach()).reshape_as(acts)
             return acts + recon - recon_det
 
-        pred, target = adapter.predict_masked(clip, window, edit=edit)
-        loss = ((pred - target) ** 2).mean()
-        loss.backward()
+        scalar = adapter.attribution_objective(clip, window, objective, edit=edit)
+        if not isinstance(scalar, torch.Tensor) or scalar.ndim != 0:
+            raise RuntimeError(f"{objective} objective must return a 0-dim tensor")
+        scalar.backward()
         if features.grad is None:
-            raise RuntimeError("predictor loss did not depend on SAE features")
+            raise RuntimeError(f"{objective} did not depend on SAE features")
         effect = (features.detach() * features.grad).reshape(t, h, w, -1)
         return effect.detach()
 

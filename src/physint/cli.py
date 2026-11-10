@@ -107,8 +107,15 @@ def rank(
             help="Reuse the SAE in this run folder instead of training one.",
         ),
     ] = None,
+    objective: Annotated[
+        str,
+        typer.Option(
+            "--objective",
+            help="prediction_loss, action_loglik, or activation (magnitude baseline). The result is a shortlist.",
+        ),
+    ] = "prediction_loss",
 ) -> None:
-    """Rank SAE features by attribution patching. Does not run ablations."""
+    """Rank SAE features. Does not ablate; every pick still needs a real ablation."""
     try:
         execute_rank(
             adapter_name=adapter,
@@ -119,6 +126,7 @@ def rank(
             heldout_frac=heldout_frac,
             prefilter=prefilter,
             from_run=from_run,
+            objective=objective,
         )
     except (ValueError, RuntimeError, FileNotFoundError) as exc:
         typer.echo(f"error: {exc}", err=True)

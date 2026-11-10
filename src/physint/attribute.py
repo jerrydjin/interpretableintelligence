@@ -3,12 +3,13 @@
 One forward and one backward per window scores every SAE feature. The score
 on a clip is the sum over that clip's windows and tokens of
 
-    activation * d(mean masked predictor MSE) / d(activation)
+    activation * d(objective) / d(activation)
 
-with the same straight-through decoder path as ``estimate_effects``. Features
-are ranked by the absolute value of the mean score across clips, so a feature
-that fires hard but does not move the predictor stays near the bottom.
-Expensive ablations then run only on the top-K.
+The objective is pluggable through the adapter: ``prediction_loss`` (masked
+predictor MSE) or ``action_loglik`` (log-likelihood of the action the policy
+took). ``activation`` skips the backward and ranks by activation magnitude,
+the baseline attribution has to beat. The result is a shortlist. Every pick
+is confirmed by a real ablation; the score itself is not evidence.
 """
 
 from __future__ import annotations
@@ -19,22 +20,49 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
+import torch
 
-from physint.artifacts import ATTRIBUTION_COLUMNS
+from physint.artifacts import ATTRIBUTION_COLUMNS, read_attribution_objective
 from physint.score import estimate_effects
 from physint.stats import spearman
 from physint.thresholds import DEFAULT_PREFILTER_K
 
 METHOD = "attribution_patching"
-RANK_BY = (
-    "abs(mean over clips of the per-clip score); "
-    "the per-clip score sums activation * d(loss)/d(activation) over tokens and windows; "
-    "ties break toward the smaller feature id"
-)
+PREDICTION_LOSS = "prediction_loss"
+ACTION_LOGLIK = "action_loglik"
+ACTIVATION = "activation"
+RANK_OBJECTIVES = (PREDICTION_LOSS, ACTION_LOGLIK, ACTIVATION)
+GRADIENT_OBJECTIVES = (PREDICTION_LOSS, ACTION_LOGLIK)
 
 
-def attribution_by_clip(adapter, sae, clips) -> dict[str, np.ndarray]:
-    """Per-clip attribution, shape ``[n_features]``, summed over windows and tokens."""
+def rank_description(objective: str) -> str:
+    if objective == ACTIVATION:
+        return (
+            "mean over clips of sum |activation| over tokens and windows; "
+            "ties break toward the smaller feature id. "
+            "This is a shortlist: every pick is confirmed by a real ablation."
+        )
+    return (
+        "abs(mean over clips of the per-clip score); "
+        f"objective={objective}; "
+        "the per-clip score sums activation * d(objective)/d(activation) over tokens and windows; "
+        "ties break toward the smaller feature id. "
+        "This is a shortlist: every pick is confirmed by a real ablation."
+    )
+
+
+def check_objective(objective: str) -> str:
+    if objective not in RANK_OBJECTIVES:
+        names = ", ".join(RANK_OBJECTIVES)
+        raise ValueError(f"unknown objective {objective!r}. Expected one of: {names}.")
+    return objective
+
+
+def attribution_by_clip(adapter, sae, clips, objective: str = PREDICTION_LOSS) -> dict[str, np.ndarray]:
+    """Per-clip score, shape ``[n_features]``, summed over windows and tokens."""
+    objective = check_objective(objective)
+    if objective == ACTIVATION:
+        return _activation_magnitude_by_clip(adapter, sae, clips)
     n_features = int(sae.n_features)
     if n_features < 1:
         raise RuntimeError("SAE has no features to attribute")
@@ -45,7 +73,7 @@ def attribution_by_clip(adapter, sae, clips) -> dict[str, np.ndarray]:
             raise RuntimeError(f"{clip.clip_id} has no windows")
         total = np.zeros(n_features, dtype=np.float64)
         for window in windows:
-            effect = estimate_effects(adapter, sae, clip, window).detach().cpu().numpy()
+            effect = estimate_effects(adapter, sae, clip, window, objective=objective).detach().cpu().numpy()
             flat = np.asarray(effect, dtype=np.float64).reshape(-1, effect.shape[-1])
             if flat.shape[1] != n_features:
                 raise RuntimeError(
@@ -55,6 +83,41 @@ def attribution_by_clip(adapter, sae, clips) -> dict[str, np.ndarray]:
         scores[clip.clip_id] = total
     if not scores:
         raise RuntimeError("no clips to attribute")
+    return scores
+
+
+def _layer_activations(adapter, clip, window):
+    source = getattr(adapter, "raw_activations", None)
+    if source is not None:
+        return source(clip, window)
+    return adapter.encode(clip, window)
+
+
+def _activation_magnitude_by_clip(adapter, sae, clips) -> dict[str, np.ndarray]:
+    """Sum of |feature activation| over tokens and windows. No backward."""
+    n_features = int(sae.n_features)
+    if n_features < 1:
+        raise RuntimeError("SAE has no features to score")
+    device = sae.W_enc.device
+    scores: dict[str, np.ndarray] = {}
+    for clip in clips:
+        windows = adapter.windows(clip)
+        if not windows:
+            raise RuntimeError(f"{clip.clip_id} has no windows")
+        total = np.zeros(n_features, dtype=np.float64)
+        for window in windows:
+            acts = _layer_activations(adapter, clip, window)
+            flat = acts.reshape(-1, acts.shape[-1]).to(device=device, dtype=torch.float32)
+            with torch.no_grad():
+                features = sae.encode(flat).detach().cpu().numpy()
+            if features.shape[1] != n_features:
+                raise RuntimeError(
+                    f"activation width {features.shape[1]} != SAE n_features {n_features} on {clip.clip_id}"
+                )
+            total += np.abs(features).sum(axis=0)
+        scores[clip.clip_id] = total
+    if not scores:
+        raise RuntimeError("no clips to score")
     return scores
 
 
@@ -100,10 +163,16 @@ def candidates_document(
     mean_scores: np.ndarray,
     prefilter_k: int,
     *,
+    objective: str = PREDICTION_LOSS,
     labels: list[str] | None = None,
     seconds: dict | None = None,
 ) -> dict:
-    """Full ranking plus the top-K shortlist expensive ablations should run on."""
+    """Full ranking plus the top-K shortlist expensive ablations should run on.
+
+    ``shortlist_only`` is always true. A candidate is not evidence until a
+    real ablation confirms it.
+    """
+    objective = check_objective(objective)
     scores = np.asarray(mean_scores, dtype=np.float64).ravel()
     n_features = int(scores.shape[0])
     if prefilter_k < 1:
@@ -126,8 +195,10 @@ def candidates_document(
         )
     document = {
         "method": METHOD,
+        "objective": objective,
+        "shortlist_only": True,
         "prefilter_k": k,
-        "rank_by": RANK_BY,
+        "rank_by": rank_description(objective),
         "ranked": ranked,
         "candidates": [feature_id for feature_id in ranked_ids[:k]],
         "seconds": {
@@ -150,7 +221,9 @@ def compare_run(run_dir: Path, k: int | None = None) -> dict:
     attribution score with the mean ablation effect on that clip.
     """
     run_dir = Path(run_dir)
-    by_clip = _read_attribution(run_dir / "features" / "attribution.parquet")
+    attribution_path = run_dir / "features" / "attribution.parquet"
+    by_clip = _read_attribution(attribution_path)
+    objective = read_attribution_objective(attribution_path)
     feature_ids = sorted({feature_id for scores in by_clip.values() for feature_id in scores})
     if len(feature_ids) < 2:
         raise ValueError("need at least two features to compare rankings")
@@ -197,6 +270,16 @@ def compare_run(run_dir: Path, k: int | None = None) -> dict:
     held_spearman, held_n = _feature_spearman(held_mean, feature_effects)
     all_spearman, all_n = _feature_spearman(all_mean, feature_effects)
     clip_spearman, clip_n = _clip_spearman(by_clip, clip_effects)
+    primary_clips = heldout if heldout is not None else list(by_clip)
+    magnitude = _read_magnitude(run_dir / "features" / "feature_acts.parquet", primary_clips, feature_ids)
+    if magnitude is None:
+        mag_spearman, mag_n = None, 0
+        magnitude_order: list[int] = []
+        magnitude_overlap = None
+    else:
+        mag_spearman, mag_n = _feature_spearman(magnitude, feature_effects, absolute=False)
+        magnitude_order = [feature_id for feature_id in _rank_effects(magnitude) if feature_id in feature_effects]
+        magnitude_overlap = len(set(magnitude_order[:effective_k]) & set(ablation_topk))
 
     rows = []
     rank_of = {feature_id: rank for rank, feature_id in enumerate(attribution_order, start=1)}
@@ -212,6 +295,7 @@ def compare_run(run_dir: Path, k: int | None = None) -> dict:
             }
         )
     return {
+        "objective": objective,
         "feature_source": feature_source,
         "spearman_feature_heldout": held_spearman,
         "n_feature_heldout": held_n,
@@ -223,6 +307,10 @@ def compare_run(run_dir: Path, k: int | None = None) -> dict:
         "overlap": overlap,
         "attribution_topk": attribution_topk,
         "ablation_topk": ablation_topk,
+        "spearman_magnitude": mag_spearman,
+        "n_magnitude": mag_n,
+        "magnitude_overlap": magnitude_overlap,
+        "magnitude_topk": magnitude_order[:effective_k],
         "features": rows,
     }
 
@@ -230,11 +318,22 @@ def compare_run(run_dir: Path, k: int | None = None) -> dict:
 def format_report(result: dict) -> str:
     """Text report printed by ``scripts/compare_attribution_vs_ablation.py``."""
     primary_name, primary, primary_n = _primary_spearman(result)
+    objective = result.get("objective") or "unknown"
+    mag_overlap = result.get("magnitude_overlap")
+    mag_overlap_text = "n/a" if mag_overlap is None else f"{mag_overlap}/{result['k']}"
     lines = [
+        f"objective: {objective}",
         (
             f"Spearman |attribution| vs ablation ({primary_name}, n={primary_n}): "
             f"{_fmt_corr(primary)}"
         ),
+        f"attribution top-{result['k']} overlap: {result['overlap']}/{result['k']}",
+        (
+            f"magnitude baseline Spearman (|activation| vs ablation, n={result.get('n_magnitude', 0)}): "
+            f"{_fmt_corr(result.get('spearman_magnitude'))}"
+        ),
+        f"magnitude baseline top-{result['k']} overlap: {mag_overlap_text}",
+        f"magnitude baseline top-{result['k']}: {result.get('magnitude_topk')}",
         f"ablation source: {result['feature_source']}",
         (
             f"Spearman |mean attribution over held-out clips| vs ablation_effect "
@@ -282,17 +381,33 @@ def _fmt_corr(value: float | None) -> str:
 def _feature_spearman(
     mean_scores: dict[int, float] | None,
     effects: dict[int, float],
+    absolute: bool = True,
 ) -> tuple[float | None, int]:
     if mean_scores is None:
         return None, 0
     shared = sorted(set(mean_scores) & set(effects))
     if len(shared) < 2:
         return None, len(shared)
-    correlation = spearman(
-        [abs(mean_scores[feature_id]) for feature_id in shared],
-        [effects[feature_id] for feature_id in shared],
-    )
+    left = [abs(mean_scores[feature_id]) if absolute else mean_scores[feature_id] for feature_id in shared]
+    correlation = spearman(left, [effects[feature_id] for feature_id in shared])
     return correlation, len(shared)
+
+
+def _read_magnitude(path: Path, clip_ids: list[str], feature_ids: list[int]) -> dict[int, float] | None:
+    """Mean over clips of summed |activation|. Missing firings count as zero."""
+    if not path.is_file() or not clip_ids:
+        return None
+    table = pq.read_table(path, columns=["feature_id", "clip_id", "value"])
+    frame = table.to_pydict()
+    wanted = set(clip_ids)
+    totals: dict[int, float] = {feature_id: 0.0 for feature_id in feature_ids}
+    for feature_id, clip_id, value in zip(frame["feature_id"], frame["clip_id"], frame["value"], strict=True):
+        feature_id = int(feature_id)
+        if str(clip_id) not in wanted or feature_id not in totals:
+            continue
+        totals[feature_id] += abs(float(value))
+    n_clips = len(clip_ids)
+    return {feature_id: total / n_clips for feature_id, total in totals.items()}
 
 
 def _clip_spearman(

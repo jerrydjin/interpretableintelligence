@@ -113,7 +113,13 @@ Cheap prefilter scores, one row per feature and clip. Columns, in order:
 
 `feature_id` int32, `clip_id` string, `score` float32.
 
-`score` is the sum over that clip's windows and tokens of `activation × ∂(mean masked predictor MSE)/∂(feature activation)`, the same straight-through estimator as `effect_kind="estimate"`. One forward and one backward per window produces every feature. `physint rank` writes this file without running ablations. `physint run` writes it too.
+The objective is recorded in the parquet schema metadata as `objective`. For `prediction_loss` and `action_loglik`, `score` is the sum over that clip's windows and tokens of `activation × ∂(objective)/∂(activation)`, from one forward and one backward per window. For `activation` there is no backward, and `score` is the sum of `|activation|`.
+
+- `prediction_loss`: mean masked predictor MSE. This is what `physint run` writes, and it matches `effect_kind="estimate"`.
+- `action_loglik`: mean log-likelihood of the action the policy took. Use this when success is not differentiable.
+- `activation`: no backward. The score is the sum of `|activation|`, a magnitude baseline.
+
+`physint rank --objective` selects which one. A scored run's metadata is `prediction_loss`. The file is a shortlist, not a confirmation.
 
 ## features/candidates.json
 
@@ -122,6 +128,8 @@ The ranking of those scores and the shortlist expensive ablations should run on.
 ```json
 {
   "method": "attribution_patching",
+  "objective": "prediction_loss",
+  "shortlist_only": true,
   "prefilter_k": 10,
   "rank_by": "abs(mean over clips of the per-clip score); ties break toward the smaller feature id",
   "ranked": [
@@ -132,7 +140,7 @@ The ranking of those scores and the shortlist expensive ablations should run on.
 }
 ```
 
-`ranked` lists every feature once, ordered by descending `|mean score over clips|`. `candidates` is the first `prefilter_k` feature ids. `seconds.ablation` and `seconds.random_controls` are null when `physint rank` did not ablate. A feature outside a `--prefilter` shortlist has `ablation_effect: null`, `random_percentile: null`, and `n_random: 0` in the scoreboard; `real` is then false.
+`ranked` lists every feature once, ordered by descending `|mean score over clips|`. `candidates` is the first `prefilter_k` feature ids. `shortlist_only` is true: every candidate still has to be confirmed by a real ablation before it can count as causal. `seconds.ablation` and `seconds.random_controls` are null when `physint rank` did not ablate. A feature outside a `--prefilter` shortlist has `ablation_effect: null`, `random_percentile: null`, and `n_random: 0` in the scoreboard; `real` is then false.
 
 ## features/features.jsonl
 

@@ -1,9 +1,12 @@
 #!/usr/bin/env python
-"""Compare attribution-patching scores with measured ablation effects.
+"""Compare attribution scores with measured ablations, next to a magnitude baseline.
 
 Reads a run folder that contains ``features/attribution.parquet`` and ablation
 effects in ``scoreboard.json`` and/or ``features/clip_effects.parquet``. Prints
-Spearman correlation and top-K overlap.
+Spearman correlation and top-K overlap for the attribution objective, then the
+same numbers for activation magnitude from ``features/feature_acts.parquet``.
+Attribution has to beat that baseline to be worth its cost. The attribution
+file is a shortlist: the ablation column is the confirmation.
 
     python scripts/compare_attribution_vs_ablation.py runs/demo --k 3
 """

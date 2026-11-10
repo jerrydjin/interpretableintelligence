@@ -39,6 +39,16 @@ ACT_NOISE = 0.01
 PRED_BIAS = 4.0
 FPS = 8.0
 
+# Planted policy case. A loud direction dominates activation magnitude and is
+# invisible to the action head. A quiet direction is what the log-likelihood
+# of the taken action actually depends on. Both are orthogonal to the cue
+# readout, so prediction_loss is unchanged.
+POLICY_LOUD_SCALE = 4.0
+POLICY_QUIET_SCALE = 0.2
+POLICY_ACTION_GAIN = 5.0
+POLICY_ACTION_TARGET = 1.5
+POLICY_ACTION_SIGMA = 1.0
+
 # Geometry of one clip. grid t,h,w = frames/tubelet, height/patch, width/patch.
 GRID = Grid(
     t=N_FRAMES // TUBELET,
@@ -161,6 +171,15 @@ class FakeAdapter:
         self.perm: torch.Tensor | None = None
         self.rand_proj: torch.Tensor | None = None
         self.rand_readout: torch.Tensor | None = None
+        self._policy_case = False
+        self.loud_dir: torch.Tensor | None = None
+        self.quiet_dir: torch.Tensor | None = None
+        self.action_dir: torch.Tensor | None = None
+        self.loud_scale = POLICY_LOUD_SCALE
+        self.quiet_scale = POLICY_QUIET_SCALE
+        self.action_gain = POLICY_ACTION_GAIN
+        self.action_target = 0.0
+        self.action_sigma = POLICY_ACTION_SIGMA
 
     @property
     def d_model(self) -> int:
@@ -185,7 +204,31 @@ class FakeAdapter:
         self.perm = torch.randperm(n_tokens, generator=gen)
         self.rand_proj = _orthonormal_rows(N_CUES, D_MODEL, seed=8).to(self.device)
         self.rand_readout = _orthonormal_rows(N_CAUSAL, D_MODEL, seed=9).to(self.device)
+        loud, quiet = _policy_directions(self.dirs.detach().cpu())
+        self.loud_dir = loud.to(self.device)
+        self.quiet_dir = quiet.to(self.device)
+        self.action_dir = self.quiet_dir
+        self._policy_case = False
+        self.action_target = 0.0
         self._loaded = True
+
+    def plant_policy_case(self) -> None:
+        """Add a loud non-causal direction and a quiet action-causal one.
+
+        Magnitude ranking prefers the loud direction. ``action_loglik``
+        attribution prefers the quiet one, because the taken action is only
+        explained by that direction. Call ``load`` first. Prediction loss is
+        unchanged: both directions are orthogonal to the cue readout.
+        """
+        self._ensure_loaded()
+        self._policy_case = True
+        self.loud_scale = POLICY_LOUD_SCALE
+        self.quiet_scale = POLICY_QUIET_SCALE
+        self.action_gain = POLICY_ACTION_GAIN
+        self.action_target = POLICY_ACTION_TARGET
+        self.action_sigma = POLICY_ACTION_SIGMA
+        self.action_dir = self.quiet_dir
+        self._cache.clear()
 
     def model_sha(self) -> str:
         self._ensure_loaded()
@@ -247,6 +290,17 @@ class FakeAdapter:
         m = self.mask(window)
         return pred[m], target[m]
 
+    def attribution_objective(self, clip: Clip, window: Window, objective: str, edit=None) -> torch.Tensor:
+        """``prediction_loss`` (masked MSE) or ``action_loglik`` (taken-action log density)."""
+        if objective == "prediction_loss":
+            pred, target = self.predict_masked(clip, window, edit=edit)
+            return ((pred - target) ** 2).mean()
+        if objective == "action_loglik":
+            return self._action_loglik(clip, window, edit=edit)
+        raise ValueError(
+            f"unknown attribution objective {objective!r}. Expected prediction_loss or action_loglik."
+        )
+
     def raw_activations(self, clip: Clip, window: Window) -> torch.Tensor:
         self._ensure_loaded()
         self._check_frames(window.frames)
@@ -266,11 +320,31 @@ class FakeAdapter:
         if self._random_init:
             scrambled = flat[self.perm.to(self.device)]
             acts = scrambled @ self.rand_proj
-            noise = self._noise(clip.clip_id, acts.shape)
-            return (acts + noise).reshape(GRID.t, GRID.h, GRID.w, D_MODEL)
-        acts = flat @ self.dirs
+        else:
+            acts = flat @ self.dirs
         noise = self._noise(clip.clip_id, acts.shape)
-        return (acts + noise).reshape(GRID.t, GRID.h, GRID.w, D_MODEL)
+        acts = acts + noise
+        if self._policy_case:
+            assert self.loud_dir is not None and self.quiet_dir is not None
+            acts = acts + self.loud_scale * self.loud_dir + self.quiet_scale * self.quiet_dir
+        return acts.reshape(GRID.t, GRID.h, GRID.w, D_MODEL)
+
+    def _action_loglik(self, clip: Clip, window: Window, edit=None) -> torch.Tensor:
+        """Mean Gaussian log-density of the taken action. Higher is better.
+
+        The mean is ``action_gain * (activation · action_dir)``. In the planted
+        policy case that direction is the quiet one, and the recorded action
+        sits off the clean mean so the gradient does not vanish.
+        """
+        assert self.action_dir is not None
+        acts = self.raw_activations(clip, window)
+        if edit is not None:
+            acts = edit(acts)
+        else:
+            acts = self._apply_hooks(acts)
+        mu = self.action_gain * (acts * self.action_dir).sum(dim=-1)
+        resid = (self.action_target - mu) / self.action_sigma
+        return (-0.5 * resid.square()).mean()
 
     def _noise(self, clip_id: str, shape: torch.Size) -> torch.Tensor:
         digest = hashlib.sha256(f"act-noise:{self._random_init}:{clip_id}".encode()).digest()
@@ -339,6 +413,17 @@ def _bias_vector() -> torch.Tensor:
     bias = torch.zeros(PRED_DIM)
     bias[0] = PRED_BIAS
     return bias
+
+
+def _policy_directions(cue_dirs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Loud and quiet unit vectors, orthogonal to each other and to the cues."""
+    cue = cue_dirs.detach().to(dtype=torch.float32, device="cpu")
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(19)
+    raw = torch.randn(cue.shape[1], 2, generator=gen, dtype=torch.float32)
+    raw = raw - cue.T @ (cue @ raw)
+    q, _ = torch.linalg.qr(raw)
+    return q[:, 0].contiguous(), q[:, 1].contiguous()
 
 
 def _orthonormal_rows(rows: int, cols: int, seed: int) -> torch.Tensor:

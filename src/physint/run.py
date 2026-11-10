@@ -20,7 +20,14 @@ from physint.artifacts import (
     write_json,
     write_jsonl,
 )
-from physint.attribute import attribution_by_clip, candidates_document, rank_feature_ids, summarize_attribution
+from physint.attribute import (
+    PREDICTION_LOSS,
+    attribution_by_clip,
+    candidates_document,
+    check_objective,
+    rank_feature_ids,
+    summarize_attribution,
+)
 from physint.clips import load_clips
 from physint.device import pick_device
 from physint.labelers import FakeCueLabeller, cue_patterns
@@ -302,7 +309,7 @@ def execute_run(
     save_sae(sae, config, out / "sae")
     write_jsonl(out / "features" / "features.jsonl", jsonl)
     write_feature_acts(out / "features" / "feature_acts.parquet", _sparse_feature_rows(feature_np, tokens))
-    write_attribution(out / "features" / "attribution.parquet", attr_rows)
+    write_attribution(out / "features" / "attribution.parquet", attr_rows, objective=PREDICTION_LOSS)
     reported_k = limit if limit is not None else min(DEFAULT_PREFILTER_K, n_features)
     labels = [row["label"] for row in records]
     seconds = {
@@ -312,7 +319,13 @@ def execute_run(
     }
     write_json(
         out / "features" / "candidates.json",
-        candidates_document(mean_scores, reported_k, labels=labels, seconds=seconds),
+        candidates_document(
+            mean_scores,
+            reported_k,
+            objective=PREDICTION_LOSS,
+            labels=labels,
+            seconds=seconds,
+        ),
     )
     effect_rows = {
         key: estimate_rows[key] + ablation_rows[key]
@@ -339,14 +352,17 @@ def execute_rank(
     heldout_frac: float = DEFAULT_HELDOUT_FRAC,
     prefilter: int = DEFAULT_PREFILTER_K,
     from_run: Path | None = None,
+    objective: str = PREDICTION_LOSS,
     log=print,
 ) -> dict:
     """Score every feature with one attribution pass and write the top-K shortlist.
 
-    Does not ablate. Pass ``from_run`` to reuse an SAE that a full ``physint run``
-    already trained; otherwise an SAE is trained on the train split, matching
-    ``execute_run``.
+    Does not ablate. The shortlist is not evidence: every pick still has to be
+    confirmed by a real ablation. Pass ``from_run`` to reuse an SAE that a full
+    ``physint run`` already trained; otherwise an SAE is trained on the train
+    split, matching ``execute_run``.
     """
+    objective = check_objective(objective)
     if prefilter < 1:
         raise ValueError(f"prefilter K must be >= 1, got {prefilter}")
     torch.set_num_threads(1)
@@ -377,7 +393,7 @@ def execute_rank(
     membership = split.membership()
     log(
         f"physint rank  device={device}  adapter={adapter_name}  "
-        f"clips={len(clips)}  prefilter={prefilter}"
+        f"clips={len(clips)}  prefilter={prefilter}  objective={objective}"
     )
 
     adapter_cls = get_adapter(adapter_name)
@@ -401,13 +417,14 @@ def execute_rank(
             )
 
     started = time.perf_counter()
-    by_clip = attribution_by_clip(adapter, sae, clips)
+    by_clip = attribution_by_clip(adapter, sae, clips, objective=objective)
     attribution_seconds = time.perf_counter() - started
     attr_rows, mean_scores = summarize_attribution(by_clip)
     labels = _labels_for(adapter, clips, tokens, sae, acts, train_rows, held_rows, device)
     document = candidates_document(
         mean_scores,
         prefilter,
+        objective=objective,
         labels=labels,
         seconds={"attribution": attribution_seconds, "ablation": None, "random_controls": None},
     )
@@ -417,13 +434,13 @@ def execute_rank(
     if from_run is None:
         (out / "sae").mkdir(parents=True, exist_ok=True)
         save_sae(sae, config, out / "sae")
-    write_attribution(out / "features" / "attribution.parquet", attr_rows)
+    write_attribution(out / "features" / "attribution.parquet", attr_rows, objective=objective)
     write_json(out / "features" / "candidates.json", document)
     shown = ", ".join(
         f"{row['feature_id']}:{row['label'] or '-'}" for row in document["ranked"][: document["prefilter_k"]]
     )
     log(
-        f"attribution {attribution_seconds:.3f}s  candidates=[{shown}]  "
+        f"objective={objective}  attribution {attribution_seconds:.3f}s  shortlist=[{shown}]  "
         f"wrote {out / 'features' / 'attribution.parquet'}"
     )
     return document

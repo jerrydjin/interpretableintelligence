@@ -10,11 +10,11 @@ This lane is the contract and the scoring core. It does not load V-JEPA 2 or pi0
 2. **Capture** the instrumented layer through `hook(..., mode="capture")` and write activation shards.
 3. **Train** a ReLU SAE on train rows only.
 4. **Label** each feature. The fake adapter uses `fake-cue-v1`, which reads planted cue channels back out of the clip. `LLMLabeller` is a stub and raises rather than calling a network.
-5. **Attribute.** One forward and backward per window scores every SAE feature (`activation × ∂loss/∂activation`, summed over tokens and windows) and writes `features/attribution.parquet` plus `features/candidates.json`. `physint rank` stops here. `physint run --prefilter K` sends only that shortlist to the ablation sweep.
+5. **Attribute.** One forward and backward per window scores every SAE feature (`activation × ∂objective/∂activation`, summed over tokens and windows) and writes `features/attribution.parquet` plus `features/candidates.json`. The adapter supplies the scalar: `prediction_loss`, or `action_loglik` when success is the log-likelihood of the taken action. `activation` is the magnitude baseline and does not backprop. `physint rank` stops at the shortlist. `physint run --prefilter K` sends only that shortlist to the ablation sweep, and every one of those picks is confirmed by a real ablation.
 6. **Score** explained variance, spliced predictor loss, dead features, per-feature ablations, matched random features, and a random-init control. Without `--prefilter`, every feature is ablated. With `--prefilter K`, held-out ablations and the matched random controls run only for the top K; the others keep a null ablation and cannot be `real`.
 7. **Write** the run folder in `SCHEMA.md`. `physint validate` checks that folder, including that `real` follows the four gates.
 
-`scripts/compare_attribution_vs_ablation.py` reads a run folder that has both the attribution file and measured ablations and prints Spearman correlation and top-K overlap.
+`scripts/compare_attribution_vs_ablation.py` reads a run folder that has both the attribution file and measured ablations and prints Spearman correlation and top-K overlap for the attribution, next to the same numbers for an activation-magnitude baseline.
 
 Thresholds are constants in `src/physint/thresholds.py`. Changing them changes the meaning of `real`.
 

@@ -14,10 +14,11 @@ from physint.artifacts import (
     CLIP_EFFECT_COLUMNS,
     FEATURE_ACT_COLUMNS,
     load_activation_shards,
+    read_attribution_objective,
     read_json,
     read_jsonl,
 )
-from physint.attribute import METHOD, rank_feature_ids
+from physint.attribute import PREDICTION_LOSS, METHOD, rank_feature_ids
 from physint.sae import load_sae
 from physint.split import assign_split, split_sha
 from physint.stats import feature_is_real, is_usable
@@ -48,7 +49,16 @@ _FEATURE_KEYS = {
 }
 _JSONL_KEYS = _FEATURE_KEYS | {"label_model", "top"}
 _TOP_KEYS = {"clip_id", "window", "t", "value"}
-_CANDIDATE_KEYS = {"method", "prefilter_k", "rank_by", "ranked", "candidates", "seconds"}
+_CANDIDATE_KEYS = {
+    "method",
+    "objective",
+    "shortlist_only",
+    "prefilter_k",
+    "rank_by",
+    "ranked",
+    "candidates",
+    "seconds",
+}
 _RANKED_KEYS = {"rank", "feature_id", "label", "score", "abs_score"}
 _SECOND_KEYS = {"attribution", "ablation", "random_controls"}
 _SAE_CONFIG_KEYS = {
@@ -599,6 +609,11 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
     if tuple(table.column_names) != ATTRIBUTION_COLUMNS:
         errors.append(f"attribution columns must be {ATTRIBUTION_COLUMNS}")
         return
+    recorded = read_attribution_objective(path)
+    if recorded != PREDICTION_LOSS:
+        errors.append(
+            f"attribution.parquet objective metadata must be {PREDICTION_LOSS!r} on a scored run, got {recorded!r}"
+        )
     frame = table.to_pydict()
     clip_ids = [clip["clip_id"] for clip in manifest["clips"] if isinstance(clip, dict)]
     seen: set[tuple[int, str]] = set()
@@ -637,6 +652,10 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
     _exact_keys(document, _CANDIDATE_KEYS, "candidates.json", errors)
     if document.get("method") != METHOD:
         errors.append(f"candidates.json method must be {METHOD}")
+    if document.get("objective") != PREDICTION_LOSS:
+        errors.append(f"candidates.json objective must be {PREDICTION_LOSS!r} on a scored run")
+    if document.get("shortlist_only") is not True:
+        errors.append("candidates are a shortlist and must be confirmed by a real ablation")
     if not isinstance(document.get("rank_by"), str) or not document["rank_by"]:
         errors.append("candidates.json rank_by must be a non-empty string")
     prefilter_k = document.get("prefilter_k")

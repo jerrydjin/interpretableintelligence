@@ -9,8 +9,25 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
-from physint.artifacts import write_attribution, write_json
-from physint.attribute import compare_run, format_report
+import torch
+
+from physint.adapters.base import Clip
+from physint.adapters.fake import (
+    POLICY_LOUD_SCALE,
+    POLICY_QUIET_SCALE,
+    FakeAdapter,
+    render_clip,
+)
+from physint.artifacts import read_attribution_objective, write_attribution, write_feature_acts, write_json
+from physint.attribute import (
+    attribution_by_clip,
+    compare_run,
+    format_report,
+    rank_feature_ids,
+    summarize_attribution,
+)
+from physint.sae import SAE
+from physint.score import ablate_edit
 from typer.testing import CliRunner
 
 from physint.cli import app
@@ -32,7 +49,19 @@ def test_synthetic_spearman_and_overlap(tmp_path: Path):
             rows["feature_id"].append(feature_id)
             rows["clip_id"].append(clip_id)
             rows["score"].append(score)
-    write_attribution(tmp_path / "features" / "attribution.parquet", rows)
+    write_attribution(tmp_path / "features" / "attribution.parquet", rows, objective="prediction_loss")
+    # Feature 2 is dead for the ablation and the attribution, but it is the loudest activation.
+    acts = {"feature_id": [], "clip_id": [], "window": [], "t": [], "h": [], "w": [], "value": []}
+    for feature_id, value in ((0, 0.2), (1, 3.0), (2, 9.0), (3, 0.4)):
+        for clip_id in ("clip-a", "clip-b"):
+            acts["feature_id"].append(feature_id)
+            acts["clip_id"].append(clip_id)
+            acts["window"].append(0)
+            acts["t"].append(0)
+            acts["h"].append(0)
+            acts["w"].append(0)
+            acts["value"].append(value)
+    write_feature_acts(tmp_path / "features" / "feature_acts.parquet", acts)
     write_json(
         tmp_path / "scoreboard.json",
         {
@@ -49,9 +78,15 @@ def test_synthetic_spearman_and_overlap(tmp_path: Path):
     assert result["overlap"] == 2
     assert result["attribution_topk"] == [0, 3]
     assert result["ablation_topk"] == [0, 3]
+    assert result["magnitude_overlap"] == 0
+    assert result["magnitude_topk"] == [2, 1]
+    assert result["spearman_magnitude"] < result["spearman_feature_all"]
     text = format_report(result)
     assert "Spearman" in text
     assert "top-2 overlap: 2/2" in text
+    assert "attribution top-2 overlap: 2/2" in text
+    assert "magnitude baseline Spearman" in text
+    assert "magnitude baseline top-2 overlap: 0/2" in text
 
 
 def test_causal_features_outrank_active_decoys(demo):
@@ -82,6 +117,10 @@ def test_causal_features_outrank_active_decoys(demo):
     assert result["overlap"] == 3
     assert result["spearman_feature_heldout"] is not None
     assert result["spearman_feature_heldout"] >= 0.9
+    assert result["spearman_magnitude"] is not None
+    assert result["spearman_feature_heldout"] > result["spearman_magnitude"]
+    assert "magnitude baseline Spearman" in report
+    assert "magnitude baseline top-3 overlap:" in report
     seconds = json.loads((demo.run / "features" / "candidates.json").read_text())["seconds"]
     print(
         f"wall attribution={seconds['attribution']:.4f}s "
@@ -98,7 +137,9 @@ def test_causal_features_outrank_active_decoys(demo):
     )
     assert completed.returncode == 0, completed.stderr
     assert "top-3 overlap: 3/3" in completed.stdout
-    assert "Spearman" in completed.stdout
+    assert "Spearman |attribution| vs ablation" in completed.stdout
+    assert "magnitude baseline Spearman" in completed.stdout
+    assert "magnitude baseline top-3 overlap:" in completed.stdout
 
 
 def test_rank_command_reuses_a_trained_sae(demo, tmp_path: Path):
@@ -121,7 +162,10 @@ def test_rank_command_reuses_a_trained_sae(demo, tmp_path: Path):
     assert ranked.exit_code == 0, ranked.output
     document = json.loads((out / "features" / "candidates.json").read_text())
     assert document["prefilter_k"] == 3
+    assert document["objective"] == "prediction_loss"
+    assert document["shortlist_only"] is True
     assert document["seconds"]["ablation"] is None
+    assert read_attribution_objective(out / "features" / "attribution.parquet") == "prediction_loss"
     labels = [row["label"] for row in document["ranked"] if row["feature_id"] in document["candidates"]]
     assert set(labels) == set(CAUSAL)
     fresh = pq.read_table(out / "features" / "attribution.parquet").to_pydict()
@@ -159,6 +203,9 @@ def test_prefilter_ablates_only_the_shortlist(demo, tmp_path: Path):
     scoreboard = json.loads((out / "scoreboard.json").read_text())
     measured = [row for row in scoreboard["features"] if row["ablation_effect"] is not None]
     skipped = [row for row in scoreboard["features"] if row["ablation_effect"] is None]
+    document = json.loads((out / "features" / "candidates.json").read_text())
+    assert document["shortlist_only"] is True
+    assert {row["id"] for row in measured} == set(document["candidates"])
     assert {row["label"] for row in measured} == set(CAUSAL)
     assert all(row["real"] for row in measured)
     assert all(row["n_random"] >= 100 for row in measured)
@@ -173,6 +220,89 @@ def test_prefilter_ablates_only_the_shortlist(demo, tmp_path: Path):
         f"attribution={short['attribution']:.4f}s"
     )
     assert short["random_controls"] < full["random_controls"]
+
+
+def test_action_loglik_beats_a_loud_decoy():
+    """Magnitude ranks a planted loud direction first. Action log-likelihood does not.
+
+    The quiet direction is the only one the taken action depends on. Ablating it
+    moves the log-likelihood; ablating the loud direction does not. The shortlist
+    is the quiet feature, and that ablation is what confirms the pick.
+    """
+    adapter = FakeAdapter(layer=16, device=torch.device("cpu"))
+    adapter.load(random_init=False)
+    frames = render_clip(0, seed=0)
+    clip = Clip(clip_id="clip-000", path=Path("clip-000.npy"), frames=frames, fps=8.0, sha256="0" * 64)
+    window = adapter.windows(clip)[0]
+    before, _target = adapter.predict_masked(clip, window)
+    adapter.plant_policy_case()
+    after, _target = adapter.predict_masked(clip, window)
+    assert torch.allclose(before, after, atol=1e-5)
+
+    assert adapter.loud_dir is not None and adapter.quiet_dir is not None
+    sae = SAE(adapter.d_model, 2)
+    with torch.no_grad():
+        sae.W_dec.zero_()
+        sae.W_enc.zero_()
+        sae.b_enc.zero_()
+        sae.b_dec.zero_()
+        sae.W_dec[:, 0] = adapter.loud_dir
+        sae.W_dec[:, 1] = adapter.quiet_dir
+        sae.W_enc[0] = adapter.loud_dir
+        sae.W_enc[1] = adapter.quiet_dir
+    sae.eval()
+
+    clips = [clip]
+    attr_mean = summarize_attribution(attribution_by_clip(adapter, sae, clips, objective="action_loglik"))[1]
+    mag_mean = summarize_attribution(attribution_by_clip(adapter, sae, clips, objective="activation"))[1]
+    assert rank_feature_ids(mag_mean)[0] == 0
+    assert rank_feature_ids(attr_mean)[0] == 1
+    assert float(mag_mean[0]) > 10 * float(mag_mean[1])
+    assert abs(float(attr_mean[1])) > 20 * abs(float(attr_mean[0]))
+    assert float(mag_mean[0]) / float(POLICY_LOUD_SCALE) > float(mag_mean[1]) / float(POLICY_QUIET_SCALE) * 0.5
+
+    def mean_loglik(feature_id: int | None) -> float:
+        edit = None if feature_id is None else ablate_edit(sae, feature_id)
+        return float(adapter.attribution_objective(clip, window, "action_loglik", edit=edit).detach())
+
+    clean = mean_loglik(None)
+    quiet_drop = clean - mean_loglik(1)
+    loud_drop = clean - mean_loglik(0)
+    assert quiet_drop > 0.2
+    assert quiet_drop > 20 * abs(loud_drop)
+    assert rank_feature_ids(attr_mean)[:1] == [1]
+
+
+def test_rank_records_objective_metadata(demo, tmp_path: Path):
+    out = tmp_path / "loglik"
+    ranked = runner.invoke(
+        app,
+        [
+            "rank",
+            "fake",
+            "--clips",
+            str(demo.clips),
+            "--from-run",
+            str(demo.run),
+            "--objective",
+            "action_loglik",
+            "--prefilter",
+            "3",
+            "--out",
+            str(out),
+        ],
+    )
+    assert ranked.exit_code == 0, ranked.output
+    assert read_attribution_objective(out / "features" / "attribution.parquet") == "action_loglik"
+    document = json.loads((out / "features" / "candidates.json").read_text())
+    assert document["objective"] == "action_loglik"
+    assert document["shortlist_only"] is True
+    rejected = runner.invoke(
+        app,
+        ["rank", "fake", "--clips", str(demo.clips), "--from-run", str(demo.run), "--objective", "reward", "--out", str(tmp_path / "nope")],
+    )
+    assert rejected.exit_code != 0
+    assert "objective" in (rejected.output + (rejected.stderr or ""))
 
 
 def test_validate_rejects_a_broken_ranking(demo, tmp_path: Path):

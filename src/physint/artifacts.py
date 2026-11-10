@@ -96,7 +96,8 @@ def write_feature_acts(path: Path, rows: dict[str, list]) -> None:
     pq.write_table(table, path)
 
 
-def write_attribution(path: Path, rows: dict[str, list]) -> None:
+def write_attribution(path: Path, rows: dict[str, list], objective: str = "prediction_loss") -> None:
+    """Write attribution scores. ``objective`` is stored in the parquet schema metadata."""
     table = pa.table(
         {
             "feature_id": pa.array(rows["feature_id"], type=pa.int32()),
@@ -104,8 +105,18 @@ def write_attribution(path: Path, rows: dict[str, list]) -> None:
             "score": pa.array(rows["score"], type=pa.float32()),
         }
     )
+    table = table.replace_schema_metadata({b"objective": objective.encode("utf-8")})
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(table, path)
+
+
+def read_attribution_objective(path: Path) -> str | None:
+    """Objective name recorded in the attribution parquet schema metadata."""
+    metadata = pq.read_schema(path).metadata or {}
+    raw = metadata.get(b"objective")
+    if raw is None:
+        return None
+    return raw.decode("utf-8")
 
 
 def write_clip_effects(path: Path, rows: dict[str, list]) -> None:
