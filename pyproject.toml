@@ -48,7 +48,8 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "src/interpretableintelligence/adapters/groot/tests"]
+python_files = ["test_*.py", "*_test.py", "check_*.py", "mock_*.py"]
 addopts = ["-q", "-m", "not slow"]
 markers = [
     "slow: large synthetic runs, or a V-JEPA 2 weight download; skipped unless pytest is run with -m slow",
