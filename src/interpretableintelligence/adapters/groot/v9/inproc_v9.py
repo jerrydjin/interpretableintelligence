@@ -17,7 +17,9 @@ v9 vs v8 (see v9/V9_NOTES.md):
   * Probe: 20 episodes per probe task (GROOT_PROBE_N), pick nearest 50% with Wilson 95% CI.
 Unchanged (imported from physint_inproc_v8): libero config, RoPE repair/verify (raises), processors,
 build_policy_obs, postprocess_action, hook target transformer_blocks.{LAYER} final denoise step,
-read_sim, derive_failure, _save_episode (PICKER.md / rollcap-v0 layout), seeds.
+read_sim, _save_episode (PICKER.md / rollcap-v0 layout), seeds.
+Failure label (capture): per-pot detector pot_events.detect (rule pot0-v1, shared with the offline relabel
+tools/derive_pot0_fail.py); v8.derive_failure's active-object label is kept as fail_kind_active / fail_t_active.
 """
 from __future__ import annotations
 
@@ -39,6 +41,7 @@ import numpy as np
 import torch
 
 import physint_inproc_v8 as v8
+import pot_events
 from physint_inproc_v8 import (  # noqa: F401  (re-exported so notebooks can use v9.* for everything)
     CLEAN_LANGUAGE, FAIL_KINDS, MOKA, Episode, NonFiniteAction, atomic_json, build_policy_obs,
     build_processors, check_obs_keys, derive_failure, load_json, make_libero_env, plus_suite,
@@ -845,6 +848,23 @@ def probe(ctx: Ctx) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- capture
+def label_episode(ep: Episode, task_name: str | None) -> dict[str, Any]:
+    """fail_t / fail_kind for one episode: pot_events.detect (per-pot, rule pot0-v1) when the task has a stove region, else
+    v8.derive_failure. The active-object label is always kept as fail_kind_active / fail_t_active; failure_details stays
+    v8's details (peak_i etc.) so readers of the v9.0 layout keep working."""
+    act = derive_failure(success=ep.success, object_z=ep.sim["object_z_rel"], eef_pos=ep.sim["eef_pos"],
+                         gripper_width=ep.sim["gripper_width"], grasped=ep.sim["grasped"], obj_xy=ep.sim["object_xy"])
+    extra = {"fail_t_active": act["fail_t"], "fail_kind_active": act["fail_kind"]}
+    pe = pot_events.detect(ep.sim, success=ep.success, task_name=task_name, names=[str(n) for n in ep.sim["obj_names"]],
+                           fail_kind_active=act["fail_kind"], fail_t_active=act["fail_t"])
+    if pe is None:
+        extra.update(fail_rule="v8.derive_failure (active object; no stove region / pot names for this task)", fail_subkind=None, fail_pot=None)
+        return {"fail_t": act["fail_t"], "fail_kind": act["fail_kind"], "details": act["details"], "extra": extra}
+    extra.update(fail_subkind=pe["fail_subkind"], fail_pot=pe["fail_pot"], fail_rule=pe["fail_rule"], **pe["fields"],
+                 pot1_events=pe["pot1_events"])
+    return {"fail_t": pe["fail_t"], "fail_kind": pe["fail_kind"], "details": act["details"], "extra": extra}
+
+
 def capture(ctx: Ctx, chosen: dict | None = None) -> dict[str, Any]:
     """Same manifest / seeds / files as v8.capture; episodes run on the env pool (hooked)."""
     chosen = chosen or load_json(ctx.run / "probe" / "chosen.json")
@@ -879,9 +899,12 @@ def capture(ctx: Ctx, chosen: dict | None = None) -> dict[str, Any]:
                           "(LIBERO-plus Task.language is filename-derived junk for view/initstate variants)"
                           if CLEAN_LANGUAGE else "LIBERO-plus Task.language (unmodified)"),
         "episode_seed_rule": "seed = 20000 + episode_idx; init_state_id = episode_idx % n_init_states",
-        "failure_detector": "physint_inproc_v8.derive_failure on object_z_rel (z minus step-0 z of the "
-                            "active object) + contact-based grasped; active object = movable "
-                            "obj_of_interest nearest the EEF at each step",
+        "failure_detector": (f"pot_events.detect rule {pot_events.RULE}: per-pot lift / release / placement from obj_pos, "
+                             "gripper_width and eef distance; stove region box "
+                             f"{pot_events.region_for_task(chosen.get('name'))}; failure judged on pot 0 (moka_pot_1). "
+                             "fail_kind_active / fail_t_active = physint_inproc_v8.derive_failure on the active object "
+                             "(movable obj_of_interest nearest the EEF). Tasks without a stove region keep the active label."),
+        "failure_rule": pot_events.RULE,
         "runner": {"version": V9_VERSION, "parallel_envs": int(ctx.n_envs), "predict_mode_requested": ctx.batch_predict,
                    "noise": "per-episode torch.Generator(seed) on the policy device (== v8 torch.manual_seed(seed))"},
     })
@@ -899,15 +922,13 @@ def capture(ctx: Ctx, chosen: dict | None = None) -> dict[str, Any]:
 
     def on_done(job: Job, ep: Episode):
         ep_idx = int(job.meta["ep"])
-        fr = derive_failure(success=ep.success, object_z=ep.sim["object_z_rel"], eef_pos=ep.sim["eef_pos"],
-                            gripper_width=ep.sim["gripper_width"], grasped=ep.sim["grasped"],
-                            obj_xy=ep.sim["object_xy"])
+        fr = label_episode(ep, chosen.get("name"))
         n_rows = v8._save_episode(ctx, ep_idx, ep, man, fr)
         row = {"episode_idx": ep_idx, "episode_id": f"ep-{ep_idx:05d}", "task_id": str(pid), "seed": job.seed,
                "init_state_id": job.init_state_id, "success": bool(ep.success), "fail_t": fr["fail_t"],
                "fail_kind": fr["fail_kind"], "n_steps": ep.n_steps, "n_chunks": ep.n_chunks,
                "n_act_rows": n_rows, "seconds": ep.seconds, "status": "done",
-               "failure_details": fr["details"], "language": ep.language}
+               "failure_details": fr["details"], "language": ep.language, **fr["extra"]}
         man["episodes"] = sorted([e for e in man["episodes"] if int(e["episode_idx"]) != ep_idx] + [row],
                                  key=lambda e: int(e["episode_idx"]))
         man["seeds"] = [int(e["seed"]) for e in man["episodes"]]
@@ -917,7 +938,8 @@ def capture(ctx: Ctx, chosen: dict | None = None) -> dict[str, Any]:
             f.write(json.dumps(row, default=str) + "\n")
         n_new[0] += 1
         print(f"EPISODE ep={ep_idx} task_id={pid} seed={job.seed} success={ep.success} fail_t={fr['fail_t']} "
-              f"fail_kind={fr['fail_kind']} n_steps={ep.n_steps} seconds_per_episode={ep.seconds}", flush=True)
+              f"fail_kind={fr['fail_kind']} fail_kind_active={fr['extra']['fail_kind_active']} n_steps={ep.n_steps} "
+              f"seconds_per_episode={ep.seconds}", flush=True)
         if n_new[0] % ctx.snapshot_every == 0:
             write_snapshot(ctx, f"capture_n{len(man['episodes'])}")
         gc.collect()
@@ -934,7 +956,8 @@ def capture(ctx: Ctx, chosen: dict | None = None) -> dict[str, Any]:
         ctx.pool_stats["capture"] = st.as_dict()
     eps = man["episodes"]
     summ = {"n_done": len(eps), "n_success": sum(e["success"] for e in eps),
-            "fail_kinds": {k: sum(e["fail_kind"] == k for e in eps) for k in FAIL_KINDS},
+            "fail_kinds": {k: sum(e["fail_kind"] == k for e in eps) for k in pot_events.FAIL_KINDS + FAIL_KINDS},
+            "fail_kinds_active": {k: sum(e.get("fail_kind_active", e["fail_kind"]) == k for e in eps) for k in FAIL_KINDS},
             "mean_seconds_per_episode": round(float(np.mean([e["seconds"] for e in eps])), 2) if eps else None}
     man["summary"] = summ
     atomic_json(mpath, man)

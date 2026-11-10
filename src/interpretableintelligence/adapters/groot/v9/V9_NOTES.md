@@ -11,3 +11,11 @@
 
 ## Box tests (CPU, stand-in policy = real processors + real LIBERO-plus env id 614)
 Command: `python tests/run_v9_parallel.py all`. Results are in `v9/box_test_results.json`. The other scripts are `tests/mock_v9_hotfix.py` and `tests/mock_v9_nbcells.py`.
+
+## Per-pot failure detector (2026-11-10, rule `pot0-v1`)
+- `v9/pot_events.py` (numpy only) is the single implementation, used by `physint_inproc_v9.label_episode` in capture and by the offline relabel `/workspace/runs/groot-1028-v9-n100/tools/derive_pot0_fail.py`. The build embeds it as `/content/pot_events.py` in both the notebook and the hotfix, and the hotfix reloads it.
+- Why: `v8.derive_failure` judges a drop on the object nearest the EEF. On task 1028 it labelled pot 1's normal placement on the stove as a `drop` in 37 of 40 cases.
+- What it does: computes per-pot lift / release / placement events from obj_pos, gripper_width and eef distance. Lift is more than 2 cm above the start. Release is gripper reopening or a confirmed separation. Off-stove is judged where the pot comes to rest, and the stove region is an xy box (`STOVE_REGIONS["KITCHEN_SCENE8"]`). It then labels the episode on pot 0 (moka_pot_1): `lifted_not_placed` / `never_grasped` / `pot0_placed_other_failure` / `empty_grasp`, with `fail_pot`, `fail_subkind`, `fail_rule`, the `pot0_*` anchors and `pot1_events`.
+- Kept: `fail_kind_active` / `fail_t_active` (v8's label) and `failure_details` (v8's details).
+- Fallback: tasks that are not a KITCHEN_SCENE8 moka-pots-on-the-stove task, or that have other object names, keep v8's label (`fail_rule` says so). The box was measured on 1028 only. 614 (view 0_0_100_0_0, initstate 229) is the same scene, so it gets the same box, but nobody has checked that against 614 successes yet. Labels only; probe, early stopping and capture data are unchanged.
+- Regression: `tests/test_pot_events.py` replays the 100 recorded traces and requires the relabel in `episodes.jsonl` exactly. It also requires the v8 active label to be reproduced, and no `lifted_not_placed` fail_t within 16 steps of a pot-1 release or placement.

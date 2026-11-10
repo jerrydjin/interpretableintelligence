@@ -11,7 +11,8 @@ from pathlib import Path
 ROOT = Path("/workspace/groot-colab")
 SRC8 = (ROOT / "v8" / "physint_inproc_v8.py").read_text()
 SRC9 = (ROOT / "v9" / "physint_inproc_v9.py").read_text()
-for s in (SRC8, SRC9):
+SRCPE = (ROOT / "v9" / "pot_events.py").read_text()  # per-pot failure detector, shared with the offline relabel
+for s in (SRC8, SRC9, SRCPE):
     assert "'''" not in s and not s.rstrip().endswith("\\")
 nb = json.loads((ROOT / "groot_colab_nodrive_v8.ipynb").read_text())
 cells = ["".join(c["source"]) for c in nb["cells"]]
@@ -25,8 +26,9 @@ def must_replace(s, old, new, count=1):
 
 
 RUN_V8, RUN_V9 = "colab-t4-libero-plus-v8", "colab-l4-libero-plus-v9"
-EMBED9 = "_V9_SRC = r'''" + SRC9 + "'''\n"
+EMBED9 = "_POT_EVENTS_SRC = r'''" + SRCPE + "'''\n" + "_V9_SRC = r'''" + SRC9 + "'''\n"
 WRITE9 = '''
+Path("/content/pot_events.py").write_text(_POT_EVENTS_SRC)  # imported by physint_inproc_v9 (main + env workers)
 _V9_PATH = Path("/content/physint_inproc_v9.py")
 _V9_PATH.write_text(_V9_SRC)
 _V8_PATH_FOR_WORKERS = Path("/content/physint_inproc_v8.py")  # env workers import v8 helpers from disk
@@ -36,6 +38,8 @@ for _p in ("/content",):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import importlib
+import pot_events
+importlib.reload(pot_events)
 import physint_inproc_v9 as v9
 importlib.reload(v9)
 '''
@@ -64,7 +68,8 @@ md = """# GR00T Colab v9 — parallel LIBERO envs (env workers + one GPU policy)
 - **Same noise as v8.** Each episode has its own `torch.Generator(seed)` on the GPU, and GR00T's `sample_noise` is routed through it, which is the stream v8 got from `torch.manual_seed(seed)`.
 - **Fresh env per episode.** A reused LiberoEnv moves the stove fixture by about 1.2–1.4 cm on every hard reset, even with identical seeds. That made v8 episodes depend on which episodes ran before them. v9 rebuilds the env (about +1.5 s per episode), so each episode depends only on (task, seed, init_state_id).
 - Per-episode `TIMING` line and aggregate `THROUGHPUT` line (episodes/hour, env steps/s, GPU predict busy %).
-- Unchanged: hook `transformer_blocks.5` final denoise step, capture layout, seeds (probe 10000+k / init k; capture 20000+i / init i % n_init), RoPE verification (raises), failure detector.
+- **Per-pot failure detector** (`pot_events.py`, rule `pot0-v1`, shared with the offline relabel). `fail_kind` is one of lifted_not_placed / never_grasped / pot0_placed_other_failure / empty_grasp, judged on pot 0 (moka_pot_1) with lift / release / stove-placement events. v8's active-object label stays in `fail_kind_active` / `fail_t_active` (it marked pot 1's normal placement as a drop in 37/40 cases). Labels only: probe, early stopping and capture are unchanged.
+- Unchanged: hook `transformer_blocks.5` final denoise step, capture layout, seeds (probe 10000+k / init k; capture 20000+i / init i % n_init), RoPE verification (raises).
 """
 
 c1 = must_replace(cells[1], f'"{RUN_V8}"', f'"{RUN_V9}"')
@@ -154,6 +159,7 @@ with warnings.catch_warnings():
         if c["cell_type"] == "code":
             compile("".join(c["source"]), f"<v9 cell {i}>", "exec")
     compile(SRC9, "physint_inproc_v9.py", "exec")
+    compile(SRCPE, "pot_events.py", "exec")
     compile(hot, "v9_hotfix_cell.py", "exec")
 txt = out.read_text()
 assert RUN_V8 not in txt and "v8.probe(" not in txt and "v8.capture(" not in txt
