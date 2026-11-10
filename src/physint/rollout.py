@@ -2,8 +2,9 @@
 
 Episodes are paired on seed: baseline, each candidate feature, and each
 matched random-feature control see the same tasks. After each batch, a
-control stops when a sequential probability ratio test separates its
-discordant pairs from every candidate at level ``alpha``. Baseline and
+control stops only for efficacy: a one-sided SPRT on discordant pairs
+(control succeeds, candidate fails) crosses the family-wise boundary.
+A control that never crosses runs to the episode cap. Baseline and
 candidates always run the full ``--episodes`` budget. Reruns skip episode
 ids already in ``rollouts/episodes.parquet``.
 """
@@ -398,6 +399,7 @@ def declared_stop(
     min_episodes: int,
     batch_size: int,
     alpha: float,
+    n_controls: int,
 ) -> tuple[int, str]:
     """How many control episodes the schedule should have run, and why."""
     for end in batch_ends(episodes, min_episodes, batch_size):
@@ -408,6 +410,7 @@ def declared_stop(
             [flags[:end] for flags in candidate_flags],
             alpha,
             SPRT_LAMBDA,
+            n_controls=n_controls,
         ):
             return end, "sprt_separated"
     return episodes, "fixed_budget"
@@ -472,6 +475,7 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
             min_episodes=config.min_episodes,
             batch_size=config.batch_size,
             alpha=config.alpha,
+            n_controls=len(controls),
         )
         if length != present:
             raise ValueError(
@@ -550,7 +554,13 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
         log_lr = None
         threshold = None
         if arm.role == "control":
-            gap, log_lr, threshold = binding_sprt(flags, candidate_flags, config.alpha, SPRT_LAMBDA)
+            gap, log_lr, threshold = binding_sprt(
+                flags,
+                candidate_flags,
+                config.alpha,
+                SPRT_LAMBDA,
+                n_controls=len(controls),
+            )
         layer = None if arm.role == "baseline" else config.layer
         kind = None if arm.role == "baseline" else config.kind
         value = None if arm.role == "baseline" else config.value
@@ -737,7 +747,13 @@ def execute_rollouts(
                     if control_stop[arm.name] <= previous:
                         continue
                     control_flags = _flags(config, arm, end, by_id)
-                    if sprt_separated(control_flags, cand_flags, config.alpha, SPRT_LAMBDA):
+                    if sprt_separated(
+                        control_flags,
+                        cand_flags,
+                        config.alpha,
+                        SPRT_LAMBDA,
+                        n_controls=len(control_arms),
+                    ):
                         control_stop[arm.name] = end
             previous = end
     finally:

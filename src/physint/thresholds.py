@@ -55,8 +55,10 @@ DEFAULT_ROLLOUT_MIN_EPISODES = 8
 DEFAULT_ROLLOUT_BATCH = 4
 DEFAULT_ROLLOUT_WORKERS = 1
 
-# SPRT alternative for a discordant pair: P(control succeeds, candidate fails)
-# among discordant pairs is (1 + SPRT_LAMBDA) / 2. Any fixed lambda in (0, 1)
-# keeps the type I error of the stop rule at alpha; 0.6 powers the test for
-# an 0.80 one-sided discordant probability. It is not fit to a seed.
-SPRT_LAMBDA = 0.6
+# One-sided efficacy SPRT on discordant pairs (control succeeds, candidate fails).
+# theta1 = (1 + SPRT_LAMBDA) / 2 = 0.75. The run's alpha is family-wise across
+# the controls (Bonferroni). Family-wise power is SPRT_FAMILY_POWER, so a
+# control is designed at beta = 1 - power ** (1/K), about 0.022 for K=10.
+# There is no futility boundary.
+SPRT_LAMBDA = 0.5
+SPRT_FAMILY_POWER = 0.8
