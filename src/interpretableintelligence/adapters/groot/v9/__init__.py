@@ -1,8 +1,9 @@
 """Load v9 against this repo's v8 module.
 
 ``inproc_v9`` imports ``physint_inproc_v8`` and ``pot_events`` by bare module name.
+``ablate_v9`` imports ``physint_inproc_v8`` and ``physint_inproc_v9`` the same way.
 ``physint_inproc_v8`` is ``v8/inproc_v8.py`` here. ``pot_events`` is ``v9/pot_events.py``.
-Register both under the names v9 expects before importing ``inproc_v9``.
+Register those names before importing ``inproc_v9`` and ``ablate_v9``.
 """
 
 from __future__ import annotations
@@ -53,10 +54,11 @@ def _register_pot_events():
 _register_v8()
 _register_pot_events()
 
-from . import inproc_v9
+from . import ablate_v9, inproc_v9
 
 # Same module object whether code imports the package path or Jeff's filename.
 sys.modules["physint_inproc_v9"] = inproc_v9
+sys.modules["ablate_v9"] = ablate_v9
 verify_rotary_inv_freq = inproc_v9.verify_rotary_inv_freq
 
-__all__ = ["verify_rotary_inv_freq"]
+__all__ = ["ablate_v9", "verify_rotary_inv_freq"]

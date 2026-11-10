@@ -19,3 +19,15 @@ Command: `python tests/run_v9_parallel.py all`. Results are in `v9/box_test_resu
 - Kept: `fail_kind_active` / `fail_t_active` (v8's label) and `failure_details` (v8's details).
 - Fallback: tasks that are not a KITCHEN_SCENE8 moka-pots-on-the-stove task, or that have other object names, keep v8's label (`fail_rule` says so). The box was measured on 1028 only. 614 (view 0_0_100_0_0, initstate 229) is the same scene, so it gets the same box, but nobody has checked that against 614 successes yet. Labels only; probe, early stopping and capture data are unchanged.
 - Regression: `tests/test_pot_events.py` replays the 100 recorded traces and requires the relabel in `episodes.jsonl` exactly. It also requires the v8 active label to be reproduced, and no `lifted_not_placed` fail_t within 16 steps of a pot-1 release or placement.
+
+## SAE feature-ablation runner (2026-11-10, `ablate_v9.py`, plan `groot-ablate-plan-v1`)
+- **Run it:** set `%env GROOT_ABLATE_PLAN=default` and Run all, or paste `v9_hotfix_cell.py` into a live runtime. Cells 7–9 / the hotfix then run the embedded 1028 plan instead of probe + capture. Other knobs: `GROOT_ABLATE_ONLY` (e.g. `baseline,arm-A`), `GROOT_ABLATE_OUT`, `GROOT_ABLATE_SAE`. It resumes from the per-condition `episodes.jsonl`. Plan and folder layout: `/workspace/runs/groot-1028-v9-ablate/README.md`.
+- **run_pool changes (backwards compatible; the probe and capture paths are unchanged):**
+  - `next_job=` is a scheduler callback, asked whenever a slot is free.
+  - `editor=` is a forward-hook editor that gets `begin([job.meta["edit"] per batch row])` / `end()` around every predict. The editor is registered before the capture tap. Its per-episode stats end up on `Episode.edit_stats`.
+- **Hook:** `LatentAblator` edits only at the final denoise step by default (`denoise_steps: "final"`; the SAE was trained there). It raises if the block fires a number of times other than `num_inference_timesteps` per predict, or if the recon-only path changes a single bit.
+- **SPRT stop rule:** stop on H1 of either test, or on H0 of both (Sobel–Wald). With p0 0.56, p1 0.86 / 0.26 and α=β=0.05, the literal "stop when either test decides" could never return rise or fall, because the other test always accepts H0 first. That rule is kept as `stop_rule: either_test_decides` for checking.
+- **Tests:**
+  - `tests/test_ablate.py` (pytest) covers the hook arithmetic, the identity path, the final-step gating, the SPRT bounds, the paired delta, the schedule and resume.
+  - `tests/mock_v9_ablate.py` runs the hotfix end to end: run 1 is interrupted, then a torn line is resumed.
+  - `tests/mock_v9_nbcells_ablate.py` covers notebook ablation mode with `GROOT_ABLATE_ONLY`.

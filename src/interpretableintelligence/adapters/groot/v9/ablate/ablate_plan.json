@@ -1,0 +1,523 @@
+{
+ "schema": "groot-ablate-plan-v1",
+ "version": "ablate-v1",
+ "unvalidated": true,
+ "real": false,
+ "run_id": "groot-1028-v9-ablate",
+ "task": {
+  "suite": "plus",
+  "index": 1027,
+  "id": 1028,
+  "name": "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_view_0_0_100_356_4_initstate_0",
+  "n_init_states": 50
+ },
+ "hook": {
+  "module": "_groot_model.action_head.model.transformer_blocks.5",
+  "layer": 5,
+  "denoise_steps": "final",
+  "tokens": "all",
+  "stat_tokens": [
+   0,
+   1,
+   3,
+   4,
+   5,
+   6,
+   8,
+   9,
+   10,
+   12,
+   13,
+   14,
+   15,
+   17,
+   18,
+   19,
+   21,
+   22,
+   23,
+   25,
+   26,
+   27,
+   28,
+   30,
+   31,
+   32,
+   34,
+   35,
+   36,
+   37,
+   39,
+   40
+  ],
+  "rule": "out = x - norm_scale * sum_{i in S} f_i W_dec[i]; f = JumpReLU_thr(((x-norm_mu)/norm_scale - b_dec) W_enc + b_enc)",
+  "denoise_steps_note": "SAE trained on the final denoise step (index 3 of 4) only; edits applied there, at every policy call",
+  "tokens_note": "all 41 DiT tokens (state + 40 action tokens); SAE trained on 32 of 41 (stat_tokens), firing stats are on those"
+ },
+ "sae": {
+  "source": "embedded subset (or a path via GROOT_ABLATE_SAE)",
+  "subset_file": "sae_subset.safetensors",
+  "subset_sha256": "71341cd5d4dc4a771cbb5c8160cbe5ee3c3c519840b1fb9fb746a65faf2f83f9",
+  "full": "/workspace/runs/groot-1028-v9-n100/sae/weights.safetensors",
+  "full_sha256": "8c22abfc7a0d5bbbe27492f8160cbdc17a15edda6e3f1ec9ed9d7ea81516c4b9",
+  "norm_stats": "/workspace/runs/groot-1028-v9-n100/sae/norm_stats.safetensors",
+  "norm_stats_sha256": "f7fdd2b6b3107ad2be54d547d6d6600d73203d322973aa322a7b1df09d5385ba",
+  "latent_ids": [
+   10,
+   60,
+   553,
+   720,
+   754,
+   992,
+   1159,
+   1364,
+   1456,
+   1685,
+   1869,
+   2010,
+   2144,
+   2343,
+   2994,
+   3311,
+   3585,
+   5039,
+   5852,
+   6347,
+   6742,
+   6810,
+   6814,
+   7063,
+   7081,
+   7339,
+   7353,
+   7542,
+   7774,
+   8157
+  ],
+  "d_in": 1536,
+  "n_latents": 8192,
+  "k": 32,
+  "arch": "batchtopk",
+  "threshold": 0.01648076541259387,
+  "norm_scale": 269.1237487792969,
+  "normalisation": "x_n=(x-norm_mu)/norm_scale; norm_mu, norm_scale in weights.safetensors",
+  "config_hook": "_groot_model.action_head.model.transformer_blocks.5 output @ final denoise step (denoise_step_index=3 of 4), tokens = manifest token_indices (tok>=0 only)"
+ },
+ "seeds": {
+  "rule": "seed = 40000 + i; init_state_id = i % n_init_states",
+  "base": 40000,
+  "noise": "v9 per-episode torch.Generator(seed) routed into GR00T sample_noise"
+ },
+ "sprt": {
+  "p0": 0.56,
+  "p1_rise": 0.86,
+  "p1_fall": 0.26,
+  "alpha": 0.05,
+  "beta": 0.05,
+  "cap": 75,
+  "stop_rule": "h1_or_both_h0",
+  "stop_rule_note": "stop when rise or fall accepts H1, or both accept H0 (Sobel-Wald), or at cap. The literal 'stop when either test decides' can never declare a rise with these p0/p1/alpha/beta (the fall test always accepts H0 first); see ablate_v9.sequential_decision",
+  "source": "brief defaults: no p0/p1/alpha/beta given in Andrej's picker_onset_pot0 spec or candidates_final.json",
+  "p0_note": "0.56 = capture success rate 56/100 on seeds 20000-20099; the baseline condition measures it on 40000+i"
+ },
+ "labels": "pot_events rule pot0-v1 via physint_inproc_v9.label_episode",
+ "conditions": [
+  {
+   "id": "baseline",
+   "arm": "baseline",
+   "kind": "baseline",
+   "latents": null,
+   "n_max": 75,
+   "sprt": false,
+   "dir": "baseline"
+  },
+  {
+   "id": "recon-only",
+   "arm": "baseline",
+   "kind": "recon_only",
+   "latents": [],
+   "n_max": 8,
+   "sprt": false,
+   "dir": "baseline/recon-only"
+  },
+  {
+   "id": "A-cand-720",
+   "arm": "A",
+   "kind": "candidate",
+   "latents": [
+    720
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/cand-720"
+  },
+  {
+   "id": "B-cand-7081+5852",
+   "arm": "B",
+   "kind": "candidate",
+   "latents": [
+    7081,
+    5852
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/cand-7081+5852"
+  },
+  {
+   "id": "A-ctrl01-7774",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    7774
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl01-7774",
+   "control_for": [
+    720
+   ],
+   "control_rank": 1
+  },
+  {
+   "id": "B-ctrl01-1159+7339",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    1159,
+    7339
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl01-1159+7339",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 1
+  },
+  {
+   "id": "A-ctrl02-2343",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    2343
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl02-2343",
+   "control_for": [
+    720
+   ],
+   "control_rank": 2
+  },
+  {
+   "id": "B-ctrl02-3311+992",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    3311,
+    992
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl02-3311+992",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 2
+  },
+  {
+   "id": "A-ctrl03-6814",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    6814
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl03-6814",
+   "control_for": [
+    720
+   ],
+   "control_rank": 3
+  },
+  {
+   "id": "B-ctrl03-10+1456",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    10,
+    1456
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl03-10+1456",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 3
+  },
+  {
+   "id": "A-ctrl04-6810",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    6810
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl04-6810",
+   "control_for": [
+    720
+   ],
+   "control_rank": 4
+  },
+  {
+   "id": "B-ctrl04-1685+3311",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    1685,
+    3311
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl04-1685+3311",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 4
+  },
+  {
+   "id": "A-ctrl05-8157",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    8157
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl05-8157",
+   "control_for": [
+    720
+   ],
+   "control_rank": 5
+  },
+  {
+   "id": "B-ctrl05-7063+1685",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    7063,
+    1685
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl05-7063+1685",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 5
+  },
+  {
+   "id": "A-ctrl06-2010",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    2010
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl06-2010",
+   "control_for": [
+    720
+   ],
+   "control_rank": 6
+  },
+  {
+   "id": "B-ctrl06-754+6347",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    754,
+    6347
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl06-754+6347",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 6
+  },
+  {
+   "id": "A-ctrl07-1869",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    1869
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl07-1869",
+   "control_for": [
+    720
+   ],
+   "control_rank": 7
+  },
+  {
+   "id": "B-ctrl07-7542+553",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    7542,
+    553
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl07-7542+553",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 7
+  },
+  {
+   "id": "A-ctrl08-7353",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    7353
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl08-7353",
+   "control_for": [
+    720
+   ],
+   "control_rank": 8
+  },
+  {
+   "id": "B-ctrl08-6742+3585",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    6742,
+    3585
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl08-6742+3585",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 8
+  },
+  {
+   "id": "A-ctrl09-1364",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    1364
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl09-1364",
+   "control_for": [
+    720
+   ],
+   "control_rank": 9
+  },
+  {
+   "id": "B-ctrl09-60+2144",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    60,
+    2144
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl09-60+2144",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 9
+  },
+  {
+   "id": "A-ctrl10-5039",
+   "arm": "A",
+   "kind": "control",
+   "latents": [
+    5039
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-A/ctrl10-5039",
+   "control_for": [
+    720
+   ],
+   "control_rank": 10
+  },
+  {
+   "id": "B-ctrl10-553+2994",
+   "arm": "B",
+   "kind": "control",
+   "latents": [
+    553,
+    2994
+   ],
+   "n_max": 75,
+   "sprt": true,
+   "dir": "arm-B/ctrl10-553+2994",
+   "control_for": [
+    7081,
+    5852
+   ],
+   "control_rank": 10
+  }
+ ],
+ "schedule": {
+  "rule": "lockstep: each free env slot gets the next episode index of the active condition with the fewest episodes dispatched (ties: `order`); a condition stops dispatching once its SPRT stops or n_max is reached",
+  "order": [
+   "baseline",
+   "recon-only",
+   "A-cand-720",
+   "B-cand-7081+5852",
+   "A-ctrl01-7774",
+   "B-ctrl01-1159+7339",
+   "A-ctrl02-2343",
+   "B-ctrl02-3311+992",
+   "A-ctrl03-6814",
+   "B-ctrl03-10+1456",
+   "A-ctrl04-6810",
+   "B-ctrl04-1685+3311",
+   "A-ctrl05-8157",
+   "B-ctrl05-7063+1685",
+   "A-ctrl06-2010",
+   "B-ctrl06-754+6347",
+   "A-ctrl07-1869",
+   "B-ctrl07-7542+553",
+   "A-ctrl08-7353",
+   "B-ctrl08-6742+3585",
+   "A-ctrl09-1364",
+   "B-ctrl09-60+2144",
+   "A-ctrl10-5039",
+   "B-ctrl10-553+2994"
+  ]
+ },
+ "provenance": {
+  "candidates_final": "/workspace/runs/groot-1028-v9-n100/candidates_final.json",
+  "candidates_final_sha256": "64a3c8d0b7e86ba1e31dee2dfcecab6f21008e34cfa41bb999389d78e413383b",
+  "picker": "vjepa-interp/pick_groot_pot0.py",
+  "picker_commit": "146ee8a",
+  "arm_B_control_pairing": "B control j = (matched_random_controls[7081][j], matched_random_controls[5852][j])"
+ }
+}

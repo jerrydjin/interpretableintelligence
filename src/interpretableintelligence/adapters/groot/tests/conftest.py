@@ -1,5 +1,49 @@
-"""Register Jeff's module names before tests that load v9 from disk."""
+"""Register Jeff's module names before tests that load v9 from disk.
+
+``test_ablate.py`` imports ``ablate_v9`` after putting ``/workspace/groot-colab``
+on ``sys.path``, and a few cases read ``/workspace/runs``. CI has neither tree.
+Importing this package registers the ``ablate_v9`` and ``physint_inproc_v9``
+aliases, so that bare import resolves here. Cases that open a missing run folder
+skip themselves, the same way ``test_pot_events.py`` does. If the alias is not
+in place and those paths are missing, collection skips the module instead of
+erroring.
+
+``mock_v9_ablate.py`` and ``mock_v9_nbcells_ablate.py`` are drivers, not tests.
+"""
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+import pytest
+
 import interpretableintelligence.adapters.groot.v9  # noqa: F401
+
+_MOCK_DRIVERS = {"mock_v9_ablate.py", "mock_v9_nbcells_ablate.py"}
+_COLAB = Path("/workspace/groot-colab")
+_RUNS = Path("/workspace/runs")
+
+
+def pytest_ignore_collect(collection_path, config):
+    if Path(collection_path).name in _MOCK_DRIVERS:
+        return True
+    return None
+
+
+def pytest_pycollect_makemodule(module_path, parent):
+    """Skip ``test_ablate.py`` when its Colab and run paths are missing and the alias cannot satisfy the import."""
+    path = Path(module_path)
+    if path.name != "test_ablate.py":
+        return None
+    if (_COLAB.is_dir() and _RUNS.is_dir()) or "ablate_v9" in sys.modules:
+        return None
+
+    class _SkipAblade(pytest.Module):
+        def collect(self):
+            pytest.skip(
+                "ablate_v9 is not importable and /workspace/groot-colab or /workspace/runs is absent",
+                allow_module_level=True,
+            )
+
+    return _SkipAblade.from_parent(parent, path=path)

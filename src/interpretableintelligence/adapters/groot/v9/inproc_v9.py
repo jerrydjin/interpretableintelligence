@@ -413,6 +413,7 @@ class _Slot:
         self.n_predict = 0
         self.tm = {"obs_pre_s": 0.0, "policy_s": 0.0, "post_s": 0.0, "env_s": 0.0, "sim_read_s": 0.0, "reset_s": 0.0}
         self.sent = None
+        self.edit_acc = None  # per-episode stats from an `editor` (ablate_v9.LatentAblator), if any
         self.t0 = time.time()
         self.info = {}
         self.success = False
@@ -495,8 +496,16 @@ class PoolStats:
 def run_pool(ctx, jobs: list[Job], *, on_done: Callable[[Job, Episode], None],
              on_error: Callable[[Job, str], None] | None = None, capture: bool = False,
              n_envs: int | None = None, keep_going: Callable[[], bool] = lambda: True,
-             batch_predict: str | None = None, label: str = "") -> PoolStats:
-    """Run `jobs` on a pool of env workers; on_done(job, Episode) is called in the main process."""
+             batch_predict: str | None = None, label: str = "",
+             next_job: Callable[[], Job | None] | None = None, editor: Any = None) -> PoolStats:
+    """Run `jobs` on a pool of env workers; on_done(job, Episode) is called in the main process.
+
+    next_job: optional scheduler, asked for a new Job whenever a slot is free and `jobs` is empty (None = nothing
+    to start right now; idle slots ask again after every event, the pool ends when all slots are idle).
+    editor: optional forward-hook editor on transformer_blocks.{layer} (ablate_v9.LatentAblator). Before each
+    predict it gets begin([job.meta.get("edit") per batch row]); end() returns per-row stats, which are
+    accumulated per episode and attached as Episode.edit_stats.
+    """
     from lerobot.processor import policy_output_to_transition, transition_to_policy_action  # noqa: PLC0415
 
     policy, procs = ctx.policy, ctx.procs
@@ -510,25 +519,31 @@ def run_pool(ctx, jobs: list[Job], *, on_done: Callable[[Job, Episode], None],
     dev = next(policy.parameters()).device
     q = int(policy._action_queue_steps)
     jobs_q = deque(jobs)
-    N = max(1, min(int(n_envs or getattr(ctx, "n_envs", None) or default_n_envs()), len(jobs_q) or 1))
+    N_req = int(n_envs or getattr(ctx, "n_envs", None) or default_n_envs())
+    N = max(1, N_req if next_job is not None else min(N_req, len(jobs_q) or 1))
     mode = str(batch_predict if batch_predict is not None else getattr(ctx, "batch_predict", "0"))
     stats = PoolStats(n_envs=N, batch_mode="per_env", t_start=time.time())
-    if not jobs_q:
+    if not jobs_q and next_job is None:
         return stats
     log = ctx.log
     on_error = on_error or (lambda job, err: log(f"[v9] {label} job {job.meta} ERROR {err}"))
     ctxmp = mp.get_context("spawn")
     slots = [_Slot(i) for i in range(N)]
+    if editor is not None:  # registered before the tap, so a capture would record the edited block output
+        editor.install(policy, ctx.layer)
     tap = BlockTap(policy, ctx.layer).install() if capture else None
     keys_checked = [False]
     verify_pending = mode == "1" and N > 1
 
     def start_next(s: _Slot, job: Job | None = None):
         if job is None:
-            if not jobs_q or not keep_going():
+            if not keep_going():
                 s.state, s.job = "idle", None
                 return
-            job = jobs_q.popleft()
+            job = jobs_q.popleft() if jobs_q else (next_job() if next_job is not None else None)
+            if job is None:
+                s.state, s.job = "idle", None
+                return
         s.begin(job, dev)
         policy.reset(); pre.reset(); post.reset()  # stateless for this checkpoint; kept for parity with v8
         s.conn.send(("reset", job.key, int(job.seed), int(job.init_state_id), job.max_steps))
@@ -559,6 +574,7 @@ def run_pool(ctx, jobs: list[Job], *, on_done: Callable[[Job, Episode], None],
                      seed=int(s.job.seed), init_state_id=int(s.job.init_state_id), task_name=s.info["task_name"],
                      n_chunks=len(s.chunks), first_action=s.first, language=s.info["language"],
                      language_suite=s.info["language_suite"], timing=timing)
+        ep.edit_stats = editor.summarize(s.edit_acc) if editor is not None else None
         stats.episodes += 1
         stats.env_steps += n
         print(f"TIMING {label} {s.job.meta} worker={s.i} success={ep.success} n_steps={n} wall_s={wall} "
@@ -660,7 +676,14 @@ def run_pool(ctx, jobs: list[Job], *, on_done: Callable[[Job, Episode], None],
             groups = [[p] for p in prepped]
         for grp in groups:
             tc = time.perf_counter()
-            out, acts = predict_group(policy, [o for _s, o in grp], [s.gen for s, _o in grp], tap)
+            if editor is not None:
+                editor.begin([s.job.meta.get("edit") for s, _o in grp])
+            try:
+                out, acts = predict_group(policy, [o for _s, o in grp], [s.gen for s, _o in grp], tap)
+                est = editor.end() if editor is not None else None
+            finally:
+                if editor is not None:
+                    editor.disarm()
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             dt = time.perf_counter() - tc
@@ -669,6 +692,8 @@ def run_pool(ctx, jobs: list[Job], *, on_done: Callable[[Job, Episode], None],
             for b, (s, _o) in enumerate(grp):
                 s.tm["policy_s"] += dt / len(grp)
                 s.n_predict += 1
+                if est is not None:
+                    s.edit_acc = editor.accumulate(s.edit_acc, est[b])
                 if acts is not None:
                     s.chunks.append((int(s.t), acts[b]))
                 td = time.perf_counter()
@@ -704,9 +729,15 @@ def run_pool(ctx, jobs: list[Job], *, on_done: Callable[[Job, Episode], None],
             need = [s for s in slots if s.state == "need_predict"]
             if need:
                 do_predicts(need)
+            if next_job is not None:  # a scheduler may have new work once results came in
+                for s in slots:
+                    if s.state == "idle":
+                        start_next(s)
     finally:
         if tap is not None:
             tap.remove()
+        if editor is not None:
+            editor.remove()
         for s in slots:
             try:
                 if s.conn is not None:
