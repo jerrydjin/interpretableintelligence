@@ -4,7 +4,6 @@ import json
 import shutil
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from physint.cli import app
@@ -15,37 +14,8 @@ DECOY = {"flicker", "band", "speckle"}
 runner = CliRunner()
 
 
-@pytest.fixture(scope="module")
-def demo_run(tmp_path_factory) -> Path:
-    root = tmp_path_factory.mktemp("physint")
-    clips = root / "clips"
-    out = root / "runs" / "demo"
-    generated = runner.invoke(app, ["generate-clips", "--out", str(clips), "--n", "30", "--seed", "0"])
-    assert generated.exit_code == 0, generated.output
-    ran = runner.invoke(
-        app,
-        [
-            "run",
-            "fake",
-            "--clips",
-            str(clips),
-            "--layer",
-            "16",
-            "--seed",
-            "0",
-            "--heldout-frac",
-            "0.2",
-            "--out",
-            str(out),
-        ],
-    )
-    assert ran.exit_code == 0, ran.output
-    checked = runner.invoke(app, ["validate", str(out)])
-    assert checked.exit_code == 0, checked.output
-    return out
-
-
-def test_planted_causal_features_are_real_and_decoys_are_not(demo_run: Path):
+def test_planted_causal_features_are_real_and_decoys_are_not(demo):
+    demo_run = demo.run
     scoreboard = json.loads((demo_run / "scoreboard.json").read_text())
     features = scoreboard["features"]
     rendered = json.dumps(features, indent=2)
@@ -76,9 +46,9 @@ def test_planted_causal_features_are_real_and_decoys_are_not(demo_run: Path):
     )
 
 
-def test_validate_rejects_a_loosened_real_flag(demo_run: Path, tmp_path: Path):
+def test_validate_rejects_a_loosened_real_flag(demo, tmp_path: Path):
     copied = tmp_path / "demo"
-    shutil.copytree(demo_run, copied)
+    shutil.copytree(demo.run, copied)
     scoreboard_path = copied / "scoreboard.json"
     scoreboard = json.loads(scoreboard_path.read_text())
     for feature in scoreboard["features"]:

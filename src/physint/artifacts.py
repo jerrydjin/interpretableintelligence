@@ -14,6 +14,7 @@ ROWS_PER_SHARD = 50_000
 
 FEATURE_ACT_COLUMNS = ("feature_id", "clip_id", "window", "t", "h", "w", "value")
 CLIP_EFFECT_COLUMNS = ("feature_id", "clip_id", "window", "t", "effect", "effect_kind")
+ATTRIBUTION_COLUMNS = ("feature_id", "clip_id", "score")
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -92,6 +93,18 @@ def write_feature_acts(path: Path, rows: dict[str, list]) -> None:
             "value": pa.array(rows["value"], type=pa.float32()),
         }
     )
+    pq.write_table(table, path)
+
+
+def write_attribution(path: Path, rows: dict[str, list]) -> None:
+    table = pa.table(
+        {
+            "feature_id": pa.array(rows["feature_id"], type=pa.int32()),
+            "clip_id": pa.array(rows["clip_id"], type=pa.string()),
+            "score": pa.array(rows["score"], type=pa.float32()),
+        }
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(table, path)
 
 
