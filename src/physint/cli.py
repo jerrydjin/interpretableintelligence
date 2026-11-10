@@ -78,6 +78,13 @@ def run(
             help="Ablate and run random-feature controls only for the K features with the largest attribution. Omit to score every feature.",
         ),
     ] = None,
+    extra_effects: Annotated[
+        str,
+        typer.Option(
+            "--extra-effects",
+            help="Comma-separated clip_effects modes to add: loss, group. The cosine scoreboard stays.",
+        ),
+    ] = "",
     tiny: Annotated[
         bool,
         typer.Option(
@@ -109,6 +116,7 @@ def run(
     A stage whose outputs are already valid is skipped. The run prints a cost report
     from measured stage time. Pass --gpu-cost-per-hour to price an hour of footage.
     """
+    modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
     try:
         execute_pipeline(
             adapter_name=adapter,
@@ -119,6 +127,7 @@ def run(
             heldout_frac=heldout_frac,
             tiny=tiny,
             prefilter=prefilter,
+            extra_effects=modes,
             gpu_cost_per_hour=gpu_cost_per_hour,
             score=not no_score,
             serve=not no_serve,

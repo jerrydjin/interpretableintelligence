@@ -49,8 +49,10 @@ from physint.labelers import FakeCueLabeller, NullLabeller
 from physint.sae import SAEConfig, load_sae, save_sae, train_sae_fetched
 from physint.score import (
     ablate_edit,
+    check_extra_effects,
     cosine_distance,
     estimate_effects,
+    extra_effect_rows,
     predictor_sse,
     splice_edit,
 )
@@ -151,6 +153,7 @@ def execute_pipeline(
     heldout_frac: float = DEFAULT_HELDOUT_FRAC,
     tiny: bool = False,
     prefilter: int | None = None,
+    extra_effects: tuple[str, ...] = (),
     gpu_cost_per_hour: float | None = None,
     score: bool = True,
     serve: bool = True,
@@ -169,6 +172,7 @@ def execute_pipeline(
     if prefilter is not None and int(prefilter) < 1:
         raise ValueError(f"prefilter K must be >= 1, got {prefilter}")
     prefilter = None if prefilter is None else int(prefilter)
+    extra_effects = check_extra_effects(extra_effects)
 
     torch.set_num_threads(1)
     device = pick_device()
@@ -243,6 +247,7 @@ def execute_pipeline(
         "score",
         stats_sha=file_sha256(stats_path),
         prefilter=prefilter,
+        extra_effects=list(extra_effects),
     )
     scoreboard = _read_scoreboard(out)
     if not score:
@@ -268,6 +273,7 @@ def execute_pipeline(
                 log,
                 tiny=tiny,
                 prefilter=prefilter,
+                extra_effects=extra_effects,
             )
             measured["rows"] = effect_rows
             measured["tokens"] = int(read_json(out / "acts" / "stream" / "meta.json")["n"])
@@ -548,6 +554,7 @@ def _score(
     log,
     tiny: bool = False,
     prefilter: int | None = None,
+    extra_effects: tuple[str, ...] = (),
 ) -> tuple[dict, int]:
     stats = json.loads((out / "features" / "stats.json").read_text(encoding="utf-8"))
     manifest = read_json(out / "manifest.json")
@@ -649,6 +656,17 @@ def _score(
             only=selected,
         )
         ablation_seconds = time.perf_counter() - ablation_started
+        if extra_effects:
+            clips = [load_clip(item) for item in meta]
+            features = _feature_matrix(out / "acts", model, device)
+            ablated: set[tuple[str, int]] = set()
+            for item in meta:
+                clip_id = item["clip_id"]
+                ids = selected if selected is not None else chosen[clip_id]
+                for feature_id in ids:
+                    ablated.add((clip_id, int(feature_id)))
+            extra = extra_effect_rows(adapter, model, clips, features, ablated, extra_effects, log)
+            effect_writer.add(**extra)
         effects = effect_writer.close()
     except Exception:
         effect_writer.abort()
@@ -1371,6 +1389,21 @@ def _chunk_rows(n_features: int, d_model: int) -> int:
     by_feature = max(1, 250_000 // max(int(n_features), 1))
     by_width = max(1, 1_000_000 // max(int(d_model), 1))
     return max(1, min(STREAM_CHUNK, by_feature, by_width))
+
+
+def _feature_matrix(acts_dir: Path, model, device: torch.device) -> np.ndarray:
+    """Dense SAE codes in capture order. Group loss only needs co-occurrence."""
+    chunks: list[np.ndarray] = []
+    with RowSource(acts_dir) as source:
+        width = _chunk_rows(model.n_features, source.d_model)
+        for start, stop in source.chunks(width):
+            acts = np.array(source.rows[start:stop], dtype=np.float32, copy=True)
+            with torch.no_grad():
+                encoded = model.encode(torch.from_numpy(acts).to(device)).detach().cpu().numpy()
+            chunks.append(np.asarray(encoded, dtype=np.float32))
+    if not chunks:
+        raise RuntimeError("no activations to score extra effects")
+    return np.concatenate(chunks, axis=0)
 
 
 class _measure:

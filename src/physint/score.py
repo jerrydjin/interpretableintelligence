@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -10,10 +11,17 @@ import torch
 
 from physint.adapters.base import Adapter, Clip
 from physint.sae import SAE
-from physint.stats import pearson, percentile_le
+from physint.stats import monte_carlo_pvalue, pearson, percentile_le
 from physint.thresholds import (
     COSINE_EPS,
     DEAD_ACT_EPS,
+    EFFECT_ALPHA,
+    EFFECT_KIND_GROUP_LOSS_VIDEO,
+    EFFECT_KIND_GROUP_LOSS_WINDOW,
+    EFFECT_KIND_LOSS_VIDEO,
+    EFFECT_KIND_LOSS_WINDOW,
+    EFFECT_POS_EPS,
+    GROUP_ABLATION_SIZE,
     N_RANDOM_FEATURES,
     PATTERN_ABSENT_MAX_CORR,
     TOP_K_EXAMPLES,
@@ -325,6 +333,326 @@ def random_percentile(
     return percentile_le(real_effect, samples)
 
 
+@dataclass
+class EffectScore:
+    """Loss change from ablating one feature or a co-active group.
+
+    ``effect`` is edited masked prediction loss minus the clean loss, over
+    every in-scope window (the whole video, unless ``effect_kind`` says
+    window). Positive means the ablation made the model's own predictions
+    worse. ``real`` requires that increase to clear dust and to beat matched
+    random controls of the same size and activation mass at ``EFFECT_ALPHA``.
+    Ties count against the candidate, so a flat zero does not pass.
+    """
+
+    feature_ids: tuple[int, ...]
+    effect: float
+    random_percentile: float
+    p_value: float
+    n_random: int
+    real: bool
+    control_effects: np.ndarray
+    effect_kind: str
+
+    def controls_are_real(self) -> np.ndarray:
+        """True where a matched control's loss change reaches this candidate."""
+        baseline = _snap_effect(self.effect)
+        snapped = np.array([_snap_effect(float(value)) for value in self.control_effects])
+        return snapped >= baseline
+
+
+def _snap_effect(effect: float) -> float:
+    if not math.isfinite(effect):
+        return float(effect)
+    if abs(effect) < EFFECT_POS_EPS:
+        return 0.0
+    return float(effect)
+
+
+def loss_effect_kind(grouped: bool, scope: str) -> str:
+    if scope not in {"video", "window"}:
+        raise ValueError(f"scope must be video or window, got {scope!r}")
+    if grouped and scope == "video":
+        return EFFECT_KIND_GROUP_LOSS_VIDEO
+    if grouped and scope == "window":
+        return EFFECT_KIND_GROUP_LOSS_WINDOW
+    if scope == "video":
+        return EFFECT_KIND_LOSS_VIDEO
+    return EFFECT_KIND_LOSS_WINDOW
+
+
+def ablate_features_edit(sae: SAE, feature_ids: list[int] | tuple[int, ...]):
+    """Subtract ``f_i * decoder_i`` for every id. Single-feature ``ablate_edit`` is the k=1 case."""
+    ids = [int(feature_id) for feature_id in feature_ids]
+    if not ids:
+        raise ValueError("need at least one feature to ablate")
+    columns = sae.W_dec[:, ids]
+
+    def edit(acts: torch.Tensor, columns: torch.Tensor = columns, ids: list[int] = ids) -> torch.Tensor:
+        flat = acts.reshape(-1, acts.shape[-1])
+        features = sae.encode(flat)
+        contrib = features[:, ids] @ columns.to(device=flat.device, dtype=flat.dtype).T
+        return (flat - contrib).reshape_as(acts)
+
+    return edit
+
+
+def coactive_group(
+    features: np.ndarray,
+    k: int = GROUP_ABLATION_SIZE,
+    threshold: float = DEAD_ACT_EPS,
+) -> list[int]:
+    """k features that fire on the same tokens.
+
+    Starts from the pair with the most overlapping firings, then adds the
+    feature that co-fires most with the set already chosen. Mass breaks ties
+    only when nothing fires.
+    """
+    matrix = np.asarray(features)
+    if matrix.ndim != 2:
+        raise ValueError(f"features must be [n_tokens, n_features], got {matrix.shape}")
+    n_features = int(matrix.shape[1])
+    if n_features == 0 or k <= 0:
+        return []
+    k = min(int(k), n_features)
+    if k == 1:
+        return [int(np.argmax(matrix.sum(axis=0)))]
+    binary = matrix > threshold
+    if not bool(binary.any()):
+        order = np.argsort(-matrix.sum(axis=0))
+        return [int(index) for index in order[:k]]
+    co = binary.T.astype(np.float64) @ binary
+    off = co.copy()
+    np.fill_diagonal(off, -np.inf)
+    left, right = np.unravel_index(int(np.argmax(off)), off.shape)
+    chosen = [int(left), int(right)]
+    while len(chosen) < k:
+        scores = co[chosen].sum(axis=0)
+        scores[chosen] = -np.inf
+        chosen.append(int(np.argmax(scores)))
+    return chosen
+
+
+def _iter_scope(adapter: Adapter, clips: list[Clip], window_index: int | None):
+    for clip in clips:
+        for window in adapter.windows(clip):
+            if window_index is None or window.index == window_index:
+                yield clip, window
+
+
+def _masked_loss(adapter: Adapter, clips: list[Clip], edit, window_index: int | None) -> float:
+    """Mean masked prediction loss. Same reduction as ``mean_predictor_loss``."""
+    sse = 0.0
+    count = 0
+    with torch.no_grad():
+        for clip, window in _iter_scope(adapter, clips, window_index):
+            pred, target = adapter.predict_masked(clip, window, edit=edit)
+            sse += float(((pred - target) ** 2).sum())
+            count += int(pred.shape[0])
+    if count == 0:
+        raise RuntimeError("no masked tokens to score")
+    return sse / count
+
+
+def _scope_rows(tokens: list[Token], clips: list[Clip], window_index: int | None) -> list[int]:
+    clip_ids = {clip.clip_id for clip in clips}
+    rows = []
+    for index, token in enumerate(tokens):
+        if token.clip_id not in clip_ids:
+            continue
+        if window_index is not None and token.window != window_index:
+            continue
+        rows.append(index)
+    return rows
+
+
+def _control_loss(
+    adapter: Adapter,
+    clips: list[Clip],
+    scope_tokens: list[Token],
+    values_per_feature: list[np.ndarray],
+    norms: list[float],
+    rng: np.random.Generator,
+    window_index: int | None,
+    d_model: int,
+    device: torch.device,
+) -> float:
+    deltas: dict[tuple[str, int], torch.Tensor] = {}
+    spatial: dict[tuple[str, int], tuple[int, int]] = {}
+    for clip, window in _iter_scope(adapter, clips, window_index):
+        shape = tuple(int(size) for size in adapter.mask(window).shape)
+        key = (clip.clip_id, window.index)
+        deltas[key] = torch.zeros(*shape, d_model, dtype=torch.float32, device=device)
+        spatial[key] = (shape[1], shape[2])
+    n_scope = len(scope_tokens)
+    clip_ids = np.array([token.clip_id for token in scope_tokens], dtype=object)
+    windows = np.array([token.window for token in scope_tokens], dtype=np.int64)
+    ts = np.array([token.t for token in scope_tokens], dtype=np.int64)
+    hs = np.array([token.h for token in scope_tokens], dtype=np.int64)
+    ws = np.array([token.w for token in scope_tokens], dtype=np.int64)
+    for values, dec_norm in zip(values_per_feature, norms, strict=True):
+        if values.size == 0 or n_scope == 0:
+            continue
+        if values.size > n_scope:
+            raise ValueError(f"feature fires on {values.size} tokens but the scope has {n_scope}")
+        choice = rng.choice(n_scope, size=values.size, replace=False)
+        shuffled = np.asarray(rng.permutation(values), dtype=np.float32)
+        gen = torch.Generator(device="cpu")
+        gen.manual_seed(int(rng.integers(0, 2**31 - 1)))
+        direction = torch.randn(d_model, generator=gen, dtype=torch.float32)
+        direction = direction / direction.norm().clamp(min=1e-8) * float(dec_norm)
+        direction = direction.to(device)
+        chosen_clip = clip_ids[choice]
+        chosen_window = windows[choice]
+        for key, delta in deltas.items():
+            selected = (chosen_clip == key[0]) & (chosen_window == key[1])
+            if not np.any(selected):
+                continue
+            height, width = spatial[key]
+            flat_index = (
+                ts[choice][selected] * (height * width) + hs[choice][selected] * width + ws[choice][selected]
+            )
+            index = torch.as_tensor(np.ascontiguousarray(flat_index), dtype=torch.long, device=device)
+            weight = torch.as_tensor(np.ascontiguousarray(shuffled[selected]), dtype=torch.float32, device=device)
+            delta.reshape(-1, d_model).index_add_(0, index, -(weight[:, None] * direction))
+
+    sse = 0.0
+    count = 0
+    with torch.no_grad():
+        for clip, window in _iter_scope(adapter, clips, window_index):
+            delta = deltas[(clip.clip_id, window.index)]
+
+            def edit(acts: torch.Tensor, delta: torch.Tensor = delta) -> torch.Tensor:
+                return acts + delta.to(device=acts.device, dtype=acts.dtype)
+
+            pred, target = adapter.predict_masked(clip, window, edit=edit)
+            sse += float(((pred - target) ** 2).sum())
+            count += int(pred.shape[0])
+    if count == 0:
+        raise RuntimeError("no masked tokens to score")
+    return sse / count
+
+
+def score_loss_ablation(
+    *,
+    adapter: Adapter,
+    sae: SAE,
+    feature_ids: list[int] | tuple[int, ...],
+    tokens: list[Token],
+    features: np.ndarray,
+    clips: list[Clip],
+    seed: int,
+    n_random: int = N_RANDOM_FEATURES,
+    scope: str = "video",
+    window_index: int | None = None,
+    alpha: float = EFFECT_ALPHA,
+) -> EffectScore:
+    """Ablate features over the full video, or one window, and compare to matched controls.
+
+    Controls keep each feature's decoder norm and its multiset of positive
+    activations, then use a random direction and random in-scope positions.
+    The effect is the change in the model's own masked prediction loss.
+    """
+    ids = [int(feature_id) for feature_id in feature_ids]
+    if not ids:
+        raise ValueError("score_loss_ablation requires at least one feature")
+    if scope not in {"video", "window"}:
+        raise ValueError(f"scope must be video or window, got {scope!r}")
+    if scope == "window" and window_index is None:
+        raise ValueError("window scope requires window_index")
+    if scope == "video":
+        window_index = None
+    if n_random < 1:
+        raise ValueError(f"n_random must be positive, got {n_random}")
+    matrix = np.asarray(features)
+    if matrix.ndim != 2 or matrix.shape[0] != len(tokens):
+        raise ValueError(
+            f"features must be [n_tokens, n_features] aligned with tokens, got {matrix.shape} vs {len(tokens)}"
+        )
+
+    scoped = None if scope == "video" else window_index
+    clean = _masked_loss(adapter, clips, edit=None, window_index=scoped)
+    edited = _masked_loss(adapter, clips, edit=ablate_features_edit(sae, ids), window_index=scoped)
+    effect = float(edited - clean)
+
+    scope_rows = _scope_rows(tokens, clips, scoped)
+    scope_tokens = [tokens[index] for index in scope_rows]
+    values_per_feature: list[np.ndarray] = []
+    norms: list[float] = []
+    decoder = sae.W_dec[:, ids[0]].detach()
+    d_model = int(decoder.shape[0])
+    device = decoder.device
+    for feature_id in ids:
+        column = matrix[np.array(scope_rows, dtype=np.int64), feature_id] if scope_rows else np.zeros(0)
+        values_per_feature.append(np.asarray(column[column > DEAD_ACT_EPS], dtype=np.float64))
+        weight = sae.W_dec[:, feature_id].detach()
+        norms.append(float(weight.norm().clamp(min=1e-8)))
+
+    rng = np.random.default_rng(np.random.SeedSequence([int(seed), *[int(feature_id) for feature_id in ids], 29]))
+    controls = np.empty(n_random, dtype=np.float64)
+    for trial in range(n_random):
+        edited_control = _control_loss(
+            adapter,
+            clips,
+            scope_tokens,
+            values_per_feature,
+            norms,
+            rng,
+            scoped,
+            d_model,
+            device,
+        )
+        controls[trial] = float(edited_control - clean)
+
+    snapped_effect = _snap_effect(effect)
+    snapped_controls = np.array([_snap_effect(float(value)) for value in controls], dtype=np.float64)
+    p_value = monte_carlo_pvalue(snapped_effect, snapped_controls)
+    real = bool(snapped_effect > 0.0 and p_value <= alpha)
+    return EffectScore(
+        feature_ids=tuple(ids),
+        effect=effect,
+        random_percentile=percentile_le(snapped_effect, snapped_controls),
+        p_value=p_value,
+        n_random=n_random,
+        real=real,
+        control_effects=controls,
+        effect_kind=loss_effect_kind(grouped=len(ids) > 1, scope=scope),
+    )
+
+
+def loss_frame_rows(
+    adapter: Adapter,
+    clips: list[Clip],
+    edit,
+    feature_ids: list[int] | tuple[int, ...],
+    effect_kind: str,
+) -> dict[str, list]:
+    """Per-frame masked loss increase. The video score is the token-weighted mean."""
+    rows: dict[str, list] = {key: [] for key in ("feature_id", "clip_id", "window", "t", "effect", "effect_kind")}
+    ids = [int(feature_id) for feature_id in feature_ids]
+    with torch.no_grad():
+        for clip in clips:
+            for window in adapter.windows(clip):
+                clean_pred, clean_target = adapter.predict_masked(clip, window)
+                edited_pred, edited_target = adapter.predict_masked(clip, window, edit=edit)
+                coords = adapter.mask(window).detach().cpu().nonzero(as_tuple=False)
+                clean_tok = ((clean_pred - clean_target) ** 2).sum(dim=-1).detach().cpu()
+                edit_tok = ((edited_pred - edited_target) ** 2).sum(dim=-1).detach().cpu()
+                delta = edit_tok - clean_tok
+                n_t = int(adapter.mask(window).shape[0])
+                for t in range(n_t):
+                    selected = coords[:, 0] == t
+                    value = float(delta[selected].mean()) if int(selected.sum()) else 0.0
+                    for feature_id in ids:
+                        rows["feature_id"].append(feature_id)
+                        rows["clip_id"].append(clip.clip_id)
+                        rows["window"].append(int(window.index))
+                        rows["t"].append(t)
+                        rows["effect"].append(value)
+                        rows["effect_kind"].append(effect_kind)
+    return rows
+
+
 def absent_in_random_init(pattern: np.ndarray, random_patterns: np.ndarray) -> bool:
     """True when no random-init SAE feature reproduces this firing pattern.
 
@@ -347,3 +675,51 @@ def absent_in_random_init(pattern: np.ndarray, random_patterns: np.ndarray) -> b
             continue
         best = max(best, pearson(pattern, other))
     return bool(best < PATTERN_ABSENT_MAX_CORR)
+
+
+EXTRA_EFFECT_MODES = ("loss", "group")
+
+
+def check_extra_effects(extra_effects: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """Reject anything other than ``loss`` and ``group`` before a run starts."""
+    modes = tuple(str(part) for part in extra_effects)
+    unknown = set(modes) - set(EXTRA_EFFECT_MODES)
+    if unknown:
+        raise ValueError(
+            f"extra_effects must be a subset of {sorted(EXTRA_EFFECT_MODES)}, got {sorted(unknown)}"
+        )
+    return modes
+
+
+def extra_effect_rows(
+    adapter: Adapter,
+    sae: SAE,
+    clips: list[Clip],
+    features: np.ndarray,
+    ablated: set[tuple[str, int]],
+    modes: tuple[str, ...],
+    log,
+) -> dict[str, list]:
+    """Full-video loss rows. The cosine scoreboard path does not read these."""
+    rows: dict[str, list] = {key: [] for key in ("feature_id", "clip_id", "window", "t", "effect", "effect_kind")}
+    if "loss" in modes:
+        log("full-video single-feature loss")
+        by_feature: dict[int, list] = {}
+        for clip in clips:
+            for feature_id in range(features.shape[1]):
+                if (clip.clip_id, feature_id) in ablated:
+                    by_feature.setdefault(feature_id, []).append(clip)
+        for feature_id, targets in by_feature.items():
+            edit = ablate_edit(sae, feature_id)
+            part = loss_frame_rows(adapter, targets, edit, [feature_id], loss_effect_kind(False, "video"))
+            for key in rows:
+                rows[key].extend(part[key])
+    if "group" in modes:
+        log("full-video group loss")
+        group = coactive_group(features, k=min(GROUP_ABLATION_SIZE, features.shape[1]))
+        if group:
+            edit = ablate_features_edit(sae, group)
+            part = loss_frame_rows(adapter, clips, edit, group, loss_effect_kind(True, "video"))
+            for key in rows:
+                rows[key].extend(part[key])
+    return rows

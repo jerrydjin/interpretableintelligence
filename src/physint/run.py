@@ -30,7 +30,7 @@ from physint.device import pick_device
 from physint.labelers import FakeCueLabeller, cue_patterns
 from physint.pipeline import execute_pipeline
 from physint.sae import SAEConfig, load_sae, save_sae, train_sae
-from physint.score import capture_activations
+from physint.score import capture_activations, check_extra_effects, extra_effect_rows as _extra_effect_rows
 from physint.split import assign_split
 from physint.thresholds import (
     DEFAULT_HELDOUT_FRAC,
@@ -50,11 +50,13 @@ def execute_run(
     heldout_frac: float = DEFAULT_HELDOUT_FRAC,
     tiny: bool = False,
     prefilter: int | None = None,
+    extra_effects: tuple[str, ...] = (),
     log=print,
 ) -> dict:
     """Run capture, SAE, features, and score. Does not start the viewer."""
     if prefilter is not None and int(prefilter) < 1:
         raise ValueError(f"prefilter K must be >= 1, got {prefilter}")
+    modes = check_extra_effects(extra_effects)
     result = execute_pipeline(
         adapter_name=adapter_name,
         clips_dir=clips_dir,
@@ -64,6 +66,7 @@ def execute_run(
         heldout_frac=heldout_frac,
         tiny=tiny,
         prefilter=prefilter,
+        extra_effects=modes,
         score=True,
         serve=False,
         open_browser=False,
