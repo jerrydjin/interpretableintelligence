@@ -814,8 +814,11 @@ def test_http_serves_the_shell_and_refuses_path_traversal(tmp_path: Path):
 def test_view_help_and_missing_run():
     help_text = runner.invoke(app, ["view", "--help"])
     assert help_text.exit_code == 0
-    assert "--clips" in help_text.stdout
-    assert "--no-open" in help_text.stdout
+    # Typer's rich highlighter styles the two dashes of a long option separately,
+    # so a color terminal splits "--clips" with ANSI codes. Compare the visible text.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", help_text.stdout)
+    assert "--clips" in plain
+    assert "--no-open" in plain
     missing = runner.invoke(app, ["view", "runs/does-not-exist", "--no-open"])
     assert missing.exit_code == 1
     assert "not found" in missing.stderr
