@@ -32,6 +32,14 @@ A token `(window, t)` is the source frame `window_start + t * tubelet * stride`.
 
 Explain a new clip with that run. The cited answer is per window and time, and it includes only real features and only ablation effects. Anything else is listed as unverified. If the run's SAE is not usable, the command refuses.
 
+The read API is the Rust binary `physint-server` (`server/`). It queries the run folder's parquet with DuckDB. `POST /explain` stays in Python, because it has to run the model: start `physint serve` and point the Rust server at it with `--explain-url` (or `PHYSINT_EXPLAIN_URL`). Without that, `POST /explain` returns 501.
+
+```bash
+cargo build -p physint-server
+cargo run -p physint-server -- serve --runs runs --clips clips
+uv run physint serve --runs runs --port 8000
+```
+
 ```bash
 uv run physint explain --run runs/demo --clip clips/demo/clip-000.npy
 uv run physint serve --runs runs
@@ -67,11 +75,15 @@ Feature `3` is the planted reacher feature. The command prints the success delta
 | `docs/FRICTION-vjepa2.md` | Jeff's setup log for the V-JEPA 2 port |
 | `src/physint/sae.py` | ReLU SAE trainer |
 | `src/physint/score.py` | Explained variance, loss recovered, ablations, random controls |
-| `src/physint/run.py` | `capture → SAE → label → score → run folder` |
+| `src/physint/pipeline.py` | Resumable capture, SAE, features, score, and viewer |
+| `src/physint/run.py` | `execute_run` entry that does not start the viewer |
 | `src/physint/view.py` | Local clip viewer over a finished run folder |
+| `src/physint/contract_view.py` | Read-API payloads matched by `physint-server` |
 | `src/physint/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
 | `src/physint/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |
 | `SCHEMA.md` | Run-folder contract |
 | `ARCHITECTURE.md` | What this lane owns, and the next lanes |
+| `server/` | Rust read API (`physint-server`) over the run folder |
+| `docs/HOSTING.md` | Hosting proposal and the DuckDB latency notes |
 
 The run refuses fewer than 20 clips. The holdout is a fraction of **clips**, not frames, using `random.Random(seed)`.

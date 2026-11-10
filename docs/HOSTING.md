@@ -20,6 +20,20 @@ One zstd parquet file of 1,000,000 synthetic effect rows (`run_id`, `feature_id`
 
 All of those are under 100 ms, so the free tier should query parquet with DuckDB and skip Postgres. Weights and activation shards are binaries, not rows. They go in object storage (any S3-compatible free allotment). DuckDB reads the parquet from that bucket, or from a disk cache on the same machine.
 
+## Rust read server, same row count
+
+`physint-server bench` writes 1,000,000 synthetic rows (counted back out of the parquet) and times the queries the server actually serves, plus the two scans above. DuckDB 1.20000.1, 4 threads, release build, this machine. Floats are hashed so the files do not collapse under dictionary encoding: `clip_effects.parquet` is 3.81 MB and `feature_acts.parquet` is 3.56 MB. The Python file above is 8.6 MB and includes a `run_id` column this run-folder schema does not. Different machine, so the comparison is the shape of the result, not a speedup claim.
+
+| Query | p50 | p99 |
+| --- | --- | --- |
+| Frame lookup: effects at one clip, window, and t | 10.40 ms | 13.41 ms |
+| Top clips for one feature | 10.31 ms | 12.70 ms |
+| Ablations for one clip, ordered by effect, limit 10 | 6.90 ms | 13.35 ms |
+| Aggregate for one feature (`COUNT`, `AVG`) | 3.29 ms | 3.82 ms |
+| First frame lookup on a fresh connection | 18.92 ms |  |
+
+The Python clip scan was 16.1 ms median / 19.3 ms p95, and the feature aggregate was 7.7 ms median / 9.3 ms p95. Both Rust scans land under those figures and under the 100 ms lookup budget. The frame lookup and top-clips queries are the ones a viewer issues; they were not in the Python table.
+
 ## Ingest
 
 A run folder is accepted only after `physint validate` returns no errors. The same check the local tool already has.

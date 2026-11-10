@@ -183,15 +183,19 @@ def explain_cmd(
 @app.command("serve")
 def serve_cmd(
     runs: Annotated[Path, typer.Option("--runs", exists=True, file_okay=False, help="Directory of run folders.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", exists=True, file_okay=False, help="Directory of clip files (.npy)."),
+    ] = None,
     host: Annotated[str, typer.Option("--host", help="Bind address.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", min=1, max=65535, help="Bind port.")] = 8000,
 ) -> None:
-    """Serve GET /runs, GET /features/{id}, and POST /explain on localhost."""
+    """Serve the read API and POST /explain. Reads stay available for contract tests; the Rust server is the one to run."""
     import uvicorn
 
     from physint.api import create_app
 
-    uvicorn.run(create_app(runs), host=host, port=port)
+    uvicorn.run(create_app(runs, clips), host=host, port=port)
 
 
 @app.command()
