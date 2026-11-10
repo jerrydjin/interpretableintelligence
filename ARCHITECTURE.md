@@ -4,14 +4,16 @@ This lane is the contract, the scoring core, and a local clip viewer. It does no
 
 ## Pipeline
 
-`physint run <adapter> --clips DIR --out runs/<run_id>` does one job:
+`physint run <adapter> --clips DIR --out runs/<run_id> [--gpu-cost-per-hour X]` does one job, then serves the viewer:
 
 1. **Split** clips with a fixed seed. Holdout is by clip.
-2. **Capture** the instrumented layer through `hook(..., mode="capture")` and write activation shards.
-3. **Train** a ReLU SAE on train rows only.
-4. **Label** each feature. The fake adapter uses `fake-cue-v1`, which reads planted cue channels back out of the clip. `LLMLabeller` is a stub and raises rather than calling a network.
-5. **Score** explained variance, spliced predictor loss, dead features, per-feature ablations, matched random features, and a random-init control.
-6. **Write** the run folder in `SCHEMA.md`. `physint validate` checks that folder, including that `real` follows the four gates.
+2. **Capture** the instrumented layer through `hook(..., mode="capture")` and write activation shards. Rows are appended to a float32 cache and contract shards are emitted in slices. The full activation matrix is not a tensor.
+3. **Train** a ReLU SAE on train rows only, one batch at a time from that cache.
+4. **Features.** Encode in chunks, write sparse `feature_acts.parquet`, and write `candidates.json`.
+5. **Score** (skipped with `--no-score`, or when `scoreboard.json` is already valid). Explained variance, spliced predictor loss, dead features, per-feature ablations, matched random features, and a random-init control. The fake adapter uses `fake-cue-v1`, which reads planted cue channels back out of the clip. `LLMLabeller` is a stub and raises rather than calling a network.
+6. **Serve** the folder. `GET /api/run` is the health check. `--no-serve` stops after the report.
+
+Each stage records wall time, peak RSS, device, and row/token counts on `manifest.stages` and is skipped when its outputs still match the clips, seed, and upstream weights. `physint validate` checks the folder in `SCHEMA.md`, including that `real` follows the four gates. The printed cost per hour of footage is `stage_seconds * gpu_cost_per_hour / video_seconds`.
 
 Thresholds are constants in `src/physint/thresholds.py`. Changing them changes the meaning of `real`.
 

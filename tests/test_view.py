@@ -1178,6 +1178,8 @@ def fresh_fake_run(tmp_path_factory) -> tuple[Path, Path]:
             "0.2",
             "--out",
             str(out),
+            "--no-serve",
+            "--no-open",
         ],
     )
     assert ran.exit_code == 0, ran.output

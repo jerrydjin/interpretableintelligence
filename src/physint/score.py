@@ -153,7 +153,8 @@ def clean_predictions(adapter: Adapter, clips: list[Clip]) -> dict[tuple[str, in
     return out
 
 
-def mean_predictor_loss(adapter: Adapter, clips: list[Clip], edit=None, zero: bool = False) -> float:
+def predictor_sse(adapter: Adapter, clips: list[Clip], edit=None, zero: bool = False) -> tuple[float, int]:
+    """Sum of squared masked errors and the number of masked tokens."""
     sse = 0.0
     count = 0
     with torch.no_grad():
@@ -166,6 +167,11 @@ def mean_predictor_loss(adapter: Adapter, clips: list[Clip], edit=None, zero: bo
                     pred, target = adapter.predict_masked(clip, window, edit=edit)
                 sse += float(((pred - target) ** 2).sum())
                 count += int(pred.shape[0])
+    return sse, count
+
+
+def mean_predictor_loss(adapter: Adapter, clips: list[Clip], edit=None, zero: bool = False) -> float:
+    sse, count = predictor_sse(adapter, clips, edit=edit, zero=zero)
     if count == 0:
         raise RuntimeError("no masked tokens to score")
     return sse / count

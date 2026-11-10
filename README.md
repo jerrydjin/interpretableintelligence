@@ -13,10 +13,12 @@ Runs on CPU and Apple Silicon (MPS). PyTorch is the only tensor library; nothing
 ```bash
 uv sync
 uv run physint generate-clips --out clips/demo --n 30 --seed 0
-uv run physint run fake --clips clips/demo --layer 16 --seed 0 --heldout-frac 0.2 --out runs/demo
-uv run physint validate runs/demo
-uv run physint view runs/demo --clips clips/demo
+uv run physint run fake --clips clips/demo --layer 16 --seed 0 --heldout-frac 0.2 --out runs/demo --gpu-cost-per-hour 2.50
 ```
+
+That command captures the layer, trains the SAE, writes feature candidates, scores them, prints a cost report, and serves the viewer. A second invocation skips every stage whose outputs are already valid and serves the same folder. `--no-serve` writes the folder and exits so a script can `physint validate runs/demo` before opening it with `physint view`.
+
+The report's cost per hour of footage is measured stage wall time times `--gpu-cost-per-hour`, divided by the hours of footage in the clips. It is omitted when the flag is absent. Stage wall time, peak RSS, device, and row/token counts are stored on `manifest.stages`. Activation rows are streamed from an on-disk cache; a stage does not load the full activation matrix.
 
 `runs/demo/scoreboard.json` should mark exactly three features real, labelled `stripe`, `pulse`, and `corner`. The decoys `flicker`, `band`, and `speckle` fire on many clips and keep their labels on held-out clips, but they do not move the predictor, so they are not real.
 

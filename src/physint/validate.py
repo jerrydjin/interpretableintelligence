@@ -25,6 +25,9 @@ _SHARD_NAME = re.compile(r"shard-\d{5}\.safetensors$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 _MANIFEST_KEYS = {"run_id", "tool_version", "model", "layer", "d_model", "grid", "split", "clips"}
+# Resume metadata. Readers that only need the contract can ignore both.
+_MANIFEST_OPTIONAL = {"stages", "clips_dir"}
+_STAGE_FIELDS = {"wall_s", "peak_ram_bytes", "device", "rows", "tokens"}
 _MODEL_KEYS = {"adapter", "name", "sha", "random_init"}
 _GRID_KEYS = {"t", "h", "w", "tubelet", "patch_px"}
 _SPLIT_REF_KEYS = {"seed", "heldout_frac", "sha"}
@@ -73,11 +76,12 @@ def validate_run(run_dir: Path) -> list[str]:
     if manifest is None or split is None or scoreboard is None:
         return errors
 
-    _exact_keys(manifest, _MANIFEST_KEYS, "manifest", errors)
+    _allow_keys(manifest, _MANIFEST_KEYS, _MANIFEST_OPTIONAL, "manifest", errors)
     _exact_keys(split, _SPLIT_FILE_KEYS, "split.json", errors)
     _exact_keys(scoreboard, _SCOREBOARD_KEYS, "scoreboard", errors)
     if errors:
         return errors
+    _check_manifest_extras(manifest, errors)
 
     model = manifest.get("model")
     grid = manifest.get("grid")
@@ -558,11 +562,44 @@ def _read_object(path: Path, errors: list[str]) -> dict | None:
 
 
 def _exact_keys(payload: dict, expected: set[str], where: str, errors: list[str]) -> None:
+    _allow_keys(payload, expected, set(), where, errors)
+
+
+def _allow_keys(payload: dict, required: set[str], optional: set[str], where: str, errors: list[str]) -> None:
     got = set(payload)
-    if got != expected:
-        missing = sorted(expected - got)
-        extra = sorted(got - expected)
+    missing = sorted(required - got)
+    extra = sorted(got - required - optional)
+    if missing or extra:
         errors.append(f"{where} keys mismatch missing={missing} extra={extra}")
+
+
+def _check_manifest_extras(manifest: dict, errors: list[str]) -> None:
+    if "clips_dir" in manifest and (not isinstance(manifest["clips_dir"], str) or not manifest["clips_dir"]):
+        errors.append("manifest.clips_dir must be a non-empty string")
+    if "stages" not in manifest:
+        return
+    stages = manifest["stages"]
+    if not isinstance(stages, dict):
+        errors.append("manifest.stages must be an object")
+        return
+    for name, stage in stages.items():
+        if not isinstance(name, str) or not name:
+            errors.append("manifest.stages keys must be non-empty strings")
+            continue
+        if not isinstance(stage, dict):
+            errors.append(f"manifest.stages.{name} must be an object")
+            continue
+        _exact_keys(stage, _STAGE_FIELDS, f"manifest.stages.{name}", errors)
+        if not _is_number(stage.get("wall_s")) or float(stage.get("wall_s", -1)) < 0:
+            errors.append(f"manifest.stages.{name}.wall_s must be a non-negative number")
+        if not _is_int(stage.get("peak_ram_bytes")) or stage.get("peak_ram_bytes", -1) < 0:
+            errors.append(f"manifest.stages.{name}.peak_ram_bytes must be a non-negative integer")
+        if not isinstance(stage.get("device"), str) or not stage["device"]:
+            errors.append(f"manifest.stages.{name}.device must be a non-empty string")
+        if not _is_int(stage.get("rows")) or stage.get("rows", -1) < 0:
+            errors.append(f"manifest.stages.{name}.rows must be a non-negative integer")
+        if not _is_int(stage.get("tokens")) or stage.get("tokens", -1) < 0:
+            errors.append(f"manifest.stages.{name}.tokens must be a non-negative integer")
 
 
 def _hex_field(value: object, where: str, errors: list[str]) -> None:

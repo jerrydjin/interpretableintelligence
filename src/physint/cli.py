@@ -9,7 +9,7 @@ import typer
 
 from physint import __version__
 from physint.adapters.fake import generate_clips
-from physint.run import execute_run
+from physint.pipeline import execute_pipeline
 from physint.thresholds import DEFAULT_HELDOUT_FRAC, DEFAULT_LAYER, DEFAULT_SEED
 from physint.validate import validate_run
 from physint.view import serve_run
@@ -55,18 +55,47 @@ def run(
         float,
         typer.Option("--heldout-frac", help="Fraction of clips held out."),
     ] = DEFAULT_HELDOUT_FRAC,
+    gpu_cost_per_hour: Annotated[
+        float | None,
+        typer.Option(
+            "--gpu-cost-per-hour",
+            help="Price of one GPU-hour. When set, the report includes cost per hour of footage.",
+        ),
+    ] = None,
+    no_score: Annotated[
+        bool,
+        typer.Option("--no-score", help="Stop after feature candidates. The viewer still starts."),
+    ] = False,
+    no_serve: Annotated[
+        bool,
+        typer.Option("--no-serve", help="Write the run folder and exit without starting the viewer."),
+    ] = False,
+    host: Annotated[str, typer.Option("--host", help="Viewer interface.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Viewer port. 0 chooses a free port.")] = 0,
+    no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
 ) -> None:
-    """Capture activations, train an SAE, label features, score them, write a run folder."""
+    """Capture, train, extract features, score what is missing, then serve the viewer.
+
+    A stage whose outputs are already valid is skipped. The run prints a cost report
+    from measured stage time. Pass --gpu-cost-per-hour to price an hour of footage.
+    """
     try:
-        execute_run(
+        execute_pipeline(
             adapter_name=adapter,
             clips_dir=clips,
             out_dir=out,
             layer=layer,
             seed=seed,
             heldout_frac=heldout_frac,
+            gpu_cost_per_hour=gpu_cost_per_hour,
+            score=not no_score,
+            serve=not no_serve,
+            host=host,
+            port=port,
+            open_browser=not no_open,
+            log=typer.echo,
         )
-    except (ValueError, RuntimeError, FileNotFoundError) as exc:
+    except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
