@@ -360,10 +360,14 @@ def export_site_cmd(
         Path,
         typer.Option("--picker", help="Directory with synth_results.json and synth_results_extra.json."),
     ] = Path("demo-data/picker"),
+    groot: Annotated[
+        Path,
+        typer.Option("--groot", help="Directory with groot-1028-ablate-summary.json."),
+    ] = Path("demo-data/groot"),
 ) -> None:
     """Regenerate the static demo site from a fresh fake run and the vendored measurements."""
     try:
-        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker)
+        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot)
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

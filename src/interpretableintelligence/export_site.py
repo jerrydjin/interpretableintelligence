@@ -25,12 +25,14 @@ def export_site(
     out_dir: Path,
     vjepa_dir: Path | None = None,
     picker_dir: Path | None = None,
+    groot_dir: Path | None = None,
     work_dir: Path | None = None,
 ) -> Path:
     """Regenerate ``out_dir`` from a fresh fake run plus the vendored measurements."""
     out = Path(out_dir)
     vjepa = Path(vjepa_dir) if vjepa_dir else REPO / "demo-data" / "vjepa-slim"
     picker = Path(picker_dir) if picker_dir else REPO / "demo-data" / "picker"
+    groot = Path(groot_dir) if groot_dir else REPO / "demo-data" / "groot"
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
@@ -55,10 +57,12 @@ def export_site(
     )
     model = load_run(run, clips)
     _export_viewer(model, out / "fake", _fake_sentence(run / "scoreboard.json"))
-    _write_home(out / "index.html")
+    groot_summary = _load_groot_summary(groot)
+    groot_status = _groot_status(groot_summary)
+    _write_home(out / "index.html", groot_status)
     _write_picker(out / "picker", picker)
     _write_vjepa(out / "vjepa", vjepa)
-    _write_groot(out / "groot" / "index.html")
+    _write_groot(out / "groot", groot / "groot-1028-ablate-summary.json", groot_summary, groot_status)
     shutil.rmtree(work, ignore_errors=True)
     return out
 
@@ -195,15 +199,15 @@ def _page(title: str, current: str, body: str) -> str:
 """
 
 
-def _write_home(path: Path) -> None:
-    body = """
+def _write_home(path: Path, groot_status: str) -> None:
+    body = f"""
     <h1>Demo</h1>
     <p>Four sections. The fake run is a working viewer. The other three are the measurements on disk, or a section that has no validated run.</p>
     <ul class="section-list">
       <li><a href="/fake/">Fake demo</a> — 30 synthetic clips, layer 16, seed 0, held-out fraction 0.2. The scoreboard is the source of <span class="badge badge-real">real</span>.</li>
       <li><a href="/picker/">Candidate picker</a> — synthetic rollouts. Counts from the rerun of the picker scripts.</li>
       <li><a href="/vjepa/">V-JEPA 2 on DROID</a> — held-out <code>droid_ep068.mp4</code>, window 0, then feature 270.</li>
-      <li><a href="/groot/">GR00T N1.7 on LIBERO</a> — <span class="badge badge-unverified">Not yet validated</span></li>
+      <li><a href="/groot/">GR00T N1.7 on LIBERO</a> — <span class="badge badge-unverified">{escape(groot_status)}</span></li>
     </ul>
     """
     path.write_text(_page("Demo", "", body), encoding="utf-8")
@@ -338,13 +342,117 @@ def _write_vjepa(dest: Path, vjepa: Path) -> None:
     (dest / "index.html").write_text(_page("V-JEPA 2", "vjepa", body), encoding="utf-8")
 
 
-def _write_groot(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body = """
+def _write_groot(dest: Path, summary_path: Path, summary: dict, status: str) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(summary_path, dest / summary_path.name)
+    baseline = _one_row(summary, lambda cond: cond == "baseline")
+    candidates = [row for row in summary["table"] if "-cand-" in str(row["cond"])]
+    candidate_html = "\n".join(
+        f'    <p data-testid="groot-candidate">{escape(_candidate_text(row))}</p>' for row in candidates
+    )
+    body = f"""
     <h1>GR00T N1.7 on LIBERO</h1>
-    <p><span class="badge badge-unverified" data-testid="groot-status">Not yet validated</span></p>
+    <p data-testid="groot-lead">{escape(_lead_line(summary))}</p>
+    <p><span class="badge badge-unverified" data-testid="groot-status">{escape(status)}</span></p>
+    <p data-testid="groot-result">{escape(_groot_result_sentence(summary))}</p>
+    <p data-testid="groot-baseline">{escape(_baseline_line(baseline))}</p>
+{candidate_html}
+    <p data-testid="groot-controls">{escape(_controls_line(summary))}</p>
     """
-    path.write_text(_page("GR00T N1.7", "groot", body), encoding="utf-8")
+    (dest / "index.html").write_text(_page("GR00T N1.7", "groot", body), encoding="utf-8")
+
+
+def _load_groot_summary(groot: Path) -> dict:
+    path = groot / "groot-1028-ablate-summary.json"
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(summary, dict) or not isinstance(summary.get("table"), list):
+        raise ValueError(f"{path} has no ablation table")
+    return summary
+
+
+def _groot_status(summary: dict) -> str:
+    _require_no_effect(summary)
+    return "Tested: no causal effect found"
+
+
+def _groot_result_sentence(summary: dict) -> str:
+    _require_no_effect(summary)
+    real = "true" if summary["real"] is True else "false"
+    return (
+        "The test was whether switching a feature off raises success. "
+        f"Neither candidate did, so both are real={real}."
+    )
+
+
+def _require_no_effect(summary: dict) -> None:
+    candidates = [row for row in summary["table"] if "-cand-" in str(row["cond"])]
+    if len(candidates) != 2:
+        raise ValueError(f"expected two candidate rows, found {len(candidates)}")
+    if summary.get("all_finished") is not True:
+        raise ValueError("ablation summary is not finished")
+    if summary.get("real") is not False:
+        raise ValueError("ablation summary real flag is not false")
+    if any(row.get("verdict") == "rise" for row in candidates):
+        raise ValueError("a candidate rose")
+
+
+def _one_row(summary: dict, match) -> dict:
+    rows = [row for row in summary["table"] if match(str(row["cond"]))]
+    if len(rows) != 1:
+        raise ValueError(f"expected one matching row, found {len(rows)}")
+    return rows[0]
+
+
+def _baseline_line(row: dict) -> str:
+    successes, n = int(row["successes"]), int(row["n"])
+    low, high = row["wilson95"]
+    return (
+        f"Baseline: {successes}/{n} ({_percent(successes, n)}%), "
+        f"Wilson 95% interval [{_bound(low)}, {_bound(high)}]."
+    )
+
+
+def _candidate_text(row: dict) -> str:
+    ident = str(row["cond"]).split("-", 2)[-1]
+    successes, n = int(row["successes"]), int(row["n"])
+    verdict = row["verdict"]
+    if "+" in ident:
+        return f"The {ident} pair: {successes}/{n} ({_percent(successes, n)}%), verdict {verdict}."
+    return f"Feature {ident}: {successes}/{n}, verdict {verdict}."
+
+
+def _lead_line(summary: dict) -> str:
+    rollouts = summary.get("episodes_logged")
+    if isinstance(rollouts, bool) or not isinstance(rollouts, int):
+        raise ValueError("ablation summary has no episode total")
+    controls = _control_rows(summary)
+    return f"{rollouts} rollouts, {len(controls)} random controls, and an offline lead rejected"
+
+
+def _controls_line(summary: dict) -> str:
+    controls = _control_rows(summary)
+    fell = sum(1 for row in controls if row.get("verdict") == "fall")
+    return (
+        f"{fell} of the {len(controls)} random controls also fell, "
+        "so a fall is not specific to these features."
+    )
+
+
+def _control_rows(summary: dict) -> list:
+    controls = [row for row in summary["table"] if "-ctrl" in str(row["cond"])]
+    if not controls:
+        raise ValueError("ablation summary has no random controls")
+    return controls
+
+
+def _percent(successes: int, n: int) -> int:
+    if n <= 0:
+        raise ValueError("ablation row has no episodes")
+    return round(100 * successes / n)
+
+
+def _bound(value: float) -> str:
+    return f"{float(value):.4f}"
 
 
 def _favicon_png() -> bytes:

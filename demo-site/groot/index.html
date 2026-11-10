@@ -17,7 +17,13 @@
   </header>
   <main class="prose">
     <h1>GR00T N1.7 on LIBERO</h1>
-    <p><span class="badge badge-unverified" data-testid="groot-status">Not yet validated</span></p>
+    <p data-testid="groot-lead">641 rollouts, 20 random controls, and an offline lead rejected</p>
+    <p><span class="badge badge-unverified" data-testid="groot-status">Tested: no causal effect found</span></p>
+    <p data-testid="groot-result">The test was whether switching a feature off raises success. Neither candidate did, so both are real=false.</p>
+    <p data-testid="groot-baseline">Baseline: 39/75 (52%), Wilson 95% interval [0.4087, 0.6293].</p>
+    <p data-testid="groot-candidate">Feature 720: 1/9, verdict fall.</p>
+    <p data-testid="groot-candidate">The 7081+5852 pair: 23/63 (37%), verdict fall.</p>
+    <p data-testid="groot-controls">5 of the 20 random controls also fell, so a fall is not specific to these features.</p>
     </main>
 </body>
 </html>
