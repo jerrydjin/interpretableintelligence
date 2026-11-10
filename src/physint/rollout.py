@@ -2,10 +2,10 @@
 
 Episodes are paired on seed: baseline, each candidate feature, and each
 matched random-feature control see the same tasks. After each batch, a
-control whose success rate is separated from every candidate by a Newcombe
-Wilson interval is not scheduled again. Baseline and candidates always run
-the full ``--episodes`` budget. Reruns skip episode ids already in
-``rollouts/episodes.parquet``.
+control stops when a sequential probability ratio test separates its
+discordant pairs from every candidate at level ``alpha``. Baseline and
+candidates always run the full ``--episodes`` budget. Reruns skip episode
+ids already in ``rollouts/episodes.parquet``.
 """
 
 from __future__ import annotations
@@ -21,13 +21,13 @@ from physint.artifacts import read_json, read_rollout_episodes, write_json, writ
 from physint.policies import get_policy
 from physint.policies.base import Intervention
 from physint.rollout_stats import (
-    binding_gap,
+    binding_sprt,
     control_percentile,
     discordant_counts,
     feature_is_causal,
-    gap_is_separated,
     mcnemar_exact_pvalue,
     paired_success_delta_ci,
+    sprt_separated,
 )
 from physint.thresholds import (
     DEFAULT_ROLLOUT_ALPHA,
@@ -36,6 +36,7 @@ from physint.thresholds import (
     DEFAULT_ROLLOUT_EPISODES,
     DEFAULT_ROLLOUT_MIN_EPISODES,
     DEFAULT_ROLLOUT_WORKERS,
+    SPRT_LAMBDA,
 )
 
 SUMMARY_KEYS = {
@@ -52,6 +53,7 @@ SUMMARY_KEYS = {
     "alpha",
     "workers",
     "gap_bound",
+    "sprt_lambda",
     "test",
     "ci_method",
     "candidate_feature_ids",
@@ -77,8 +79,8 @@ CONDITION_KEYS = {
     "reason",
     "success_rate",
     "gap_vs_candidate",
-    "gap_low",
-    "gap_high",
+    "sprt_log_lr",
+    "sprt_threshold",
 }
 FEATURE_KEYS = {
     "feature_id",
@@ -401,8 +403,13 @@ def declared_stop(
     for end in batch_ends(episodes, min_episodes, batch_size):
         if end > len(control_flags):
             break
-        if end < episodes and gap_is_separated(control_flags[:end], [flags[:end] for flags in candidate_flags], alpha):
-            return end, "wilson_separated"
+        if end < episodes and sprt_separated(
+            control_flags[:end],
+            [flags[:end] for flags in candidate_flags],
+            alpha,
+            SPRT_LAMBDA,
+        ):
+            return end, "sprt_separated"
     return episodes, "fixed_budget"
 
 
@@ -540,10 +547,10 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
 
     def condition_record(arm: Arm, episodes_run: int, reason: str, flags: list[bool]) -> dict:
         gap = None
-        gap_low = None
-        gap_high = None
+        log_lr = None
+        threshold = None
         if arm.role == "control":
-            gap, gap_low, gap_high = binding_gap(flags, candidate_flags, config.alpha)
+            gap, log_lr, threshold = binding_sprt(flags, candidate_flags, config.alpha, SPRT_LAMBDA)
         layer = None if arm.role == "baseline" else config.layer
         kind = None if arm.role == "baseline" else config.kind
         value = None if arm.role == "baseline" else config.value
@@ -556,12 +563,12 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
             "value": value,
             "episodes_run": episodes_run,
             "episodes_budget": n,
-            "stopped_early": bool(episodes_run < n and reason == "wilson_separated"),
+            "stopped_early": bool(episodes_run < n and reason == "sprt_separated"),
             "reason": reason,
             "success_rate": float(sum(flags) / len(flags)),
             "gap_vs_candidate": gap,
-            "gap_low": gap_low,
-            "gap_high": gap_high,
+            "sprt_log_lr": log_lr,
+            "sprt_threshold": threshold,
         }
 
     conditions = [
@@ -580,7 +587,8 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
     summary = {
         "schema_version": 1,
         **config.as_dict(),
-        "gap_bound": "newcombe_wilson",
+        "gap_bound": "sprt_discordant",
+        "sprt_lambda": SPRT_LAMBDA,
         "test": "mcnemar_exact",
         "ci_method": "paired_wald",
         "fixed_budget_episodes": fixed_budget,
@@ -603,7 +611,8 @@ def format_report(summary: dict) -> str:
         (
             f"policy={summary['policy']} task={summary['task_id']} kind={summary['kind']} "
             f"layer={summary['layer']} episodes={episodes} controls={len(summary['control_feature_ids'])} "
-            f"alpha={summary['alpha']} min_episodes={summary['min_episodes']}"
+            f"alpha={summary['alpha']} min_episodes={summary['min_episodes']} "
+            f"sprt_lambda={summary['sprt_lambda']}"
         )
     ]
     for feature in summary["features"]:
@@ -728,7 +737,7 @@ def execute_rollouts(
                     if control_stop[arm.name] <= previous:
                         continue
                     control_flags = _flags(config, arm, end, by_id)
-                    if gap_is_separated(control_flags, cand_flags, config.alpha):
+                    if sprt_separated(control_flags, cand_flags, config.alpha, SPRT_LAMBDA):
                         control_stop[arm.name] = end
             previous = end
     finally:

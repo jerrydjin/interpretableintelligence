@@ -49,9 +49,9 @@ The reference run (`--layer 16 --seed 0 --heldout-frac 0.2`, 30 clips) is the ac
 
 `PolicyEnv` is `reset`, `act`, `step`, and `intervene`. `act` encodes the instrumented layer, applies the intervention to SAE latents, and decodes before the controller runs. Kinds are `ablate` (set to 0), `scale` (multiply by `value`), and `clamp` (set to `value`).
 
-The shipped pair is `fake`: a point-mass reacher with one planted coordinate. Baseline success is about 0.80. Ablating the planted feature drops it to about 0.30. Ablating any other feature copies the baseline trajectory. `libero`, `openvla`, and `pi0.5` are stubs behind the optional `robots` extra, which depends on nothing.
+The shipped pair is `fake`: a point-mass reacher with one planted coordinate. Baseline success is about 0.80. Ablating the planted feature drops it to about 0.30. Ablating any other feature copies the baseline trajectory. `fake-null` turns the planted effect off: the controller ignores latents and the success bit is a fair coin of the post-intervention code, so arms are exchangeable and not identical. `libero`, `openvla`, and `pi0.5` are stubs behind the optional `robots` extra, which depends on nothing.
 
-The schedule is paired on seed. Baseline and candidate features run all `N` episodes. After each batch a control is dropped once a Newcombe Wilson interval separates its success rate from every candidate (`--alpha`, and not before `--min-episodes`). The summary reports the success delta, a paired Wald interval, an exact McNemar p-value, the percentile against controls, episodes used against the fixed `N` budget, and rollouts per feature flagged causal.
+The schedule is paired on seed. Baseline and candidate features run all `N` episodes. After each batch a control is dropped once a sequential probability ratio test on its discordant pairs separates it from every candidate (`--alpha`, and not before `--min-episodes`). The boundary is a Ville threshold, so the type I error of stopping stays at `alpha` across looks. The summary reports the success delta, a paired Wald interval, an exact McNemar p-value, the average-rank percentile against controls (ties score 50, not 100), episodes used against the fixed `N` budget, and rollouts per feature flagged causal.
 
 ## Next lanes
 

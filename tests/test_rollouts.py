@@ -2,9 +2,11 @@
 
 The planted feature must be flagged and ten random features must not, inside
 a stated rollout budget. Reruns skip episodes that are already on disk.
+A null policy that plants nothing must not flag features above alpha.
 """
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -17,13 +19,30 @@ from physint.policies.base import Intervention
 from physint.policies.fake import PLANTED_FEATURE_ID, TASK_ID, FakePolicyEnv
 from physint.policies.robots import RobotPolicyStub
 from physint.artifacts import read_rollout_episodes, write_rollout_episodes
-from physint.rollout_stats import feature_is_causal, mcnemar_exact_pvalue
+from physint.rollout import execute_rollouts
+from physint.rollout_stats import (
+    control_percentile,
+    feature_is_causal,
+    mcnemar_exact_pvalue,
+    sprt_log_lr,
+    sprt_separated,
+    sprt_threshold,
+    wilson_interval,
+)
+from physint.thresholds import SPRT_LAMBDA
 
-# Acceptance budget for one validated feature on the fake reacher, with 10
-# controls and early stopping. The fixed design without stopping is 12*N.
-STATED_MAX_ROLLOUTS_PER_VALIDATED_FEATURE = 220
+# The Wilson stop reused alpha at every look and measured 184 on seed 0.
+# That figure is not a valid early-stop result. The SPRT (lambda 0.6) stops
+# the ten controls at 20 episodes: 32 baseline + 32 candidate + 10 * 20 = 264.
+WILSON_ROLLOUTS_PER_VALIDATED_FEATURE = 184
+SPRT_ROLLOUTS_PER_VALIDATED_FEATURE = 264
+# Budget for one validated feature. The fixed design without stopping is 12*N
+# and the feature-arm budget 11*N is 352, so 320 is still under that.
+STATED_MAX_ROLLOUTS_PER_VALIDATED_FEATURE = 320
 DONE_EPISODES = 32
 DONE_CONTROLS = 10
+NULL_FEATURE_ARM_TESTS = 200
+NULL_ALPHA = 0.05
 
 runner = CliRunner()
 
@@ -95,6 +114,54 @@ def test_mcnemar_exact_and_causal_rule():
     assert feature_is_causal(delta=0.0, p_value=1.0, control_percentile=100.0, alpha=0.05) is False
 
 
+def test_control_percentile_splits_ties():
+    assert control_percentile(0.0, [0.0] * 10) == 50.0
+    assert control_percentile(0.5, [0.0] * 10) == 100.0
+    assert control_percentile(-0.2, [0.0] * 10) == 0.0
+    # Two strictly below, one tie, one strictly above.
+    assert control_percentile(0.2, [0.0, 0.0, 0.2, 0.4]) == pytest.approx(62.5)
+    assert control_percentile(0.1, []) is None
+    assert control_percentile(0.0, [1e-12, -1e-12]) == 50.0
+
+
+def test_sprt_crosses_only_after_enough_one_sided_pairs():
+    alpha = 0.05
+    threshold = sprt_threshold(alpha)
+    assert threshold == pytest.approx(math.log(2.0 / alpha))
+    control = [True] * 8
+    candidate = [False] * 8
+    assert sprt_log_lr(control[:7], candidate[:7], SPRT_LAMBDA) < threshold
+    assert sprt_log_lr(control, candidate, SPRT_LAMBDA) >= threshold
+    assert sprt_separated(control, [candidate], alpha, SPRT_LAMBDA) is True
+    assert sprt_separated([True] * 20, [[True] * 20], alpha, SPRT_LAMBDA) is False
+    mixed_control = [True, False] * 10
+    mixed_candidate = [False, True] * 10
+    assert sprt_separated(mixed_control, [mixed_candidate], alpha, SPRT_LAMBDA) is False
+    assert sprt_separated([], [[]], alpha, SPRT_LAMBDA) is False
+
+
+def test_sprt_type_i_error_stays_at_alpha():
+    """Exchangeable pairs, looked at on the same grid the runner uses.
+
+    The Wilson upper bound on the stop rate has to sit at or below alpha.
+    """
+    rng = np.random.default_rng(0)
+    alpha = 0.05
+    n = DONE_EPISODES
+    ends = [8, 12, 16, 20, 24, 28]
+    reps = 2000
+    hits = 0
+    for _ in range(reps):
+        control = (rng.random(n) < 0.5).tolist()
+        candidate = (rng.random(n) < 0.5).tolist()
+        for end in ends:
+            if sprt_separated(control[:end], [candidate[:end]], alpha, SPRT_LAMBDA):
+                hits += 1
+                break
+    _low, high = wilson_interval(hits, reps, alpha)
+    assert high <= alpha, f"sprt stops {hits}/{reps}, wilson upper {high:.4f}"
+
+
 def test_robot_policies_are_stubs():
     with pytest.raises(NotImplementedError, match="robots"):
         get_policy("libero")
@@ -145,22 +212,34 @@ def test_done_check_planted_is_causal_and_rerun_is_idempotent(tmp_path: Path):
     assert planted["causal"] is True
     assert planted["delta"] >= 0.15
     assert planted["p_value"] <= 0.05
-    assert planted["control_percentile"] >= 95
+    assert planted["control_percentile"] == 100.0
     assert planted["stopped_early"] is False
     assert planted["episodes_run"] == DONE_EPISODES
     assert len(controls) == DONE_CONTROLS
     assert all(feature["causal"] is False for feature in controls)
     assert all(feature["stopped_early"] is True for feature in controls)
-    assert all(feature["reason"] == "wilson_separated" for feature in controls)
-    assert all(feature["episodes_run"] == 12 for feature in controls)
+    assert all(feature["reason"] == "sprt_separated" for feature in controls)
+    assert all(feature["episodes_run"] == 20 for feature in controls)
+    assert all(feature["delta"] == 0.0 for feature in controls)
+    assert all(feature["control_percentile"] == 50.0 for feature in controls)
+
+    control_conditions = [item for item in summary["conditions"] if item["role"] == "control"]
+    assert len(control_conditions) == DONE_CONTROLS
+    for condition in control_conditions:
+        assert condition["reason"] == "sprt_separated"
+        assert condition["sprt_log_lr"] >= condition["sprt_threshold"]
+        assert condition["sprt_threshold"] == pytest.approx(math.log(2.0 / 0.05))
+    assert summary["gap_bound"] == "sprt_discordant"
+    assert summary["sprt_lambda"] == SPRT_LAMBDA
 
     total = summary["total_episodes"]
     naive = (1 + DONE_CONTROLS) * DONE_EPISODES
-    # 32 baseline + 32 candidate + 10 controls x 12 episodes. 11*N is 352.
-    assert total == 184
+    # 32 baseline + 32 candidate + 10 controls x 20 episodes. 11*N is 352.
+    assert total == SPRT_ROLLOUTS_PER_VALIDATED_FEATURE, (
+        f"got {total}; the Wilson stop on this seed measured {WILSON_ROLLOUTS_PER_VALIDATED_FEATURE}"
+    )
     assert total == summary["fixed_budget_episodes"] - summary["episodes_saved"]
     assert total < naive
-    assert total <= 0.6 * naive
     assert total <= STATED_MAX_ROLLOUTS_PER_VALIDATED_FEATURE
     assert summary["validated_feature_ids"] == [PLANTED_FEATURE_ID]
     assert summary["rollouts_per_validated_feature"] == pytest.approx(total)
@@ -245,3 +324,78 @@ def test_rollouts_rejects_a_bad_request(tmp_path: Path):
         ],
     )
     assert too_soon.exit_code != 0
+
+
+def _null_successes(ablate: int | None, n: int, seed0: int = 0) -> np.ndarray:
+    env = FakePolicyEnv(plant=False)
+    out = np.zeros(n, dtype=bool)
+    intervention = None
+    if ablate is not None:
+        intervention = Intervention((ablate,), env.layer, "ablate", 0.0)
+    for offset in range(n):
+        obs = env.reset(task_id=TASK_ID, seed=seed0 + offset)
+        done = False
+        info: dict = {}
+        with env.intervene(intervention):
+            while not done:
+                obs, _reward, done, info = env.step(env.act(obs))
+        out[offset] = bool(info["success"])
+    return out
+
+
+def test_null_policy_is_exchangeable_and_not_identical():
+    env = get_policy("fake-null")
+    assert env.name == "fake-null"
+    assert env.plant is False
+    n = 400
+    baseline = _null_successes(None, n)
+    planted = _null_successes(PLANTED_FEATURE_ID, n)
+    other = _null_successes(0, n)
+    for name, flags in ("baseline", baseline), ("planted", planted), ("other", other):
+        rate = float(flags.mean())
+        assert 0.40 <= rate <= 0.60, f"{name} success rate {rate:.3f} is not near 1/2"
+    assert not np.array_equal(baseline, planted)
+    assert not np.array_equal(baseline, other)
+    # The planted policy is unchanged: feature 3 still moves success, feature 0 does not.
+    assert not np.array_equal(_successes(None, 50), _successes(PLANTED_FEATURE_ID, 50))
+    assert np.array_equal(_successes(None, 50), _successes(0, 50))
+
+
+def _null_feature_arm(root: Path, index: int) -> bool:
+    """One candidate-arm test with the planted effect off. Returns whether it was flagged."""
+    summary = execute_rollouts(
+        root / f"null-{index}",
+        policy="fake-null",
+        features=[0],
+        episodes=DONE_EPISODES,
+        controls=DONE_CONTROLS,
+        workers=1,
+        seed=index * DONE_EPISODES,
+        alpha=NULL_ALPHA,
+        min_episodes=8,
+        batch_size=4,
+    )
+    candidates = [feature for feature in summary["features"] if feature["role"] == "candidate"]
+    if len(candidates) != 1 or summary["policy"] != "fake-null":
+        raise RuntimeError(f"null arm {index} did not test one fake-null candidate")
+    return bool(candidates[0]["causal"])
+
+
+def test_null_false_flag_rate_stays_within_alpha(tmp_path: Path):
+    """Plant nothing. The Wilson upper bound on the causal-flag rate is at most alpha.
+
+    Two hundred candidate arms, each with the same N, K, and alpha as the
+    planted done-check. Episode seeds do not overlap across arms.
+    """
+    flags = [_null_feature_arm(tmp_path, index) for index in range(NULL_FEATURE_ARM_TESTS)]
+    n_tests = len(flags)
+    n_flag = sum(bool(item) for item in flags)
+    assert n_tests >= 200
+    low, high = wilson_interval(n_flag, n_tests, NULL_ALPHA)
+    rate = n_flag / n_tests
+    message = (
+        f"false-flag rate {n_flag}/{n_tests}={rate:.4f} "
+        f"wilson95=[{low:.4f},{high:.4f}] alpha={NULL_ALPHA}"
+    )
+    print(message)
+    assert high <= NULL_ALPHA, message

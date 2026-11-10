@@ -1,18 +1,20 @@
-"""Paired tests and Wilson bounds for rollout causal scores.
+"""Paired tests and the control early-stop SPRT.
 
-No scipy. The early-stop rule is Newcombe's Wilson score interval on the
-difference of two success rates (method 10 in Newcombe 1998). A control stops
-once that interval excludes zero against every candidate.
+No scipy. A control stops when a two-sided sequential probability ratio test
+on its discordant pairs separates it from every candidate. The threshold is
+a Ville bound, so repeated looks keep the type I error at ``alpha``. The
+final causal call is still a single McNemar test on the episodes that ran.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
-import numpy as np
+from physint.thresholds import CAUSAL_CONTROL_PERCENTILE, CAUSAL_DELTA_MIN, SPRT_LAMBDA
 
-from physint.stats import percentile_le
-from physint.thresholds import CAUSAL_CONTROL_PERCENTILE, CAUSAL_DELTA_MIN
+# Deltas closer than this are the same effect for the percentile.
+_PERCENTILE_TIE_ATOL = 1e-9
 
 
 def normal_ppf(p: float) -> float:
@@ -86,70 +88,116 @@ def wilson_interval(successes: int, n: int, alpha: float) -> tuple[float, float]
     return max(0.0, center - margin), min(1.0, center + margin)
 
 
-def newcombe_diff_ci(
-    successes_a: int,
-    n_a: int,
-    successes_b: int,
-    n_b: int,
-    alpha: float,
-) -> tuple[float, float, float]:
-    """Newcombe Wilson interval for ``p_a - p_b``. Returns ``(delta, low, high)``."""
-    if n_a <= 0 or n_b <= 0:
-        raise ValueError("newcombe_diff_ci needs at least one trial on each arm")
-    p_a = successes_a / n_a
-    p_b = successes_b / n_b
-    low_a, high_a = wilson_interval(successes_a, n_a, alpha)
-    low_b, high_b = wilson_interval(successes_b, n_b, alpha)
-    delta = p_a - p_b
-    low = delta - math.sqrt((p_a - low_a) ** 2 + (high_b - p_b) ** 2)
-    high = delta + math.sqrt((high_a - p_a) ** 2 + (p_b - low_b) ** 2)
-    return float(delta), float(low), float(high)
+def sprt_threshold(alpha: float) -> float:
+    """Log likelihood-ratio boundary for a two-sided test at level ``alpha``.
 
-
-def gap_is_separated(
-    control: list[bool] | np.ndarray,
-    candidates: list[list[bool] | np.ndarray],
-    alpha: float,
-) -> bool:
-    """True when the control's success rate is separated from every candidate.
-
-    The gap is control minus candidate. Separated means the two-sided
-    Newcombe interval at ``alpha`` excludes 0.
+    Each one-sided martingale is compared with ``2 / alpha``. Ville's
+    inequality bounds that side by ``alpha / 2``, so the union is at most
+    ``alpha`` at every look, including looks that stop early.
     """
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    return math.log(2.0 / alpha)
+
+
+def _check_lambda(lam: float) -> None:
+    if not 0.0 < lam < 1.0:
+        raise ValueError(f"sprt lambda must be in (0, 1), got {lam}")
+
+
+def sprt_log_lr(
+    control: list[bool],
+    candidate: list[bool],
+    lam: float = SPRT_LAMBDA,
+) -> float:
+    """Path-maximum two-sided log likelihood ratio on discordant pairs.
+
+    A pair is ``+1`` when the control succeeds and the candidate fails, and
+    ``-1`` the other way. Concordant pairs are skipped. Under the null that
+    the arms are exchangeable, the signs are fair. The alternative for the
+    positive martingale is ``P(sign = +1) = (1 + lam) / 2``; the negative
+    martingale swaps that. The return value is the largest log wealth either
+    martingale reached on this prefix. It starts at 0 when there are no
+    discordant pairs.
+    """
+    _check_lambda(lam)
     control_flags = [bool(item) for item in control]
-    n = len(control_flags)
-    if n <= 0 or not candidates:
+    cand_flags = [bool(item) for item in candidate]
+    if len(control_flags) != len(cand_flags):
+        raise ValueError(
+            f"sprt lengths differ: control {len(control_flags)} vs candidate {len(cand_flags)}"
+        )
+    log_pos = 0.0
+    log_neg = 0.0
+    best = 0.0
+    log_up = math.log(1.0 + lam)
+    log_down = math.log(1.0 - lam)
+    for left, right in zip(control_flags, cand_flags, strict=True):
+        if left == right:
+            continue
+        if left and not right:
+            log_pos += log_up
+            log_neg += log_down
+        else:
+            log_pos += log_down
+            log_neg += log_up
+        best = max(best, log_pos, log_neg)
+    return best
+
+
+def sprt_separated(
+    control: list[bool],
+    candidates: list[list[bool]],
+    alpha: float,
+    lam: float = SPRT_LAMBDA,
+) -> bool:
+    """True when the control is separated from every candidate at level ``alpha``.
+
+    Separation is ``sprt_log_lr >= sprt_threshold(alpha)``. An empty prefix
+    or an empty candidate list does not separate.
+    """
+    if not control or not candidates:
         return False
-    k_control = sum(control_flags)
+    n = len(control)
+    threshold = sprt_threshold(alpha)
     for candidate in candidates:
-        cand_flags = [bool(item) for item in list(candidate)[:n]]
-        if len(cand_flags) < n:
+        if len(candidate) < n:
             raise ValueError("candidate successes are shorter than the control prefix")
-        _delta, low, high = newcombe_diff_ci(k_control, n, sum(cand_flags), n, alpha)
-        if low <= 0.0 <= high:
+        if sprt_log_lr(list(control), list(candidate)[:n], lam) < threshold:
             return False
     return True
 
 
-def binding_gap(
-    control: list[bool] | np.ndarray,
-    candidates: list[list[bool] | np.ndarray],
+def binding_sprt(
+    control: list[bool],
+    candidates: list[list[bool]],
     alpha: float,
+    lam: float = SPRT_LAMBDA,
 ) -> tuple[float, float, float]:
-    """Gap against the candidate whose lower bound is closest to crossing 0."""
-    control_flags = [bool(item) for item in control]
-    n = len(control_flags)
-    if n <= 0 or not candidates:
-        raise ValueError("binding_gap needs a control prefix and at least one candidate")
-    k_control = sum(control_flags)
-    best: tuple[float, float, float] | None = None
+    """Gap and log likelihood ratio against the hardest candidate.
+
+    The hardest candidate is the one with the smallest path-maximum log
+    likelihood ratio. The gap is the control success rate minus that
+    candidate's success rate on the shared prefix. The third value is the
+    log threshold ``log(2 / alpha)``.
+    """
+    if not control or not candidates:
+        raise ValueError("binding_sprt needs a control prefix and at least one candidate")
+    n = len(control)
+    threshold = sprt_threshold(alpha)
+    best_lr: float | None = None
+    best_gap = 0.0
+    control_rate = sum(bool(item) for item in control) / n
     for candidate in candidates:
-        cand_flags = [bool(item) for item in list(candidate)[:n]]
-        estimate = newcombe_diff_ci(k_control, n, sum(cand_flags), n, alpha)
-        if best is None or estimate[1] < best[1]:
-            best = estimate
-    assert best is not None
-    return best
+        if len(candidate) < n:
+            raise ValueError("candidate successes are shorter than the control prefix")
+        prefix = [bool(item) for item in candidate[:n]]
+        log_lr = sprt_log_lr([bool(item) for item in control], prefix, lam)
+        if best_lr is None or log_lr < best_lr:
+            best_lr = log_lr
+            best_gap = control_rate - (sum(prefix) / n)
+    assert best_lr is not None
+    return float(best_gap), float(best_lr), float(threshold)
 
 
 def mcnemar_exact_pvalue(n_baseline_only: int, n_intervention_only: int) -> float:
@@ -175,8 +223,8 @@ def mcnemar_exact_pvalue(n_baseline_only: int, n_intervention_only: int) -> floa
 
 
 def paired_success_delta_ci(
-    baseline: list[bool] | np.ndarray,
-    intervention: list[bool] | np.ndarray,
+    baseline: Sequence[bool],
+    intervention: Sequence[bool],
     alpha: float,
 ) -> tuple[float, float, float]:
     """Wald interval for the mean paired difference. Returns ``(delta, low, high)``."""
@@ -200,8 +248,8 @@ def paired_success_delta_ci(
 
 
 def discordant_counts(
-    baseline: list[bool] | np.ndarray,
-    intervention: list[bool] | np.ndarray,
+    baseline: Sequence[bool],
+    intervention: Sequence[bool],
 ) -> tuple[int, int]:
     base = [bool(item) for item in baseline]
     edited = [bool(item) for item in intervention]
@@ -236,6 +284,24 @@ def feature_is_causal(
 
 
 def control_percentile(delta: float, control_deltas: list[float]) -> float | None:
+    """Average-rank percentile of ``delta`` among the comparison deltas.
+
+    ``100 * (n_strictly_below + 0.5 * n_tied) / n``. A delta tied with every
+    comparison scores 50. A delta strictly above every comparison scores 100.
+    A delta strictly below every comparison scores 0. Values within ``1e-9``
+    count as tied. An empty comparison returns None, which does not pass the
+    causal gate.
+
+    This is not ``percentile_le``. That scoreboard helper counts a tie as
+    ``<=``, so a row of equal deltas all score 100.
+    """
     if not control_deltas:
         return None
-    return percentile_le(delta, np.asarray(control_deltas, dtype=np.float64))
+    below = 0
+    tied = 0
+    for other in control_deltas:
+        if math.isclose(float(delta), float(other), rel_tol=0.0, abs_tol=_PERCENTILE_TIE_ATOL):
+            tied += 1
+        elif float(other) < float(delta):
+            below += 1
+    return 100.0 * (below + 0.5 * tied) / len(control_deltas)

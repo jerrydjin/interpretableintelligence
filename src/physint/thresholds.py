@@ -54,3 +54,9 @@ DEFAULT_ROLLOUT_ALPHA = 0.05
 DEFAULT_ROLLOUT_MIN_EPISODES = 8
 DEFAULT_ROLLOUT_BATCH = 4
 DEFAULT_ROLLOUT_WORKERS = 1
+
+# SPRT alternative for a discordant pair: P(control succeeds, candidate fails)
+# among discordant pairs is (1 + SPRT_LAMBDA) / 2. Any fixed lambda in (0, 1)
+# keeps the type I error of the stop rule at alpha; 0.6 powers the test for
+# an 0.80 one-sided discordant probability. It is not fit to a seed.
+SPRT_LAMBDA = 0.6

@@ -1,4 +1,4 @@
-"""Policy + simulator pairs. The default install ships ``fake`` only."""
+"""Policy + simulator pairs. The default install ships ``fake`` and ``fake-null``."""
 
 from __future__ import annotations
 
@@ -19,8 +19,10 @@ __all__ = [
 
 def get_policy(name: str) -> PolicyEnv:
     if name == "fake":
-        return FakePolicyEnv()
+        return FakePolicyEnv(plant=True)
+    if name == "fake-null":
+        return FakePolicyEnv(plant=False)
     if name in ROBOT_POLICY_NAMES:
         unavailable_policy(name)
-    known = ", ".join(("fake", *ROBOT_POLICY_NAMES))
+    known = ", ".join(("fake", "fake-null", *ROBOT_POLICY_NAMES))
     raise ValueError(f"unknown policy {name!r}. Known policies: {known}.")

@@ -10,10 +10,17 @@ episode (probability 0.2) a late gust knocks a gripper that has already
 reached the target off it, so an informed policy succeeds on the other 0.8.
 With the coordinate removed the gripper stays at the origin and only the
 closest targets count, which is 0.3 of episodes after the same gust rule.
+
+``plant=False`` (policy name ``fake-null``) turns that effect off. The
+controller ignores every latent, and the terminal bit is a fair coin of the
+post-intervention latents. Every arm then has the same success probability,
+but zeroing a coordinate changes the draw, so the arms are exchangeable
+without being identical.
 """
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import contextmanager
 
 import numpy as np
@@ -34,17 +41,24 @@ _SEED_SALT = 0x5A1E
 
 
 class FakePolicyEnv:
-    """Identity SAE. Latent ``PLANTED_FEATURE_ID`` is the target location."""
+    """Identity SAE. Latent ``PLANTED_FEATURE_ID`` is the target location.
 
-    name = "fake"
+    ``plant=True`` is the causal reacher. ``plant=False`` is the null policy:
+    no feature is causal, and success is a fair coin of the steered latents.
+    """
+
     layer = LAYER
     n_features = N_FEATURES
     horizon = HORIZON
     planted_feature_id = PLANTED_FEATURE_ID
 
-    def __init__(self) -> None:
+    def __init__(self, *, plant: bool = True) -> None:
+        self.plant = bool(plant)
+        self.name = "fake" if self.plant else "fake-null"
         self._intervention: Intervention | None = None
         self._latents: np.ndarray | None = None
+        self._steered: np.ndarray | None = None
+        self._episode_seed = 0
         self._pos = 0.0
         self._target = 0.0
         self._u = 0.0
@@ -60,6 +74,8 @@ class FakePolicyEnv:
         latents = rng.normal(0.0, 1.0, size=self.n_features)
         latents[PLANTED_FEATURE_ID] = self._target
         self._latents = np.asarray(latents, dtype=np.float64)
+        self._steered = None
+        self._episode_seed = int(seed)
         self._pos = 0.0
         self._steps = 0
         self._task_id = task_id
@@ -73,6 +89,7 @@ class FakePolicyEnv:
         # Hook: SAE latents at `self.layer`, after encode and before decode.
         latents = apply_latent_intervention(latents, self._intervention)
         steered = self.decode_latents(latents)
+        self._steered = steered
         return self.controller(steered, observation)
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, dict]:
@@ -86,9 +103,23 @@ class FakePolicyEnv:
             # Late disturbance. It only throws a gripper that is already on the target.
             self._pos = float(self._pos + (1.0 if self._target >= 0.0 else -1.0))
         done = self._steps >= self.horizon
-        success = bool(done and abs(self._pos - self._target) <= SUCCESS_RADIUS)
+        if self.plant:
+            success = bool(done and abs(self._pos - self._target) <= SUCCESS_RADIUS)
+        else:
+            success = bool(done and self._null_success())
         reward = 1.0 if success else 0.0
         return self._observe(), reward, done, {"success": success}
+
+    def _null_success(self) -> bool:
+        """Fair bit of the steered latents. The bias does not depend on which feature was edited."""
+        if self._steered is None:
+            raise RuntimeError("call act() before reading the null success bit")
+        digest = hashlib.sha256()
+        digest.update(b"physint-fake-null-v1")
+        digest.update(int(self._episode_seed).to_bytes(8, "little", signed=True))
+        digest.update(np.ascontiguousarray(self._steered, dtype=np.float64).tobytes())
+        word = int.from_bytes(digest.digest()[:8], "little")
+        return (word & 1) == 0
 
     @contextmanager
     def intervene(self, intervention: Intervention | None):
@@ -119,6 +150,8 @@ class FakePolicyEnv:
         return np.array(latents, dtype=np.float64, copy=True)
 
     def controller(self, latents: np.ndarray, observation: np.ndarray) -> np.ndarray:
+        if not self.plant:
+            return np.array([0.0], dtype=np.float64)
         signal = float(latents[PLANTED_FEATURE_ID])
         pos = float(observation[0])
         if abs(signal) < 1e-8:

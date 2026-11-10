@@ -84,7 +84,10 @@ def run(
 @app.command()
 def rollouts(
     run_dir: Annotated[Path, typer.Argument(help="Run folder. Rollouts are written under rollouts/.")],
-    policy: Annotated[str, typer.Option("--policy", help="Policy+simulator name. This lane ships 'fake'.")] = "fake",
+    policy: Annotated[
+        str,
+        typer.Option("--policy", help="Policy+simulator name. This lane ships 'fake' and 'fake-null'."),
+    ] = "fake",
     episodes: Annotated[
         int,
         typer.Option("--episodes", min=1, help="Paired episodes per arm. Controls may stop before this."),
@@ -111,7 +114,10 @@ def rollouts(
     task: Annotated[str, typer.Option("--task", help="Task id passed to reset.")] = "reach",
     alpha: Annotated[
         float,
-        typer.Option("--alpha", help="Two-sided level for the control early-stop bound and the causal p-value."),
+        typer.Option(
+            "--alpha",
+            help="Type I level of the control SPRT and of the causal McNemar test.",
+        ),
     ] = DEFAULT_ROLLOUT_ALPHA,
     min_episodes: Annotated[
         int,
