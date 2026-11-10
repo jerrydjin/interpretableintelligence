@@ -43,9 +43,19 @@ Clips are float32 arrays shaped `[16, 16, 16, 8]` (frames, height, width, channe
 
 The reference run (`--layer 16 --seed 0 --heldout-frac 0.2`, 30 clips) is the acceptance test: exactly the three causal labels are `real`, and each decoy fails only the causal percentile while passing diversity, label transfer, and the random-init check.
 
+## Rollouts
+
+`physint rollouts` asks a different question from the scoreboard: if this SAE feature is edited inside a policy, does task success move? The run folder gains `rollouts/` and `manifest.schema_version` becomes 1. Scoreboard files are not rewritten.
+
+`PolicyEnv` is `reset`, `act`, `step`, and `intervene`. `act` encodes the instrumented layer, applies the intervention to SAE latents, and decodes before the controller runs. Kinds are `ablate` (set to 0), `scale` (multiply by `value`), and `clamp` (set to `value`).
+
+The shipped pair is `fake`: a point-mass reacher with one planted coordinate. Baseline success is about 0.80. Ablating the planted feature drops it to about 0.30. Ablating any other feature copies the baseline trajectory. `libero`, `openvla`, and `pi0.5` are stubs behind the optional `robots` extra, which depends on nothing.
+
+The schedule is paired on seed. Baseline and candidate features run all `N` episodes. After each batch a control is dropped once a Newcombe Wilson interval separates its success rate from every candidate (`--alpha`, and not before `--min-episodes`). The summary reports the success delta, a paired Wald interval, an exact McNemar p-value, the percentile against controls, episodes used against the fixed `N` budget, and rollouts per feature flagged causal.
+
 ## Next lanes
 
-1. **Real adapters.** Implement the protocol for V-JEPA 2 and pi0.5. They must run on MPS and CPU. They replace `fake`; they do not change the run folder or the gates.
+1. **Real adapters.** Implement the world-model protocol for V-JEPA 2 and pi0.5, and replace the policy stubs for LIBERO / OpenVLA / pi0.5. They must run on MPS and CPU. They do not change the run folder or the gates.
 2. **Clip-first viewer.** A local web UI that opens a run folder: video on the left, the feature list from `features.jsonl` and `scoreboard.json` on the right, activation maps from `feature_acts.parquet`. It only reads the contract.
 3. **Hosted ingest.** Upload a run folder into Postgres plus object storage. Shards and weights go to objects; manifest, scoreboard, and feature rows go to tables. Ingest reuses `physint validate` and refuses a folder that fails it.
 4. **Failed-clip API.** `upload a clip that the policy missed, return the features that drove it`. The response may cite only features with `real: true`, and only effects with `effect_kind: "ablation"`. Estimates are a ranking aid inside a run, not something the API serves as evidence.

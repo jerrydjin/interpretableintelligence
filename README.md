@@ -4,7 +4,9 @@
 
 A feature is marked `real` only when the SAE is good enough to splice back into the predictor and the feature passes four checks: it fires across clips, its label holds on held-out clips, its ablation effect beats matched random features, and a randomly initialised copy of the model does not reproduce its firing pattern. A missing check is `null`, and `null` never counts as a pass.
 
-The only adapter in this package is `fake`: a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. Real V-JEPA 2 and pi0.5 adapters are a later lane.
+The only world-model adapter in this package is `fake`: a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. Real V-JEPA 2 and pi0.5 world-model adapters are a later lane.
+
+`physint rollouts` is the causal check on a policy. It runs paired baseline and intervention episodes, plus matched random-feature controls, and writes `rollouts/` into the run folder (schema version 1). The fake policy is a reacher whose planted feature drops success from about 0.80 to about 0.30 when ablated; other features do not move it. LIBERO, OpenVLA, and pi0.5 sit behind the optional `robots` extra as stubs. That extra installs no simulator and no GPU package.
 
 Runs on CPU and Apple Silicon (MPS). PyTorch is the only tensor library; nothing here requires CUDA.
 
@@ -22,8 +24,11 @@ uv run physint validate runs/demo
 Force a device with `PHYSINT_DEVICE=cpu` or `PHYSINT_DEVICE=mps`.
 
 ```bash
+uv run physint rollouts runs/demo --policy fake --episodes 32 --features 3 --controls 10 --workers 2
 uv run pytest
 ```
+
+Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early once a Wilson bound separates them from the candidate. A second invocation skips episodes already written.
 
 ## Layout
 
@@ -35,6 +40,8 @@ uv run pytest
 | `src/physint/sae.py` | ReLU SAE trainer |
 | `src/physint/score.py` | Explained variance, loss recovered, ablations, random controls |
 | `src/physint/run.py` | `capture → SAE → label → score → run folder` |
+| `src/physint/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
+| `src/physint/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |
 | `SCHEMA.md` | Run-folder contract |
 | `ARCHITECTURE.md` | What this lane owns, and the next lanes |
 

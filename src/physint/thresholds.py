@@ -39,3 +39,18 @@ DEAD_ACT_EPS = 1e-5
 
 # Vector norms below this are treated as zero in cosine distance.
 COSINE_EPS = 1e-6
+
+# Rollout causal gate (schema v1). Independent of `real`.
+# delta is baseline success minus intervention success on paired seeds.
+# A feature is causal only when the drop clears this floor, the exact paired
+# test clears the run's alpha, and the drop beats this percentile of controls.
+# Null (no controls) never passes.
+CAUSAL_DELTA_MIN = 0.15
+CAUSAL_CONTROL_PERCENTILE = 95.0
+
+DEFAULT_ROLLOUT_EPISODES = 32
+DEFAULT_ROLLOUT_CONTROLS = 10
+DEFAULT_ROLLOUT_ALPHA = 0.05
+DEFAULT_ROLLOUT_MIN_EPISODES = 8
+DEFAULT_ROLLOUT_BATCH = 4
+DEFAULT_ROLLOUT_WORKERS = 1

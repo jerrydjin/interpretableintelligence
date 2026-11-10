@@ -14,6 +14,19 @@ ROWS_PER_SHARD = 50_000
 
 FEATURE_ACT_COLUMNS = ("feature_id", "clip_id", "window", "t", "h", "w", "value")
 CLIP_EFFECT_COLUMNS = ("feature_id", "clip_id", "window", "t", "effect", "effect_kind")
+ROLLOUT_COLUMNS = (
+    "episode_id",
+    "task_id",
+    "seed",
+    "condition",
+    "feature_ids",
+    "layer",
+    "kind",
+    "value",
+    "success",
+    "steps",
+    "wall_time_s",
+)
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -93,6 +106,61 @@ def write_feature_acts(path: Path, rows: dict[str, list]) -> None:
         }
     )
     pq.write_table(table, path)
+
+
+def write_rollout_episodes(path: Path, rows: list[dict]) -> None:
+    """Write one row per episode. Replaces the file atomically."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    table = pa.table(
+        {
+            "episode_id": pa.array([row["episode_id"] for row in rows], type=pa.string()),
+            "task_id": pa.array([row["task_id"] for row in rows], type=pa.string()),
+            "seed": pa.array([row["seed"] for row in rows], type=pa.int64()),
+            "condition": pa.array([row["condition"] for row in rows], type=pa.string()),
+            "feature_ids": pa.array(
+                [list(row["feature_ids"]) for row in rows],
+                type=pa.list_(pa.int32()),
+            ),
+            "layer": pa.array([row["layer"] for row in rows], type=pa.int32()),
+            "kind": pa.array([row["kind"] for row in rows], type=pa.string()),
+            "value": pa.array([row["value"] for row in rows], type=pa.float64()),
+            "success": pa.array([row["success"] for row in rows], type=pa.bool_()),
+            "steps": pa.array([row["steps"] for row in rows], type=pa.int32()),
+            "wall_time_s": pa.array([row["wall_time_s"] for row in rows], type=pa.float64()),
+        }
+    )
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    pq.write_table(table, tmp)
+    tmp.replace(path)
+
+
+def read_rollout_episodes(path: Path) -> list[dict]:
+    table = pq.read_table(path)
+    if tuple(table.column_names) != ROLLOUT_COLUMNS:
+        raise ValueError(f"rollout columns must be {ROLLOUT_COLUMNS}, got {tuple(table.column_names)}")
+    frame = table.to_pydict()
+    rows = []
+    for index in range(table.num_rows):
+        feature_ids = frame["feature_ids"][index] or []
+        layer = frame["layer"][index]
+        kind = frame["kind"][index]
+        value = frame["value"][index]
+        rows.append(
+            {
+                "episode_id": str(frame["episode_id"][index]),
+                "task_id": str(frame["task_id"][index]),
+                "seed": int(frame["seed"][index]),
+                "condition": str(frame["condition"][index]),
+                "feature_ids": [int(item) for item in feature_ids],
+                "layer": None if layer is None else int(layer),
+                "kind": None if kind is None else str(kind),
+                "value": None if value is None else float(value),
+                "success": bool(frame["success"][index]),
+                "steps": int(frame["steps"][index]),
+                "wall_time_s": float(frame["wall_time_s"][index]),
+            }
+        )
+    return rows
 
 
 def write_clip_effects(path: Path, rows: dict[str, list]) -> None:

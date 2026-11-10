@@ -2,6 +2,15 @@
 
 A finished `physint run` writes one directory. Later lanes (viewers, ingest, the failed-clip API) read this directory and nothing else from the training process. `physint validate <run>` checks the rules below.
 
+## Versions
+
+The contract has two versions. Version 1 reads version 0.
+
+- **Version 0.** The tree below, and no `rollouts/` directory. `manifest.json` omits `schema_version` (an explicit `0` is the same thing). `physint run` writes this.
+- **Version 1.** Version 0 plus `manifest.schema_version` equal to `1` and a `rollouts/` directory. Nothing from version 0 is removed or renamed. `physint rollouts` bumps an existing manifest to version 1 after it writes `rollouts/`.
+
+A version-0 folder still validates. A folder that grew `rollouts/` without the version bump does not.
+
 ```
 runs/<run_id>/
   manifest.json
@@ -194,3 +203,46 @@ One record per run. No extra keys.
 ## Adapter obligations the schema assumes
 
 `predict_masked(clip, window, edit=None)` returns `(pred, target)` for the masked region only, row-major over the true cells of `mask(window)`. `hook(layer, mode)` is a context manager with modes `capture`, `edit`, and `zero`. Edits replace the instrumented layer before the predictor reads it. Splicing the SAE and zeroing a feature are edits; zeroing the whole layer uses mode `zero`.
+
+## rollouts/ (version 1)
+
+`physint rollouts` measures whether an intervention on SAE latents changes task success. It writes two files:
+
+```
+rollouts/episodes.parquet
+rollouts/summary.json
+```
+
+`episodes.parquet` is one row per episode. Columns, in order:
+
+| column | type | meaning |
+| --- | --- | --- |
+| `episode_id` | string | Identity of the episode. A rerun skips ids already stored. |
+| `task_id` | string | Task passed to `reset`. |
+| `seed` | int64 | Simulator seed. Episode offset `i` uses `seed + i` on every arm. |
+| `condition` | string | `baseline` or `intervention`. |
+| `feature_ids` | list<int32> | SAE features the intervention edits. Empty for baseline. |
+| `layer` | int32, null for baseline | Layer whose latents are edited. |
+| `kind` | string, null for baseline | `ablate`, `scale`, or `clamp`. |
+| `value` | float64, null for baseline | Scale factor, clamp level, or `0` for ablate. |
+| `success` | bool | Terminal task success. |
+| `steps` | int32 | Simulator steps taken. At least 1. |
+| `wall_time_s` | float64 | Wall time of that episode, in seconds. |
+
+`ablate` sets the listed latents to 0. `scale` multiplies them by `value`. `clamp` sets them to the constant `value`.
+
+The design is paired. One baseline arm and every intervention arm see the same seeds. Candidate features are the ids passed to `--features`. Control arms are `K` other features (`--controls`), drawn from a seeded permutation of the remaining policy features, with the same layer, kind, and value. Baseline and candidates always run `N = episodes_per_arm` episodes. A control can stop early.
+
+Early stopping is evaluated on seed prefixes. The first prefix has length `min_episodes`; later prefixes grow by `batch_size`. After a prefix, each active control is compared with every candidate on success rate (control minus candidate) with a two-sided Newcombe Wilson interval at level `alpha`. The control is not scheduled past that prefix once the interval excludes 0 for every candidate. `summary.json` records, per arm, `episodes_run`, `episodes_budget`, `stopped_early`, and `reason` (`fixed_budget` or `wilson_separated`).
+
+`summary.json` is derived from the parquet and the schedule. `total_episodes` is the number of rows. `fixed_budget_episodes` is `(1 + n_candidates + n_controls) * N`, the cost if nothing stopped early. `episodes_saved` is the difference. `rollouts_per_validated_feature` is `total_episodes / n_validated`, or null when nothing was flagged.
+
+For each candidate and each control the summary stores the paired success rates on the seeds that arm actually ran, `delta = baseline_success - intervention_success`, a Wald interval on the paired differences (`ci_low`, `ci_high`), and the two-sided exact McNemar `p_value`. `control_percentile` is the percentage of the other arms' deltas that are `<=` this delta (candidates are compared with the controls; a control is compared with the other controls). Ties count toward the percentile. No controls means the percentile is null.
+
+`causal` is true only when all three hold:
+
+- `delta >= 0.15`
+- `p_value <= alpha`
+- `control_percentile >= 95`
+
+Null does not pass. `validated_feature_ids` lists the feature ids with `causal: true`. These thresholds live next to the scoreboard gates in `src/physint/thresholds.py` and are not the `real` rule: a rollout never rewrites `scoreboard.json`.
