@@ -73,13 +73,16 @@ def cue_sites(clip_index: int, cue_index: int, seed: int, n_tokens: int) -> list
     return [(int(p), float(v)) for p, v in zip(positions, values, strict=True)]
 
 
-def render_clip(clip_index: int, seed: int) -> np.ndarray:
-    """Paint each cue into its own channel so the encoder can read it back exactly."""
-    frames = np.zeros((N_FRAMES, HEIGHT, WIDTH, N_CHANNELS), dtype=np.float32)
-    rng = _generator(seed, clip_index, 99)
-    frames[..., N_CUES:] = rng.normal(0.0, 0.02, size=frames[..., N_CUES:].shape).astype(np.float32)
+def _paint_cues(frames: np.ndarray, clip_index: int, seed: int, cues: tuple[str, ...]) -> None:
+    unknown = [name for name in cues if name not in CUE_NAMES]
+    if unknown:
+        known = ", ".join(CUE_NAMES)
+        raise ValueError(f"unknown cue(s) {unknown}. Known cues: {known}")
+    wanted = set(cues)
     n_tokens = GRID.t * GRID.h * GRID.w
-    for cue_index in range(N_CUES):
+    for cue_index, name in enumerate(CUE_NAMES):
+        if name not in wanted:
+            continue
         for flat, value in cue_sites(clip_index, cue_index, seed, n_tokens):
             ti, hi, wi = unravel(flat, GRID.t, GRID.h, GRID.w)
             frames[
@@ -88,6 +91,25 @@ def render_clip(clip_index: int, seed: int) -> np.ndarray:
                 wi * PATCH_PX : (wi + 1) * PATCH_PX,
                 cue_index,
             ] = value
+
+
+def render_clip(clip_index: int, seed: int) -> np.ndarray:
+    """Paint each cue into its own channel so the encoder can read it back exactly."""
+    frames = np.zeros((N_FRAMES, HEIGHT, WIDTH, N_CHANNELS), dtype=np.float32)
+    rng = _generator(seed, clip_index, 99)
+    frames[..., N_CUES:] = rng.normal(0.0, 0.02, size=frames[..., N_CUES:].shape).astype(np.float32)
+    _paint_cues(frames, clip_index, seed, CUE_NAMES)
+    return frames
+
+
+def render_cues(clip_index: int, seed: int, cues: tuple[str, ...] | list[str]) -> np.ndarray:
+    """Paint only the named cues, using the same sites as ``render_clip``.
+
+    A one-cue clip puts that cue's direction into the layer and leaves the
+    others at zero. Distractor channels stay zero; the encoder does not read them.
+    """
+    frames = np.zeros((N_FRAMES, HEIGHT, WIDTH, N_CHANNELS), dtype=np.float32)
+    _paint_cues(frames, clip_index, seed, tuple(cues))
     return frames
 
 
