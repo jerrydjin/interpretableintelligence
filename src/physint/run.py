@@ -19,14 +19,18 @@ from physint.sae import SAEConfig, save_sae, train_sae
 from physint.score import (
     Token,
     ablate_edit,
+    ablate_features_edit,
     absent_in_random_init,
     capture_activations,
     clean_predictions,
+    coactive_group,
     cosine_distance,
     dead_fraction,
     mean_cosine_shift,
     estimate_effects,
     explained_variance,
+    loss_effect_kind,
+    loss_frame_rows,
     mean_predictor_loss,
     random_percentile,
     splice_edit,
@@ -39,10 +43,13 @@ from physint.thresholds import (
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
     DEFAULT_SEED,
+    GROUP_ABLATION_SIZE,
     MIN_CLIPS,
     N_RANDOM_FEATURES,
     TOP_K_ABLATION_PER_CLIP,
 )
+
+_EXTRA_EFFECTS = {"loss", "group"}
 
 
 def execute_run(
@@ -52,9 +59,13 @@ def execute_run(
     layer: int = DEFAULT_LAYER,
     seed: int = DEFAULT_SEED,
     heldout_frac: float = DEFAULT_HELDOUT_FRAC,
+    extra_effects: tuple[str, ...] = (),
     log=print,
 ) -> dict:
     started = time.perf_counter()
+    unknown_effects = set(extra_effects) - _EXTRA_EFFECTS
+    if unknown_effects:
+        raise ValueError(f"extra_effects must be a subset of {sorted(_EXTRA_EFFECTS)}, got {sorted(unknown_effects)}")
     # Tiny matmuls, and a stable reference scoreboard.
     torch.set_num_threads(1)
     device = pick_device()
@@ -259,12 +270,50 @@ def execute_run(
         key: estimate_rows[key] + ablation_rows[key]
         for key in ("feature_id", "clip_id", "window", "t", "effect", "effect_kind")
     }
+    if extra_effects:
+        extra_rows = _extra_effect_rows(
+            adapter,
+            sae,
+            clips,
+            feature_np,
+            ablated,
+            extra_effects,
+            log,
+        )
+        for key in effect_rows:
+            effect_rows[key].extend(extra_rows[key])
     write_clip_effects(out / "features" / "clip_effects.parquet", effect_rows)
 
     real_labels = [row["label"] for row in records if row["real"]]
     elapsed = time.perf_counter() - started
     log(f"wrote {out}  real={len(real_labels)} {real_labels}  {elapsed:.1f}s")
     return scoreboard
+
+
+def _extra_effect_rows(adapter, sae, clips, features: np.ndarray, ablated: set[tuple[str, int]], modes: tuple[str, ...], log):
+    """Full-video loss rows. The cosine scoreboard path does not read these."""
+    rows = {key: [] for key in ("feature_id", "clip_id", "window", "t", "effect", "effect_kind")}
+    if "loss" in modes:
+        log("full-video single-feature loss")
+        by_feature: dict[int, list] = {}
+        for clip in clips:
+            for feature_id in range(features.shape[1]):
+                if (clip.clip_id, feature_id) in ablated:
+                    by_feature.setdefault(feature_id, []).append(clip)
+        for feature_id, targets in by_feature.items():
+            edit = ablate_edit(sae, feature_id)
+            part = loss_frame_rows(adapter, targets, edit, [feature_id], loss_effect_kind(False, "video"))
+            for key in rows:
+                rows[key].extend(part[key])
+    if "group" in modes:
+        log("full-video group loss")
+        group = coactive_group(features, k=min(GROUP_ABLATION_SIZE, features.shape[1]))
+        if group:
+            edit = ablate_features_edit(sae, group)
+            part = loss_frame_rows(adapter, clips, edit, group, loss_effect_kind(True, "video"))
+            for key in rows:
+                rows[key].extend(part[key])
+    return rows
 
 
 def _collect_estimates(adapter, sae, clips, n_features: int):

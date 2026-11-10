@@ -54,8 +54,16 @@ def run(
         float,
         typer.Option("--heldout-frac", help="Fraction of clips held out."),
     ] = DEFAULT_HELDOUT_FRAC,
+    extra_effects: Annotated[
+        str,
+        typer.Option(
+            "--extra-effects",
+            help="Comma-separated clip_effects modes to add: loss, group. The cosine scoreboard stays.",
+        ),
+    ] = "",
 ) -> None:
     """Capture activations, train an SAE, label features, score them, write a run folder."""
+    modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
     try:
         execute_run(
             adapter_name=adapter,
@@ -64,6 +72,7 @@ def run(
             layer=layer,
             seed=seed,
             heldout_frac=heldout_frac,
+            extra_effects=modes,
         )
     except (ValueError, RuntimeError, FileNotFoundError) as exc:
         typer.echo(f"error: {exc}", err=True)

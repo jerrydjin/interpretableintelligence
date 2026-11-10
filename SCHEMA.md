@@ -100,10 +100,16 @@ Columns, in order:
 
 `feature_id` int32, `clip_id` string, `window` int16, `t` int16, `effect` float32, `effect_kind` string.
 
-`effect_kind` is `estimate` or `ablation`.
+`effect_kind` is one of:
 
 - `estimate`: activation × ∂(mean masked predictor MSE)/∂(feature activation), averaged over `h, w` in that frame. Straight-through: the forward value is the true layer activation, and the gradient flows through the decoder. One row for every feature, clip, window, and frame.
-- `ablation`: the feature is actually zeroed by subtracting `f_i * decoder_i` from the layer. Rows exist for the top 10 features per clip (or every feature, if the dictionary is smaller), ranked by mean absolute estimate on that clip, and for every frame of those features. The stored effect is the mean cosine distance of the predictor output over the masked spatial cells in that frame.
+- `ablation`: the feature is actually zeroed by subtracting `f_i * decoder_i` from the layer. Rows exist for the top 10 features per clip (or every feature, if the dictionary is smaller), ranked by mean absolute estimate on that clip, and for every frame of those features. The stored effect is the mean cosine distance of the predictor output over the masked spatial cells in that frame. This is the original single-feature score. The scoreboard's `ablation_effect` is the mean of these distances over held-out masked tokens.
+- `loss_video`: same single-feature zeroing, scored as the change in the model's own masked prediction loss (edited MSE minus clean MSE) over every window of the clip. The stored number is the mean per-token loss increase inside that frame. The video-level effect is the token-weighted mean of the frame rows.
+- `loss_window`: the same loss change restricted to one window.
+- `group_loss_video`: the co-active group (default size 3) is zeroed together, and the loss change is taken over every window. Each member feature gets a copy of the group's per-frame loss increase.
+- `group_loss_window`: the group loss change restricted to one window.
+
+`estimate` and `ablation` are always present. The loss kinds are written when a run is asked for them (`--extra-effects loss,group`) and are what the loss-based scorer compares to matched controls. A loss row is a positive effect when ablation makes predictions worse. Controls match the ablated set's size, each decoder norm, and each multiset of positive activations.
 
 ## features/features.jsonl
 

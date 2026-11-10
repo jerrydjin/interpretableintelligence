@@ -10,7 +10,7 @@ This lane is the contract and the scoring core. It does not load V-JEPA 2 or pi0
 2. **Capture** the instrumented layer through `hook(..., mode="capture")` and write activation shards.
 3. **Train** a ReLU SAE on train rows only.
 4. **Label** each feature. The fake adapter uses `fake-cue-v1`, which reads planted cue channels back out of the clip. `LLMLabeller` is a stub and raises rather than calling a network.
-5. **Score** explained variance, spliced predictor loss, dead features, per-feature ablations, matched random features, and a random-init control.
+5. **Score** explained variance, spliced predictor loss, dead features, per-feature ablations, matched random features, and a random-init control. The default ablation is single-feature cosine distance. `--extra-effects loss,group` also writes full-video loss changes for single features and for co-active groups, each against matched controls of the same size and activation mass.
 6. **Write** the run folder in `SCHEMA.md`. `physint validate` checks that folder, including that `real` follows the four gates.
 
 Thresholds are constants in `src/physint/thresholds.py`. Changing them changes the meaning of `real`.
@@ -38,6 +38,7 @@ The scorer only talks to this surface. It does not know whether the model is a w
 - Causal cues `stripe`, `pulse`, `corner` are read by the predictor. Zeroing the matching SAE feature moves held-out predictions.
 - Decoy cues `flicker`, `band`, `speckle` are painted the same way, fire on every clip, and receive stable labels, but the readout is orthogonal to them. Their ablation effect sits under the random-feature baseline.
 - `load(random_init=True)` applies a fixed token permutation before a random encoder, so cue identity no longer lines up with position. An SAE on that model does not reproduce the planted patterns (`absent_in_random_init`).
+- `plant="group"` is a separate fixture: three co-active features share a `max` readout, so each marginal ablation is small and the joint ablation is not. It uses two windows. `plant="null"` fires features the predictor does not read. Neither fixture is the default acceptance model.
 
 Clips are float32 arrays shaped `[16, 16, 16, 8]` (frames, height, width, channels), one channel per cue plus two distractor channels. `physint generate-clips` writes them. The head adds a bias orthogonal to the cue subspace so cosine distance measures a real rotation of the output rather than a collapse to zero.
 

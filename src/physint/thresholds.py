@@ -25,6 +25,32 @@ N_RANDOM_FEATURES = 100
 # clip_effects rows with effect_kind="ablation": this many features per clip.
 TOP_K_ABLATION_PER_CLIP = 10
 
+# Loss-based ablations. alpha matches the cosine percentile gate:
+# real iff the Monte Carlo p-value is <= alpha (ties count against the candidate).
+EFFECT_ALPHA = (100.0 - RANDOM_PERCENTILE_MIN) / 100.0
+# |loss delta| below this is numerical dust and counts as zero.
+EFFECT_POS_EPS = 1e-8
+# Co-active group size for effect_kind="group_loss_video".
+GROUP_ABLATION_SIZE = 3
+
+EFFECT_KIND_ESTIMATE = "estimate"
+EFFECT_KIND_ABLATION = "ablation"
+EFFECT_KIND_LOSS_VIDEO = "loss_video"
+EFFECT_KIND_LOSS_WINDOW = "loss_window"
+EFFECT_KIND_GROUP_LOSS_VIDEO = "group_loss_video"
+EFFECT_KIND_GROUP_LOSS_WINDOW = "group_loss_window"
+LOSS_EFFECT_KINDS = (
+    EFFECT_KIND_LOSS_VIDEO,
+    EFFECT_KIND_LOSS_WINDOW,
+    EFFECT_KIND_GROUP_LOSS_VIDEO,
+    EFFECT_KIND_GROUP_LOSS_WINDOW,
+)
+KNOWN_EFFECT_KINDS = (
+    EFFECT_KIND_ESTIMATE,
+    EFFECT_KIND_ABLATION,
+    *LOSS_EFFECT_KINDS,
+)
+
 # Labeller: assign a cue only when train correlation clears this,
 # and require this held-out correlation for label_holds_heldout.
 LABEL_ASSIGN_MIN_CORR = 0.50

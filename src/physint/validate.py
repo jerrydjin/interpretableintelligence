@@ -19,7 +19,14 @@ from physint.artifacts import (
 from physint.sae import load_sae
 from physint.split import assign_split, split_sha
 from physint.stats import feature_is_real, is_usable
-from physint.thresholds import N_RANDOM_FEATURES, TOP_K_ABLATION_PER_CLIP, TOP_K_EXAMPLES
+from physint.thresholds import (
+    EFFECT_KIND_ABLATION,
+    EFFECT_KIND_ESTIMATE,
+    KNOWN_EFFECT_KINDS,
+    N_RANDOM_FEATURES,
+    TOP_K_ABLATION_PER_CLIP,
+    TOP_K_EXAMPLES,
+)
 
 _SHARD_NAME = re.compile(r"shard-\d{5}\.safetensors$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -482,6 +489,8 @@ def _check_effects(path: Path, manifest: dict, n_features: int, errors: list[str
     clip_ids = [clip["clip_id"] for clip in manifest["clips"]]
     estimate_keys = []
     ablation_keys = []
+    extra_keys: dict[str, list] = {kind: [] for kind in KNOWN_EFFECT_KINDS if kind not in {EFFECT_KIND_ESTIMATE, EFFECT_KIND_ABLATION}}
+    known_kinds = set(KNOWN_EFFECT_KINDS)
     for fid, clip_id, window, t, effect, kind in zip(
         frame["feature_id"],
         frame["clip_id"],
@@ -491,8 +500,8 @@ def _check_effects(path: Path, manifest: dict, n_features: int, errors: list[str
         frame["effect_kind"],
         strict=True,
     ):
-        if kind not in {"estimate", "ablation"}:
-            errors.append(f"effect_kind must be estimate or ablation, got {kind!r}")
+        if kind not in known_kinds:
+            errors.append(f"effect_kind must be one of {KNOWN_EFFECT_KINDS}, got {kind!r}")
             return
         if not _is_int(fid) or not 0 <= int(fid) < n_features:
             errors.append("clip_effects feature_id out of range")
@@ -507,10 +516,12 @@ def _check_effects(path: Path, manifest: dict, n_features: int, errors: list[str
             errors.append("clip_effects effect must be finite")
             return
         key = (int(fid), clip_id, int(window), int(t))
-        if kind == "estimate":
+        if kind == EFFECT_KIND_ESTIMATE:
             estimate_keys.append(key)
-        else:
+        elif kind == EFFECT_KIND_ABLATION:
             ablation_keys.append(key)
+        else:
+            extra_keys[kind].append(key)
     expected_estimates = {
         (fid, clip_id, window, t)
         for fid in range(n_features)
@@ -540,6 +551,9 @@ def _check_effects(path: Path, manifest: dict, n_features: int, errors: list[str
             errors.append(f"{clip_id} ablation rows must cover every frame of the ablated features")
     if not estimate_keys or not ablation_keys:
         errors.append("clip_effects must contain both estimate and ablation rows")
+    for kind, keys in extra_keys.items():
+        if len(keys) != len(set(keys)):
+            errors.append(f"{kind} rows must be unique per feature, clip, window, and frame")
 
 
 def _read_object(path: Path, errors: list[str]) -> dict | None:
