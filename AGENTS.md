@@ -40,7 +40,9 @@ All experiments that belong in this repo should be reachable through these comma
 | `validate` | Check a run folder against `SCHEMA.md`. |
 | `view` | Local browser viewer for a finished run. |
 
-World-model path: `ii run fake --clips … --out runs/…` or `vjepa2`. Policy path on main: `ii rollouts runs/… --policy fake` (LIBERO/GR00T integration is not wired into `ii rollouts` yet; see groot adapter lane).
+World-model path: `ii run fake --clips … --out runs/…` or `vjepa2`. Policy path on main: `ii rollouts runs/… --policy fake`.
+
+**Known gap:** GR00T is **not on `ii` yet**. Live LIBERO-plus work runs through `src/interpretableintelligence/adapters/groot/v9/` (Colab, `ablate_v9.py`, ablation plans)—the current pre-CLI route, not a violation of the long-term CLI rule.
 
 ## Run folder layout
 
@@ -74,15 +76,17 @@ These override intuition, offline plots, and demo-site copy.
 1. The **Sobel–Wald SPRT** stop rule calls a **rise** (not merely a fall or cap).
 2. The rise over the measured baseline on those seeds has **McNemar p < 0.05**.
 3. The effect **beats every matched random control** arm in the plan.
-4. It **beats the random-weights SAE control** (the trained SAE hook sanity arm; empty latent edit / recon-only path in groot ablation plans).
+4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. **Not implemented in the repo yet** (no `ii` command; known gap).
+
+**`recon_only` (groot ablation plans):** sanity check only—the hook applies SAE reconstruction with **no latent ablation** (empty edit set). On task 1028 it was **8/8 bit-identical to baseline**. This verifies the hook path; it is **not** the random-weights SAE control and does not satisfy rule 4.
 
 **Scoreboard (`scoreboard.json`):** changes only through the automated scorer (`ii run` scoring stage or equivalent validated pipeline), **never by hand**. Every feature stays `real: false` until its gates pass (`SCHEMA.md`: usable SAE plus diversity, label holdout, random-feature percentile, random-init absence). Offline `real` does **not** imply rollout causality.
 
 **How to run work:**
 
-- Go through the **public `ii` CLI** and write into the standard run layout. No ad-hoc scripts for production experiments. If tests need a capability the CLI lacks, **add a reusable `ii` command** first—build only what the experiment needs.
+- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. Until GR00T and the random-weights SAE control land on `ii`, the v9 adapter path above is the documented exception (known gap).
 - **Never edit `split.json` or held-out labels** in an existing run.
-- **No paid compute** on behalf of this repo (no cloud GPU rental, etc.). GR00T rollouts use existing Colab/box paths documented under `adapters/groot/`.
+- **No paid compute** on behalf of this repo (no cloud GPU rental, etc.). GR00T rollouts use existing Colab/box paths under `adapters/groot/`.
 
 ## Git workflow
 
