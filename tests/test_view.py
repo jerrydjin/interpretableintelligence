@@ -1092,7 +1092,7 @@ def _wait_http(url: str) -> None:
 
 
 def _chrome() -> str:
-    for candidate in ("/usr/local/bin/google-chrome", "/usr/bin/google-chrome", "/usr/bin/chromium"):
+    for candidate in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/local/bin/google-chrome", "/usr/bin/google-chrome", "/usr/bin/chromium"):
         if Path(candidate).is_file():
             return candidate
     raise FileNotFoundError("Chrome is not installed; the viewer browser test cannot run")

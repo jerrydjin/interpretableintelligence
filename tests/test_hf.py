@@ -116,6 +116,26 @@ def test_grid_prefix_and_edits(tiny_models, name):
     assert baseline.shape == target.shape
 
 
+@pytest.mark.parametrize("name", list(_configs()))
+def test_batched_edits_match_one_forward_each(tiny_models, name, monkeypatch):
+    import interpretableintelligence.adapters.hf as hf
+
+    monkeypatch.setattr(hf, "MANY_BATCH_ITEMS", 16)  # forces several chunks
+    adapter = _adapter(tiny_models[name])
+    clip = _clip(2)
+    window = adapter.windows(clip)[0]
+    edits = [(lambda x, k=k: x * (1.0 - 0.1 * k)) for k in range(5)]
+    with torch.no_grad():
+        batched = adapter.predict_masked_many(clip, window, edits)
+        looped = [adapter.predict_masked(clip, window, edit=edit)[0] for edit in edits]
+    assert len(batched) == len(looped)
+    for one, many in zip(looped, batched, strict=True):
+        assert torch.allclose(one, many, atol=1e-5)
+    # The swapped-out blocks are restored afterwards.
+    again, target = adapter.predict_masked(clip, window, edit=lambda x: x)
+    assert torch.allclose(again, target, atol=1e-5)
+
+
 def test_edit_only_touches_patch_tokens_and_carries_gradient(tiny_models):
     adapter = _adapter(tiny_models["vit"])
     clip = _clip(1)
