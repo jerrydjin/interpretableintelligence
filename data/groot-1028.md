@@ -54,20 +54,24 @@ tar -xJf groot-1028-v9-n100.tar.xz
 
 After unpack, the run directory is `groot-1028-v9-n100/`.
 
-## `ii validate` (interpretableintelligence run contract)
+## Import into the `ii` run contract
 
-This folder is **not** a finished `ii run` tree (`SCHEMA.md` version 0). Validation was checked on the published tarball contents:
+Convert a rollcap-v0 folder (unmodified on disk) into a sibling run directory that passes `ii validate`:
 
 ```bash
-uv run ii validate groot-1028-v9-n100
+tar -xJf groot-1028-v9-n100.tar.xz
+uv run ii import --format groot-v9 groot-1028-v9-n100 runs/groot-1028-v9-n100-ii
+uv run ii validate runs/groot-1028-v9-n100-ii
 ```
 
-**Result (2026-11-12):** exit **1** — first error reported:
+- `split.json` is copied **byte-identical** (episode-index held-out lists unchanged).
+- Clip rows use POT-0 failure fields from `episodes.jsonl` (`fail_kind` / `fail_t` / `fail_rule`, not `fail_*_v9_active`).
+- `scoreboard.json` is honest: SAE `usable: false`, every feature `real: false`, plus `scoreboard.groot_ablation` from `demo-data/groot/groot-1028-ablate-summary.json` (task-1028 rise test null). Override with `--ablation-summary` if needed.
+- Offline cosine ablation / random-percentile gates are **not** re-run; `clip_effects` carries placeholder estimate rows for the import prefilter shortlist only.
 
-```text
-error: missing scoreboard.json
-```
+### Known gaps vs a full `ii run`
 
-Even with `scoreboard.json` present, the v9 capture would still diverge from the `ii run` contract: `manifest.json` uses `rollcap-v0` episode metadata instead of clip-grid `manifest` fields; `split.json` is episode-index lists without the clip-level `seed` / `heldout_frac` / `sha` shape; there is no `features/feature_acts.parquet`, `features/clip_effects.parquet`, `features/features.jsonl`, or automated scorer output. **Do not hand-edit** `scoreboard.json` or `split.json` to force validation.
-
-**Conversion gap (future work, not part of this release):** a dedicated importer (or a future `ii` adapter command for GR00T v9) would need to map episodes/tokens to the standard run layout and run labeling/scoring stages to produce contract artifacts. Until then, use the v9 tooling under `src/interpretableintelligence/adapters/groot/v9/` (e.g. `make_ablate_plan.py`, Colab `ablate_v9.py`) against an unpacked copy of this folder.
+- `manifest.split` uses `kind: episode_index` (file sha256) instead of clip-level `seed` / `heldout_frac` / `assign_split`.
+- `loss_recovered` is **0.0** (not measured; GR00T head splice was not captured).
+- `scoreboard.groot_ablation` is an extension field; rollouts/Sprt/McNemar live there, not in `rollouts/`.
+- Attribution uses objective `activation` (sum of SAE activations), not masked-predictor `prediction_loss`.

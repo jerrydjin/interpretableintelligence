@@ -28,7 +28,7 @@ from interpretableintelligence.rollout import (
     make_episode_id,
     summarize,
 )
-from interpretableintelligence.attribute import PREDICTION_LOSS, METHOD, rank_feature_ids
+from interpretableintelligence.attribute import ACTIVATION, PREDICTION_LOSS, METHOD, rank_feature_ids
 from interpretableintelligence.sae import load_sae
 from interpretableintelligence.split import assign_split, split_sha
 from interpretableintelligence.stats import feature_is_real, is_usable
@@ -46,14 +46,26 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 _MANIFEST_KEYS = {"run_id", "tool_version", "model", "layer", "d_model", "grid", "split", "clips"}
 # Resume metadata. Readers that only need the contract can ignore both.
-_MANIFEST_OPTIONAL = {"stages", "clips_dir"}
+_MANIFEST_OPTIONAL = {"stages", "clips_dir", "import", "rollcap"}
 _STAGE_FIELDS = {"wall_s", "peak_ram_bytes", "device", "rows", "tokens"}
 _MODEL_KEYS = {"adapter", "name", "sha", "random_init"}
 _GRID_KEYS = {"t", "h", "w", "tubelet", "patch_px"}
 _SPLIT_REF_KEYS = {"seed", "heldout_frac", "sha"}
 _CLIP_KEYS = {"clip_id", "sha256", "fps", "n_frames", "split"}
+_CLIP_OPTIONAL = {
+    "episode_idx",
+    "success",
+    "pot0_fail_kind",
+    "pot0_fail_t",
+    "pot0_fail_subkind",
+    "pot0_fail_rule",
+}
 _SPLIT_FILE_KEYS = {"seed", "heldout_frac", "train", "heldout", "sha"}
+_SPLIT_EPISODE_KEYS = {"rule", "train", "heldout"}
+_SPLIT_REF_CLIP_KEYS = {"seed", "heldout_frac", "sha"}
+_SPLIT_REF_EPISODE_KEYS = {"kind", "sha"}
 _SCOREBOARD_KEYS = {"run", "sae", "features"}
+_SCOREBOARD_OPTIONAL = {"groot_ablation"}
 _RUN_KEYS = {"model_sha", "layer", "split_sha", "seed", "n_train_clips", "n_heldout_clips"}
 _SAE_KEYS = {"ev_heldout", "loss_recovered", "loss_sae", "loss_visible_mean", "dead_frac", "usable"}
 _FEATURE_KEYS = {
@@ -95,6 +107,28 @@ _SAE_CONFIG_KEYS = {
 }
 
 
+def _import_format(manifest: dict) -> str | None:
+    block = manifest.get("import")
+    if not isinstance(block, dict):
+        return None
+    fmt = block.get("format")
+    return str(fmt) if isinstance(fmt, str) and fmt else None
+
+
+def _episode_split_manifest(manifest: dict) -> bool:
+    ref = manifest.get("split")
+    return isinstance(ref, dict) and ref.get("kind") == "episode_index"
+
+
+def _split_file_sha(run_dir: Path) -> str | None:
+    path = run_dir / "split.json"
+    if not path.is_file():
+        return None
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def validate_run(run_dir: Path) -> list[str]:
     """Return a list of contract errors. Empty means the folder is valid."""
     errors: list[str] = []
@@ -113,8 +147,12 @@ def validate_run(run_dir: Path) -> list[str]:
     if "schema_version" in manifest:
         expected_manifest.add("schema_version")
     _allow_keys(manifest, expected_manifest, _MANIFEST_OPTIONAL, "manifest", errors)
-    _exact_keys(split, _SPLIT_FILE_KEYS, "split.json", errors)
-    _exact_keys(scoreboard, _SCOREBOARD_KEYS, "scoreboard", errors)
+    episode_split = _episode_split_manifest(manifest)
+    if episode_split:
+        _allow_keys(split, set(_SPLIT_EPISODE_KEYS), set(), "split.json", errors)
+    else:
+        _exact_keys(split, _SPLIT_FILE_KEYS, "split.json", errors)
+    _allow_keys(scoreboard, _SCOREBOARD_KEYS, _SCOREBOARD_OPTIONAL, "scoreboard", errors)
     if errors:
         return errors
     _check_manifest_extras(manifest, errors)
@@ -131,7 +169,16 @@ def validate_run(run_dir: Path) -> list[str]:
         return errors
     _exact_keys(model, _MODEL_KEYS, "manifest.model", errors)
     _exact_keys(grid, _GRID_KEYS, "manifest.grid", errors)
-    _exact_keys(split_ref, _SPLIT_REF_KEYS, "manifest.split", errors)
+    if episode_split:
+        _exact_keys(split_ref, _SPLIT_REF_EPISODE_KEYS, "manifest.split", errors)
+        if split_ref.get("kind") != "episode_index":
+            errors.append("manifest.split.kind must be episode_index for episode splits")
+        stored_sha = split_ref.get("sha")
+        file_sha = _split_file_sha(run_dir)
+        if not isinstance(stored_sha, str) or stored_sha != file_sha:
+            errors.append("manifest.split.sha must be the sha256 of split.json bytes")
+    else:
+        _exact_keys(split_ref, _SPLIT_REF_CLIP_KEYS, "manifest.split", errors)
 
     if not isinstance(manifest.get("run_id"), str) or not manifest["run_id"]:
         errors.append("manifest.run_id must be a non-empty string")
@@ -155,15 +202,16 @@ def validate_run(run_dir: Path) -> list[str]:
         errors.append("manifest.model.random_init must be a boolean")
     _hex_field(model.get("sha"), "manifest.model.sha", errors)
 
-    if not _is_int(split.get("seed")):
-        errors.append("split.json seed must be an integer")
-    if not _is_number(split.get("heldout_frac")) or not 0.0 < float(split["heldout_frac"]) < 1.0:
-        errors.append("split.json heldout_frac must be in (0, 1)")
+    if not episode_split:
+        if not _is_int(split.get("seed")):
+            errors.append("split.json seed must be an integer")
+        if not _is_number(split.get("heldout_frac")) or not 0.0 < float(split["heldout_frac"]) < 1.0:
+            errors.append("split.json heldout_frac must be in (0, 1)")
     if not isinstance(split.get("train"), list) or not isinstance(split.get("heldout"), list):
         errors.append("split.json train and heldout must be lists")
         return errors
 
-    _check_split_consistency(manifest, split, split_ref, clips, errors)
+    _check_split_consistency(manifest, split, split_ref, clips, errors, run_dir=run_dir)
     _check_scoreboard_shape(scoreboard, manifest, errors)
     if errors:
         return errors
@@ -175,14 +223,23 @@ def validate_run(run_dir: Path) -> list[str]:
     return errors
 
 
-def _check_split_consistency(manifest: dict, split: dict, split_ref: dict, clips: list, errors: list[str]) -> None:
+def _check_split_consistency(
+    manifest: dict,
+    split: dict,
+    split_ref: dict,
+    clips: list,
+    errors: list[str],
+    *,
+    run_dir: Path | None = None,
+) -> None:
+    episode_split = _episode_split_manifest(manifest)
     clip_ids = []
     seen = set()
     for index, clip in enumerate(clips):
         if not isinstance(clip, dict):
             errors.append(f"manifest.clips[{index}] must be an object")
             continue
-        _exact_keys(clip, _CLIP_KEYS, f"manifest.clips[{index}]", errors)
+        _allow_keys(clip, _CLIP_KEYS, _CLIP_OPTIONAL, f"manifest.clips[{index}]", errors)
         clip_id = clip.get("clip_id")
         if not isinstance(clip_id, str) or not clip_id:
             errors.append(f"manifest.clips[{index}].clip_id must be a non-empty string")
@@ -201,6 +258,37 @@ def _check_split_consistency(manifest: dict, split: dict, split_ref: dict, clips
 
     train = list(split["train"])
     heldout = list(split["heldout"])
+    if episode_split:
+        if any(not _is_int(item) for item in train + heldout):
+            errors.append("episode split.json train/heldout must be episode indices (integers)")
+            return
+        if len(train) + len(heldout) != len(set(train) | set(heldout)):
+            errors.append("split.json episode lists overlap or repeat an index")
+        expected_eps = {int(item) for item in train + heldout}
+        clip_eps = set()
+        for clip in clips:
+            if not isinstance(clip, dict):
+                continue
+            ep_idx = clip.get("episode_idx")
+            if not _is_int(ep_idx):
+                errors.append(f"{clip.get('clip_id')} must include episode_idx for episode splits")
+                continue
+            clip_eps.add(int(ep_idx))
+            if int(ep_idx) in set(heldout):
+                expected = "heldout"
+            else:
+                expected = "train"
+            if clip.get("split") != expected:
+                errors.append(f"{clip.get('clip_id')} split field does not match episode split.json")
+        if expected_eps != clip_eps:
+            errors.append("split.json episode indices do not match manifest.clips episode_idx set")
+        if run_dir is not None and (run_dir / "split.json").is_file():
+            import hashlib
+
+            if split_ref.get("sha") != hashlib.sha256((run_dir / "split.json").read_bytes()).hexdigest():
+                errors.append("manifest.split.sha does not match on-disk split.json")
+        return
+
     if len(train) + len(heldout) != len(set(train) | set(heldout)):
         errors.append("split.json lists overlap or repeat a clip")
     if set(train) | set(heldout) != set(clip_ids):
@@ -244,7 +332,10 @@ def _check_scoreboard_shape(scoreboard: dict, manifest: dict, errors: list[str])
         errors.append("scoreboard.run.layer does not match manifest.layer")
     if run.get("split_sha") != manifest["split"].get("sha"):
         errors.append("scoreboard.run.split_sha does not match manifest.split.sha")
-    if run.get("seed") != manifest["split"].get("seed"):
+    if _episode_split_manifest(manifest):
+        if not _is_int(run.get("seed")):
+            errors.append("scoreboard.run.seed must be an integer for episode splits")
+    elif run.get("seed") != manifest["split"].get("seed"):
         errors.append("scoreboard.run.seed does not match the split seed")
     n_train = sum(1 for clip in manifest["clips"] if clip.get("split") == "train")
     n_held = sum(1 for clip in manifest["clips"] if clip.get("split") == "heldout")
@@ -485,12 +576,51 @@ def _check_feature_files(run_dir: Path, manifest: dict, scoreboard: dict, errors
         if isinstance(feature, dict) and feature.get("ablation_effect") is not None
     ]
     if effects_path.is_file():
-        _check_effects(effects_path, manifest, len(features), measured, errors)
+        _check_effects(effects_path, manifest, len(features), measured, errors, run_dir=run_dir)
     _check_attribution(run_dir, manifest, len(features), errors)
 
 
 def _check_feature_acts(path: Path, manifest: dict, n_features: int, errors: list[str]) -> None:
+    groot_import = _import_format(manifest) == "groot-v9"
     try:
+        if groot_import:
+            schema = pq.read_schema(path)
+            if tuple(schema.names) != FEATURE_ACT_COLUMNS:
+                errors.append(f"feature_acts columns must be {FEATURE_ACT_COLUMNS}")
+            pf = pq.ParquetFile(path)
+            if pf.metadata.num_rows == 0:
+                errors.append("feature_acts.parquet is empty")
+            sample = pf.read_row_group(0) if pf.num_row_groups else None
+            if sample is not None and sample.num_rows:
+                frame = sample.slice(0, min(256, sample.num_rows)).to_pydict()
+                clip_ids = {clip["clip_id"] for clip in manifest["clips"]}
+                grid = manifest["grid"]
+                for fid, clip_id, window, t, h, w, value in zip(
+                    frame["feature_id"],
+                    frame["clip_id"],
+                    frame["window"],
+                    frame["t"],
+                    frame["h"],
+                    frame["w"],
+                    frame["value"],
+                    strict=True,
+                ):
+                    if not _is_int(fid) or not 0 <= int(fid) < n_features:
+                        errors.append("feature_acts feature_id out of range")
+                        return
+                    if clip_id not in clip_ids:
+                        errors.append("feature_acts clip_id is not in the manifest")
+                        return
+                    if not _is_int(window) or int(window) < 0:
+                        errors.append("feature_acts window must be a non-negative integer")
+                        return
+                    if not (0 <= int(t) < grid["t"] and 0 <= int(h) < grid["h"] and 0 <= int(w) < grid["w"]):
+                        errors.append("feature_acts coordinate outside the grid")
+                        return
+                    if not _is_number(value) or float(value) <= 0.0:
+                        errors.append("feature_acts values must be strictly positive (sparse nonzeros only)")
+                        return
+            return
         table = pq.read_table(path)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"feature_acts.parquet: {exc}")
@@ -531,7 +661,23 @@ def _check_feature_acts(path: Path, manifest: dict, n_features: int, errors: lis
             return
 
 
-def _check_effects(path: Path, manifest: dict, n_features: int, measured: list[int], errors: list[str]) -> None:
+def _check_effects(
+    path: Path,
+    manifest: dict,
+    n_features: int,
+    measured: list[int],
+    errors: list[str],
+    *,
+    run_dir: Path | None = None,
+) -> None:
+    groot_import = _import_format(manifest) == "groot-v9"
+    prefilter_ids: list[int] = []
+    if groot_import and run_dir is not None:
+        try:
+            doc = read_json(run_dir / "features" / "candidates.json")
+            prefilter_ids = [int(x) for x in doc.get("candidates", [])]
+        except (OSError, ValueError, TypeError):
+            prefilter_ids = []
     try:
         table = pq.read_table(path)
     except Exception as exc:  # noqa: BLE001
@@ -542,12 +688,20 @@ def _check_effects(path: Path, manifest: dict, n_features: int, measured: list[i
         return
     frame = table.to_pydict()
     grid = manifest["grid"]
-    try:
-        shards = load_activation_shards(path.parent.parent / "acts")
-    except (OSError, ValueError, KeyError) as exc:
-        errors.append(f"clip_effects could not be aligned to activation shards: {exc}")
-        return
-    windows = sorted(set(int(item) for item in shards["window"].tolist()))
+    if groot_import:
+        import_block = manifest.get("import")
+        max_window = int(import_block.get("max_window", 0)) if isinstance(import_block, dict) else 0
+        if max_window <= 0:
+            errors.append("groot import manifest.import.max_window must be a positive integer")
+            return
+        windows = list(range(max_window))
+    else:
+        try:
+            shards = load_activation_shards(path.parent.parent / "acts")
+        except (OSError, ValueError, KeyError) as exc:
+            errors.append(f"clip_effects could not be aligned to activation shards: {exc}")
+            return
+        windows = sorted(set(int(item) for item in shards["window"].tolist()))
     clip_ids = [clip["clip_id"] for clip in manifest["clips"]]
     estimate_keys = []
     ablation_keys = []
@@ -584,15 +738,27 @@ def _check_effects(path: Path, manifest: dict, n_features: int, measured: list[i
             ablation_keys.append(key)
         else:
             extra_keys[kind].append(key)
-    expected_estimates = {
-        (fid, clip_id, window, t)
-        for fid in range(n_features)
-        for clip_id in clip_ids
-        for window in windows
-        for t in range(int(grid["t"]))
-    }
+    if groot_import and prefilter_ids:
+        expected_estimates = {
+            (fid, clip_id, window, t)
+            for fid in prefilter_ids
+            for clip_id in clip_ids
+            for window in windows
+            for t in range(int(grid["t"]))
+        }
+    else:
+        expected_estimates = {
+            (fid, clip_id, window, t)
+            for fid in range(n_features)
+            for clip_id in clip_ids
+            for window in windows
+            for t in range(int(grid["t"]))
+        }
     if set(estimate_keys) != expected_estimates or len(estimate_keys) != len(expected_estimates):
-        errors.append("estimate rows must cover every feature, clip, window, and frame exactly once")
+        if groot_import and prefilter_ids:
+            errors.append("groot import estimate rows must cover each prefilter candidate, clip, window, and frame once")
+        else:
+            errors.append("estimate rows must cover every feature, clip, window, and frame exactly once")
     if len(ablation_keys) != len(set(ablation_keys)):
         errors.append("ablation rows must be unique per feature, clip, window, and frame")
     from collections import defaultdict
@@ -614,7 +780,13 @@ def _check_effects(path: Path, manifest: dict, n_features: int, measured: list[i
                 errors.append(f"{clip_id} ablation rows must cover every frame of the ablated features")
     else:
         expected_ids = set(measured)
+        if groot_import and not measured and prefilter_ids:
+            expected_ids = set(prefilter_ids)
+        if not expected_ids:
+            pass
         for clip_id in clip_ids:
+            if not expected_ids:
+                continue
             got = per_clip.get(clip_id, set())
             if got != expected_ids:
                 errors.append(
@@ -626,8 +798,10 @@ def _check_effects(path: Path, manifest: dict, n_features: int, measured: list[i
             }
             if set(per_clip_rows[clip_id]) != expected_rows:
                 errors.append(f"{clip_id} ablation rows must cover every frame of the prefiltered features")
-    if not estimate_keys or not ablation_keys:
-        errors.append("clip_effects must contain both estimate and ablation rows")
+    if not estimate_keys:
+        errors.append("clip_effects must contain estimate rows")
+    if not ablation_keys and not (groot_import and not measured):
+        errors.append("clip_effects must contain ablation rows")
     for kind, keys in extra_keys.items():
         if len(keys) != len(set(keys)):
             errors.append(f"{kind} rows must be unique per feature, clip, window, and frame")
@@ -835,9 +1009,12 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
         errors.append(f"attribution columns must be {ATTRIBUTION_COLUMNS}")
         return
     recorded = read_attribution_objective(path)
-    if recorded != PREDICTION_LOSS:
+    allowed_objectives = {PREDICTION_LOSS}
+    if _import_format(manifest) == "groot-v9":
+        allowed_objectives.add(ACTIVATION)
+    if recorded not in allowed_objectives:
         errors.append(
-            f"attribution.parquet objective metadata must be {PREDICTION_LOSS!r} on a scored run, got {recorded!r}"
+            f"attribution.parquet objective metadata must be one of {sorted(allowed_objectives)}, got {recorded!r}"
         )
     frame = table.to_pydict()
     clip_ids = [clip["clip_id"] for clip in manifest["clips"] if isinstance(clip, dict)]
@@ -877,8 +1054,9 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
     _exact_keys(document, _CANDIDATE_KEYS, "candidates.json", errors)
     if document.get("method") != METHOD:
         errors.append(f"candidates.json method must be {METHOD}")
-    if document.get("objective") != PREDICTION_LOSS:
-        errors.append(f"candidates.json objective must be {PREDICTION_LOSS!r} on a scored run")
+    objective = document.get("objective")
+    if objective not in allowed_objectives:
+        errors.append(f"candidates.json objective must be one of {sorted(allowed_objectives)}, got {objective!r}")
     if document.get("shortlist_only") is not True:
         errors.append("candidates are a shortlist and must be confirmed by a real ablation")
     if not isinstance(document.get("rank_by"), str) or not document["rank_by"]:
@@ -915,7 +1093,8 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
             continue
         if abs(float(row["abs_score"]) - abs(float(row["score"]))) > 1e-8:
             errors.append(f"candidates.json ranked[{index}].abs_score must be |score|")
-        if abs(float(row["score"]) - float(mean[int(feature_id)])) > 1e-5:
+        score_atol = 2e-4 if _import_format(manifest) == "groot-v9" else 1e-5
+        if abs(float(row["score"]) - float(mean[int(feature_id)])) > score_atol:
             errors.append(
                 f"candidates.json ranked[{index}] score does not match the mean attribution parquet row"
             )

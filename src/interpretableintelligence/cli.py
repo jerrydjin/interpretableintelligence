@@ -12,6 +12,7 @@ from interpretableintelligence import __version__
 from interpretableintelligence.adapters.fake import generate_clips
 from interpretableintelligence.explain import ExplainError, explain_clip
 from interpretableintelligence.export_site import export_site
+from interpretableintelligence.import_formats import import_run
 from interpretableintelligence.pipeline import execute_pipeline
 from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
 from interpretableintelligence.run import execute_rank
@@ -372,6 +373,43 @@ def export_site_cmd(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"wrote {dest}")
+
+
+@app.command("import")
+def import_cmd(
+    src: Annotated[Path, typer.Argument(help="Source capture directory.", exists=True, file_okay=False)],
+    out: Annotated[Path, typer.Argument(help="Destination ii run folder to create.")],
+    format: Annotated[
+        str,
+        typer.Option("--format", help="Import format name (e.g. groot-v9)."),
+    ] = "groot-v9",
+    ablation_summary: Annotated[
+        Path | None,
+        typer.Option(
+            "--ablation-summary",
+            exists=True,
+            dir_okay=False,
+            help="Rollout ablation summary JSON for scoreboard.groot_ablation.",
+        ),
+    ] = None,
+) -> None:
+    """Import an external capture layout into the ii run contract."""
+    try:
+        import_run(
+            format,
+            src,
+            out,
+            ablation_summary=ablation_summary,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, FileExistsError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    errors = validate_run(out)
+    if errors:
+        for error in errors:
+            typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"imported {src} -> {out}")
 
 
 @app.command()
