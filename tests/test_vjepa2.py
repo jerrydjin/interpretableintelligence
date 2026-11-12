@@ -226,6 +226,35 @@ def test_identity_edit_changes_the_output_by_exactly_zero():
     assert float((pred - pred_id).abs().max()) == 0.0
 
 
+def test_batched_edits_match_one_forward_each(monkeypatch):
+    from interpretableintelligence.adapters.vjepa2 import adapter as vjepa_adapter
+
+    monkeypatch.setattr(vjepa_adapter, "PREDICT_BATCH", 3)
+    adapter = _adapter()
+    clip = _clip(_frames(5), "batched")
+    window = adapter.windows(clip)[0]
+    generator = torch.Generator().manual_seed(0)
+    directions = [torch.randn(adapter.d_model, generator=generator) for _ in range(7)]
+
+    def shift(direction):
+        def edit(acts: torch.Tensor) -> torch.Tensor:
+            out = acts.clone()
+            out[0, 0, 0] = out[0, 0, 0] - direction
+            out[-1, -1, -1] = out[-1, -1, -1] + direction
+            return out
+
+        return edit
+
+    edits = [shift(direction) for direction in directions]
+    looped = [adapter.predict_masked(clip, window, edit=edit)[0] for edit in edits]
+    batched = adapter.predict_masked_many(clip, window, edits)
+    assert len(batched) == len(looped)
+    assert not torch.equal(looped[0], looped[1])
+    for one, many in zip(looped, batched, strict=True):
+        assert many.shape == one.shape
+        assert torch.allclose(one, many, atol=1e-6, rtol=1e-5)
+
+
 def test_zero_and_identity_are_the_loss_recovered_endpoints():
     adapter = _adapter()
     clips = [_clip(_frames(5), "end")]

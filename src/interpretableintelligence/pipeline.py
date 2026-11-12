@@ -1080,7 +1080,8 @@ def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, me
             with torch.no_grad():
                 for window in adapter.windows(clip):
                     baseline, _target = adapter.predict_masked(clip, window)
-                    for trial, (direction, by_clip) in enumerate(trials):
+                    edits = []
+                    for direction, by_clip in trials:
                         positions = by_clip.get(clip_key, [])
 
                         def edit(acts: torch.Tensor, positions=positions, direc=direction) -> torch.Tensor:
@@ -1089,7 +1090,8 @@ def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, me
                                 out[ti, hi, wi] = out[ti, hi, wi] - value * direc
                             return out
 
-                        edited, _target = adapter.predict_masked(clip, window, edit=edit)
+                        edits.append(edit)
+                    for trial, edited in enumerate(_predict_many(adapter, clip, window, edits)):
                         dist = cosine_distance(baseline, edited)
                         totals[trial] += float(dist.sum())
                         counts[trial] += int(dist.numel())
@@ -1100,6 +1102,14 @@ def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, me
         dtype=np.float64,
     )
     return percentile_le(real_effect, samples)
+
+
+def _predict_many(adapter, clip, window, edits) -> list[torch.Tensor]:
+    """Edited predictions for one window, batched when the adapter supports it."""
+    many = getattr(adapter, "predict_masked_many", None)
+    if many is not None:
+        return many(clip, window, edits)
+    return [adapter.predict_masked(clip, window, edit=edit)[0] for edit in edits]
 
 
 def _heldout_pool(source: RowSource, n_clips: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

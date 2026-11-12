@@ -38,6 +38,8 @@ MODEL_ID = "facebook/vjepa2-vitl-fpc64-256"
 # Safetensors only. ``original/model.pth`` is the 5.1 GB raw Meta checkpoint.
 WEIGHT_ALLOW_PATTERNS = ["*.json", "model.safetensors", "README.md"]
 CONFIG_ALLOW_PATTERNS = ["config.json"]
+# Edited grids per batched predictor forward in ``predict_masked_many``.
+PREDICT_BATCH = 32
 
 TUBELET = 2
 PATCH = 16
@@ -289,6 +291,35 @@ class VJEPA2Adapter:
             pred = pred.detach()
         return pred, target.detach()
 
+    def predict_masked_many(self, clip: Clip, window: Window, edits) -> list[torch.Tensor]:
+        """``predict_masked(clip, window, edit=e)[0]`` for every ``e`` in ``edits``, without grad.
+
+        The edited grids go through the remaining encoder blocks and the
+        predictor ``PREDICT_BATCH`` at a time instead of one forward each.
+        """
+        self._ensure()
+        assert self._ctx is not None and self._tgt is not None
+        visible = self._cached_visible(clip, window)
+        grid = _scatter_grid(visible, self._ctx, self.grid(), self._n_tokens)
+        expected = (self.grid().t, self.grid().h, self.grid().w, self.d_model)
+        preds: list[torch.Tensor] = []
+        with torch.no_grad():
+            for start in range(0, len(edits), PREDICT_BATCH):
+                chunk = edits[start : start + PREDICT_BATCH]
+                edited = []
+                for edit in chunk:
+                    out = edit(grid)
+                    if tuple(out.shape) != expected:
+                        raise ValueError(f"edit must return {expected}, got {tuple(out.shape)}")
+                    edited.append(out)
+                n = len(edited)
+                stacked = torch.stack(edited).reshape(n, self._n_tokens, -1)
+                ctx = self._ctx.expand(n, -1)
+                tgt = self._tgt.expand(n, -1)
+                hidden = self._finish_visible(_gather_ids(stacked, ctx), ctx)
+                preds.extend(pred.detach() for pred in self._predictor(hidden, ctx, tgt))
+        return preds
+
     def attribution_objective(self, clip: Clip, window: Window, objective: str, edit=None) -> torch.Tensor:
         """Masked predictor MSE. V-JEPA has no action log-likelihood."""
         if objective != "prediction_loss":
@@ -408,7 +439,7 @@ class VJEPA2Adapter:
 
     def _predictor(self, context_out: torch.Tensor, ctx: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
         width = context_out.shape[-1]
-        full = context_out.new_zeros(1, self._n_tokens, width)
+        full = context_out.new_zeros(context_out.shape[0], self._n_tokens, width)
         full = full.scatter(1, _expand_ids(ctx, width), context_out)
         return self.model.predictor(
             encoder_hidden_states=full,
