@@ -161,7 +161,7 @@ def test_viewer_route_is_off_by_default_and_answers_when_enabled(demo):
 def _chrome() -> str | None:
     from pathlib import Path
 
-    for candidate in ("/usr/local/bin/google-chrome", "/usr/bin/google-chrome", "/usr/bin/chromium", "/opt/pw-browsers/chromium"):
+    for candidate in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/local/bin/google-chrome", "/usr/bin/google-chrome", "/usr/bin/chromium", "/opt/pw-browsers/chromium"):
         path = Path(candidate)
         if path.is_file():
             return str(path)

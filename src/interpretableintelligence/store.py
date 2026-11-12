@@ -8,6 +8,7 @@ concatenates the run into one tensor.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from pathlib import Path
 
@@ -23,15 +24,29 @@ _SPLIT_HELD = 1
 
 
 def rss_bytes() -> int:
-    """Current resident set, from ``/proc``. 0 when the platform has no VmRSS."""
+    """Current resident set, from ``/proc``.
+
+    Platforms without ``/proc`` (macOS) report the process's peak resident set
+    from ``getrusage`` instead, which is an upper bound on the stage peak.
+    0 only when neither is available.
+    """
     try:
         status = Path("/proc/self/status").read_text(encoding="utf-8")
     except OSError:
-        return 0
+        return _peak_rss_bytes()
     for line in status.splitlines():
         if line.startswith("VmRSS:"):
             return int(line.split()[1]) * 1024
-    return 0
+    return _peak_rss_bytes()
+
+
+def _peak_rss_bytes() -> int:
+    try:
+        import resource
+    except ImportError:  # Windows
+        return 0
+    peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return peak if sys.platform == "darwin" else peak * 1024  # bytes on macOS, KiB elsewhere
 
 
 class RamSampler:

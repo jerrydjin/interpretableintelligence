@@ -53,6 +53,8 @@ from interpretableintelligence.device import ensure_mps_fallback
 
 PREFIX = "hf:"
 IMAGE_FRAMES = 8
+# Batch items (edits x frames) per forward in ``predict_masked_many``.
+MANY_BATCH_ITEMS = 64
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 _SKIP_LISTS = ("predictor", "decoder", "head")
@@ -267,12 +269,13 @@ class HFAdapter:
             seen: dict = {}
 
             def grab(hidden: torch.Tensor):
-                seen["acts"] = self._to_grid(hidden).detach().clone()
+                seen["full"] = hidden.detach().clone()
                 raise _StopForward
 
             with torch.no_grad():
                 self._forward(self.pixel_values(clip, window), raw=grab)
-            cached = seen["acts"]
+            self._cache[("full", clip.clip_id, window.index)] = seen["full"]
+            cached = self._to_grid(seen["full"])
             self._cache[key] = cached
         return cached.clone()
 
@@ -285,6 +288,41 @@ class HFAdapter:
         transform = edit if edit is not None else self._apply_hooks
         pred = self._final_tokens(self._forward(self.pixel_values(clip, window), transform=transform))
         return pred, target
+
+    def predict_masked_many(self, clip: Clip, window: Window, edits) -> list[torch.Tensor]:
+        """``predict_masked(clip, window, edit=e)[0]`` for each edit, batched.
+
+        The clean block output is cached, so only the blocks after ``layer``
+        run, on every edited copy at once. The blocks up to ``layer`` are
+        swapped for pass-throughs for the duration of the call.
+        """
+        self._ensure()
+        edits = list(edits)
+        if not edits:
+            return []
+        self.raw_activations(clip, window)
+        full = self._cache[("full", clip.clip_id, window.index)]
+        pixels = self.pixel_values(clip, window)
+        per = max(1, MANY_BATCH_ITEMS // int(full.shape[0]))
+        out: list[torch.Tensor] = []
+        for start in range(0, len(edits), per):
+            chunk = edits[start : start + per]
+            spliced = []
+            for edit in chunk:
+                grid = self._to_grid(full)
+                edited = edit(grid)
+                if tuple(edited.shape) != tuple(grid.shape):
+                    raise ValueError(f"edit must return {tuple(grid.shape)}, got {tuple(edited.shape)}")
+                patches = edited.reshape(full.shape[0], -1, full.shape[-1]).to(full.dtype)
+                spliced.append(torch.cat([full[:, : self._prefix], patches], dim=1))
+            hidden = torch.cat(spliced, dim=0)
+            repeat = [len(chunk)] + [1] * (pixels.dim() - 1)
+            outputs = self._forward_after(pixels.repeat(*repeat), hidden)
+            final = outputs.last_hidden_state[:, self._prefix :]
+            for index in range(len(chunk)):
+                rows = final[index * full.shape[0] : (index + 1) * full.shape[0]]
+                out.append(rows.reshape(-1, final.shape[-1]))
+        return out
 
     def visible_mean_baseline(self, clip: Clip, window: Window) -> torch.Tensor:
         """Every token predicted as the model's average output token for this window."""
@@ -326,6 +364,7 @@ class HFAdapter:
         assert self.model is not None
 
         def block_hook(_module, _args, output):
+            self._block_returns_tuple = isinstance(output, tuple)
             hidden = output[0] if isinstance(output, tuple) else output
             if raw is not None:
                 raw(hidden)
@@ -346,6 +385,21 @@ class HFAdapter:
             return None
         finally:
             handle.remove()
+
+    def _forward_after(self, pixels: torch.Tensor, hidden: torch.Tensor):
+        """Forward where blocks ``1..layer`` are skipped and block ``layer`` emits ``hidden``."""
+        assert self.model is not None
+        blocks = self._blocks
+        tuple_out = self._block_returns_tuple
+        originals = [blocks[index] for index in range(self.layer)]
+        for index in range(self.layer - 1):
+            blocks[index] = _PassThrough(tuple_out)
+        blocks[self.layer - 1] = _Emit(hidden, tuple_out)
+        try:
+            return self.model(**{self._input_key: pixels}, **self._extra)
+        finally:
+            for index, module in enumerate(originals):
+                blocks[index] = module
 
     def _final_tokens(self, outputs) -> torch.Tensor:
         hidden = getattr(outputs, "last_hidden_state", None)
@@ -395,6 +449,31 @@ class HFAdapter:
     def _ensure(self) -> None:
         if self.model is None:
             raise RuntimeError("call load() before using the hf adapter")
+
+
+class _PassThrough(torch.nn.Module):
+    """Stands in for a skipped block: returns its hidden-state input unchanged."""
+
+    def __init__(self, tuple_out: bool) -> None:
+        super().__init__()
+        self.tuple_out = tuple_out
+
+    def forward(self, *args, **kwargs):
+        hidden = args[0] if args else kwargs["hidden_states"]
+        return (hidden,) if self.tuple_out else hidden
+
+
+class _Emit(torch.nn.Module):
+    """Stands in for the hooked block: ignores its input and returns the edited states."""
+
+    def __init__(self, hidden: torch.Tensor, tuple_out: bool) -> None:
+        super().__init__()
+        self.hidden = hidden
+        self.tuple_out = tuple_out
+
+    def forward(self, *args, **kwargs):
+        del args, kwargs
+        return (self.hidden,) if self.tuple_out else self.hidden
 
 
 def _with_fast_attention(build):
