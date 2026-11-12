@@ -61,12 +61,50 @@ def generate_clips_cmd(
     typer.echo(f"wrote {n} clips to {out}")
 
 
+def _adapter_name(adapter: str, model: str | None, blocks: str | None) -> str:
+    """``hf`` plus ``--model``/``--blocks`` becomes the self-describing ``hf:<model>[#<blocks>]`` name."""
+    if adapter == "hf":
+        from interpretableintelligence.adapters.hf import make_spec
+
+        if not model:
+            raise ValueError("the hf adapter needs --model, e.g. --model facebook/dinov2-small")
+        local = Path(model).expanduser()
+        if local.is_dir():
+            model = str(local.resolve())  # explain and the playground reload it from any cwd
+        return make_spec(model, blocks)
+    if model or blocks:
+        raise ValueError("--model and --blocks only apply to the hf adapter")
+    return adapter
+
+
+def _default_layer(adapter: str) -> int:
+    if adapter.startswith("hf:"):
+        from interpretableintelligence.adapters.hf import middle_block
+
+        return middle_block(adapter)
+    return DEFAULT_LAYER
+
+
 @app.command()
 def run(
-    adapter: Annotated[str, typer.Argument(help="Adapter name: fake or vjepa2.")],
+    adapter: Annotated[
+        str,
+        typer.Argument(help="Adapter: fake, vjepa2, or hf (any Hugging Face vision model; pass --model)."),
+    ],
     clips: Annotated[Path, typer.Option("--clips", exists=True, file_okay=False, help="Clip directory.")],
     out: Annotated[Path, typer.Option("--out", help="Run folder, e.g. runs/demo.")],
-    layer: Annotated[int, typer.Option("--layer", min=0, help="Layer to instrument.")] = DEFAULT_LAYER,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="hf only: Hugging Face model id or local directory, e.g. facebook/dinov2-small."),
+    ] = None,
+    blocks: Annotated[
+        str | None,
+        typer.Option("--blocks", help="hf only: dotted path to the transformer block list, when auto-detection picks the wrong one."),
+    ] = None,
+    layer: Annotated[
+        int | None,
+        typer.Option("--layer", min=0, help=f"Layer to instrument. Default {DEFAULT_LAYER}; for hf, the middle block."),
+    ] = None,
     seed: Annotated[int, typer.Option("--seed", help="Split, SAE, and random-feature seed.")] = DEFAULT_SEED,
     heldout_frac: Annotated[
         float,
@@ -122,6 +160,8 @@ def run(
 
     modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
     try:
+        adapter = _adapter_name(adapter, model, blocks)
+        layer = _default_layer(adapter) if layer is None else layer
         execute_pipeline(
             adapter_name=adapter,
             clips_dir=clips,

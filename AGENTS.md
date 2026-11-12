@@ -6,7 +6,7 @@ Shared rules for Claude Code, Codex, and other coding agents working in this rep
 
 **interpretableintelligence** (`ii`) is infrastructure for mechanistic interpretability on video world models and robot / VLA policies: a shared **run folder** format, SAE training, offline scoreboard gates, local viewers, and causal rollouts.
 
-The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test) and `vjepa2`. Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
+The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, and the generic `hf:<model>` adapter (any ViT-style Hugging Face vision model, `ii run hf --model <id>`). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
 
 Contract details: `SCHEMA.md`, `ARCHITECTURE.md`, `README.md`. Do not drift from them in agent docs.
 
@@ -22,7 +22,7 @@ uv run pytest
 
 `interpretableintelligence` is the long command name; **`ii` is the same CLI**. PyTorch is pinned to CPU wheels in `pyproject.toml` for CI and local dev; GR00T/LIBERO jobs use separate GPU environments (Colab), not this default install.
 
-On a fresh clone of `main`, expect **138 passed, 13 skipped** (`pytest` excludes `slow` and two deselected tests by default). Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
+On a fresh clone of `main`, expect **147 passed, 13 skipped** (`pytest` excludes `slow` and two deselected tests by default). Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
 
 ## `ii` CLI (public surface)
 
@@ -31,7 +31,7 @@ All experiments that belong in this repo should be reachable through these comma
 | Command | Purpose |
 | --- | --- |
 | `generate-clips` | Write deterministic synthetic clips for the `fake` adapter. |
-| `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`). |
+| `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). |
 | `rank` | Attribution prefilter shortlist; does not replace ablation. |
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
 | `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
