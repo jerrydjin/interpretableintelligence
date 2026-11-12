@@ -1039,15 +1039,24 @@ def _ablation_rows(
 
 
 def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, meta, heldout_meta, seed: int) -> float:
+    """Percentile of ``real_effect`` among ``N_RANDOM_FEATURES`` matched random directions.
+
+    Every trial draws its directions and positions up front, in the same RNG
+    order as one trial at a time. Each held-out clip is then loaded once, its
+    unedited prediction is computed once per window, and every trial's edit is
+    measured against that. Per-trial sums still add clips and windows in the
+    same order, so the samples are unchanged.
+    """
     if fires.size == 0:
         return percentile_le(real_effect, np.zeros(N_RANDOM_FEATURES, dtype=np.float64))
     decoder = sae.W_dec[:, feature_id].detach()
     dec_norm = float(decoder.norm().clamp(min=1e-8))
     rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(feature_id), 17]))
     d_model = int(decoder.shape[0])
-    samples = np.empty(N_RANDOM_FEATURES, dtype=np.float64)
     clip_index, t, h, w = pool
-    for trial in range(N_RANDOM_FEATURES):
+    index_of = {item["clip_id"]: index for index, item in enumerate(meta)}
+    trials: list[tuple[torch.Tensor, dict[int, list[tuple[int, int, int, float]]]]] = []
+    for _trial in range(N_RANDOM_FEATURES):
         choice = rng.choice(int(clip_index.shape[0]), size=int(fires.size), replace=False)
         shuffled = rng.permutation(fires)
         generator = torch.Generator(device="cpu")
@@ -1060,31 +1069,47 @@ def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, me
             by_clip[int(clip_index[int(slot)])].append(
                 (int(t[int(slot)]), int(h[int(slot)]), int(w[int(slot)]), float(value))
             )
-        index_of = {item["clip_id"]: index for index, item in enumerate(meta)}
-        total = 0.0
-        count = 0
-        for item in heldout_meta:
-            positions = by_clip.get(index_of[item["clip_id"]], [])
+        trials.append((direction, by_clip))
 
-            def edit(acts: torch.Tensor, positions=positions, direc=direction) -> torch.Tensor:
-                out = acts.clone()
-                for ti, hi, wi, value in positions:
-                    out[ti, hi, wi] = out[ti, hi, wi] - value * direc
-                return out
+    totals = [0.0] * N_RANDOM_FEATURES
+    counts = [0] * N_RANDOM_FEATURES
+    for item in heldout_meta:
+        clip_key = index_of[item["clip_id"]]
 
-            def visit(clip, edit=edit):
-                nonlocal total, count
-                with torch.no_grad():
-                    for window in adapter.windows(clip):
-                        edited, _target = adapter.predict_masked(clip, window, edit=edit)
-                        baseline, _target = adapter.predict_masked(clip, window)
+        def visit(clip):
+            with torch.no_grad():
+                for window in adapter.windows(clip):
+                    baseline, _target = adapter.predict_masked(clip, window)
+                    edits = []
+                    for direction, by_clip in trials:
+                        positions = by_clip.get(clip_key, [])
+
+                        def edit(acts: torch.Tensor, positions=positions, direc=direction) -> torch.Tensor:
+                            out = acts.clone()
+                            for ti, hi, wi, value in positions:
+                                out[ti, hi, wi] = out[ti, hi, wi] - value * direc
+                            return out
+
+                        edits.append(edit)
+                    for trial, edited in enumerate(_predict_many(adapter, clip, window, edits)):
                         dist = cosine_distance(baseline, edited)
-                        total += float(dist.sum())
-                        count += int(dist.numel())
+                        totals[trial] += float(dist.sum())
+                        counts[trial] += int(dist.numel())
 
-            _with_clip(adapter, item, visit)
-        samples[trial] = 0.0 if count == 0 else total / count
+        _with_clip(adapter, item, visit)
+    samples = np.array(
+        [0.0 if count == 0 else total / count for total, count in zip(totals, counts, strict=True)],
+        dtype=np.float64,
+    )
     return percentile_le(real_effect, samples)
+
+
+def _predict_many(adapter, clip, window, edits) -> list[torch.Tensor]:
+    """Edited predictions for one window, batched when the adapter supports it."""
+    many = getattr(adapter, "predict_masked_many", None)
+    if many is not None:
+        return many(clip, window, edits)
+    return [adapter.predict_masked(clip, window, edit=edit)[0] for edit in edits]
 
 
 def _heldout_pool(source: RowSource, n_clips: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

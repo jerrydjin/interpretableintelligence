@@ -65,6 +65,10 @@ class Adapter(Protocol):
 
     ``predict_masked`` returns ``(pred, target)`` for the masked region only,
     in row-major ``(t, h, w)`` order of the True entries of ``mask(window)``.
+
+    An adapter may also define ``predict_masked_many(clip, window, edits)``,
+    returning ``predict_masked(clip, window, edit=e)[0]`` for each edit, to
+    batch the random-feature controls. Without it the scorer loops.
     """
 
     name: str

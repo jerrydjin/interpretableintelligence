@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
 from interpretableintelligence import __version__
-from interpretableintelligence.adapters.fake import generate_clips
-from interpretableintelligence.explain import ExplainError, explain_clip
-from interpretableintelligence.export_site import export_site
-from interpretableintelligence.pipeline import execute_pipeline
-from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
-from interpretableintelligence.run import execute_rank
 from interpretableintelligence.thresholds import (
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
@@ -27,8 +21,13 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_WORKERS,
     DEFAULT_SEED,
 )
-from interpretableintelligence.validate import validate_run
-from interpretableintelligence.view import serve_run
+
+if TYPE_CHECKING:
+    from interpretableintelligence.explain import ExplainError
+
+# Command modules are imported inside each command. torch and transformers take
+# over a second to import, and `ii --help`, `ii view` and `ii validate` on a
+# finished run should not pay for them.
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="Mechanistic interpretability for physical AI models.")
 
@@ -56,6 +55,8 @@ def generate_clips_cmd(
     seed: Annotated[int, typer.Option("--seed", help="Generator seed.")] = 0,
 ) -> None:
     """Write deterministic synthetic clips for the fake adapter."""
+    from interpretableintelligence.adapters.fake import generate_clips
+
     generate_clips(out, n=n, seed=seed)
     typer.echo(f"wrote {n} clips to {out}")
 
@@ -155,6 +156,8 @@ def run(
     A stage whose outputs are already valid is skipped. The run prints a cost report
     from measured stage time. Pass --gpu-cost-per-hour to price an hour of footage.
     """
+    from interpretableintelligence.pipeline import execute_pipeline
+
     modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
     try:
         adapter = _adapter_name(adapter, model, blocks)
@@ -221,6 +224,8 @@ def rank(
     ] = "prediction_loss",
 ) -> None:
     """Rank SAE features. Does not ablate; every pick still needs a real ablation."""
+    from interpretableintelligence.run import execute_rank
+
     try:
         execute_rank(
             adapter_name=adapter,
@@ -284,6 +289,8 @@ def explain_cmd(
     as_json: Annotated[bool, typer.Option("--json", help="Print the response as JSON.")] = False,
 ) -> None:
     """Ablate the features active in a clip and cite only real ablation effects."""
+    from interpretableintelligence.explain import ExplainError, explain_clip
+
     try:
         payload = explain_clip(run, clip)
     except ExplainError as exc:
@@ -364,6 +371,8 @@ def rollouts(
     ] = DEFAULT_ROLLOUT_BATCH,
 ) -> None:
     """Compare baseline and intervened task success. Resume skips episodes already written."""
+    from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
+
     try:
         feature_ids = parse_feature_ids(features)
         summary = execute_rollouts(
@@ -406,6 +415,8 @@ def export_site_cmd(
     ] = Path("demo-data/groot"),
 ) -> None:
     """Regenerate the static demo site from a fresh fake run and the vendored measurements."""
+    from interpretableintelligence.export_site import export_site
+
     try:
         dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot)
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
@@ -419,6 +430,8 @@ def validate(
     run_dir: Annotated[Path, typer.Argument(help="Run folder to check against the schema.")],
 ) -> None:
     """Validate a run folder. Exits 0 when the contract holds."""
+    from interpretableintelligence.validate import validate_run
+
     errors = validate_run(run_dir)
     if errors:
         for error in errors:
@@ -449,8 +462,15 @@ def view(
     ] = False,
 ) -> None:
     """Start a local viewer for a run folder and open it in a browser."""
+    from interpretableintelligence.view import serve_run
+
+    errors: tuple[type[Exception], ...] = (ValueError, FileNotFoundError, OSError)
+    if steer:
+        from interpretableintelligence.explain import ExplainError
+
+        errors = (*errors, ExplainError)
     try:
         serve_run(run_dir, clips_dir=clips, host=host, port=port, open_browser=not no_open, steer=steer)
-    except (ValueError, FileNotFoundError, OSError, ExplainError) as exc:
+    except errors as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
