@@ -38,7 +38,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
 | `validate` | Check a run folder against `SCHEMA.md`. |
-| `view` | Local browser viewer for a finished run. |
+| `view` | Local browser viewer for a finished run. `--steer` adds the playground (steer SAE features, see the prediction move; exploration only, never evidence). |
 
 World-model path: `ii run fake --clips … --out runs/…` or `vjepa2`. Policy path on main: `ii rollouts runs/… --policy fake`.
 
