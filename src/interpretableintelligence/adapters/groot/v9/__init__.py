@@ -1,11 +1,9 @@
 """Load v9 against this repo's v8 module.
 
-``physint_inproc_v9`` imports ``physint_inproc_v8`` and ``pot_events`` by bare module name.
+``inproc_v9`` imports ``physint_inproc_v8`` and ``pot_events`` by bare module name.
 ``ablate_v9`` imports ``physint_inproc_v8`` and ``physint_inproc_v9`` the same way.
 ``physint_inproc_v8`` is ``v8/inproc_v8.py`` here. ``pot_events`` is ``v9/pot_events.py``.
-Register those names before importing ``physint_inproc_v9`` and ``ablate_v9``.
-``physint_inproc_v9.py`` is the single v9 source: the Colab build copies it to
-``/content/physint_inproc_v9.py``, and this package exposes it as ``inproc_v9`` too.
+Register those names before importing ``inproc_v9`` and ``ablate_v9``.
 """
 
 from __future__ import annotations
@@ -40,7 +38,7 @@ def _register_v8():
 
 
 def _register_pot_events():
-    """``physint_inproc_v9`` imports ``pot_events`` by bare name. The file lives in this package."""
+    """``inproc_v9`` imports ``pot_events`` by bare name. The file lives in this package."""
     existing = sys.modules.get("pot_events")
     if existing is not None:
         return existing
@@ -56,11 +54,10 @@ def _register_pot_events():
 _register_v8()
 _register_pot_events()
 
-from . import ablate_v9, physint_inproc_v9
+from . import ablate_v9, inproc_v9
 
-inproc_v9 = physint_inproc_v9
-# Same module object whether code imports the package path or the bare Colab filename.
-sys.modules["physint_inproc_v9"] = physint_inproc_v9
+# Same module object whether code imports the package path or Jeff's filename.
+sys.modules["physint_inproc_v9"] = inproc_v9
 sys.modules["ablate_v9"] = ablate_v9
 verify_rotary_inv_freq = inproc_v9.verify_rotary_inv_freq
 
