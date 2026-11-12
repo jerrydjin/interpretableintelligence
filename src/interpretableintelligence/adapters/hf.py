@@ -1,0 +1,470 @@
+"""Generic Hugging Face vision adapter: bring any ViT-style image or video model by name.
+
+The adapter name carries the model, so a run folder can rebuild it later::
+
+    hf:<model id or local directory>[#<dotted path to the block list>]
+
+for example ``hf:facebook/dinov2-small`` or ``hf:MCG-NJU/videomae-base``.
+``ii run hf --model <id>`` writes the same name.
+
+What it hooks
+    The output of transformer block ``layer`` (1-indexed, the same tensor
+    transformers returns as ``hidden_states[layer]``). The block list is found
+    automatically: the ``nn.ModuleList`` whose length is
+    ``config.num_hidden_layers``, preferring an encoder over a predictor or
+    decoder. Pass ``#<path>`` to choose it by hand.
+
+Token grid
+    Prefix tokens (CLS, registers) are left alone and only the patch tokens
+    form the ``[t, h, w, d]`` grid. Image models see each sampled frame as one
+    batch item, so ``t`` is the number of frames and the tubelet is 1. Video
+    models (a ``num_frames`` or ``frames_per_clip`` config) see the whole
+    window at once and ``t`` is frames over tubelet.
+
+What "prediction" means here
+    A generic encoder has no masked-prediction head, so the readout is the
+    model's own final patch tokens (``last_hidden_state``). Every token is
+    "masked" (scored), the target is the clean final output, and the
+    visible-mean baseline replaces every token with the average token. So:
+
+    - ablation effect: how far removing a feature moves the model's output;
+    - loss recovered: how much of the output survives splicing the SAE in,
+      against zeroing the layer;
+    - the usable-SAE check asks the splice to beat "every token is the mean".
+
+Frames are resized to the model's square input with no crop, so the token
+grid covers the whole frame and the viewer overlay lines up with the clip.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import inspect
+import json
+from contextlib import contextmanager
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from interpretableintelligence.adapters.base import Clip, Grid, HookHandle, Window
+from interpretableintelligence.device import ensure_mps_fallback
+
+PREFIX = "hf:"
+IMAGE_FRAMES = 8
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+_SKIP_LISTS = ("predictor", "decoder", "head")
+
+
+class _StopForward(Exception):
+    """Raised inside the block hook once the layer is captured; nothing later is needed."""
+
+
+def parse_spec(spec: str) -> tuple[str, str | None]:
+    """``hf:<model>[#<blocks>]`` to ``(model, blocks)``."""
+    if not spec.startswith(PREFIX):
+        raise ValueError(f"hf adapter names start with {PREFIX!r}, got {spec!r}")
+    body = spec[len(PREFIX) :]
+    model, _sep, blocks = body.partition("#")
+    if not model:
+        raise ValueError("hf adapter needs a model, e.g. hf:facebook/dinov2-small")
+    return model, (blocks or None)
+
+
+def make_spec(model: str, blocks: str | None = None) -> str:
+    if not model:
+        raise ValueError("--model is required for the hf adapter")
+    if "#" in model:
+        raise ValueError("model ids and paths cannot contain '#'")
+    return f"{PREFIX}{model}" + (f"#{blocks}" if blocks else "")
+
+
+def middle_block(spec: str) -> int:
+    """The middle transformer block, 1-indexed. Mid-depth features tend to be the most legible."""
+    from transformers import AutoConfig
+
+    model, _blocks = parse_spec(spec)
+    depth = int(getattr(AutoConfig.from_pretrained(model), "num_hidden_layers", 2) or 2)
+    return max(1, depth // 2)
+
+
+def adapter_class(spec: str) -> type:
+    """A class with the pipeline's ``(layer, device, tiny=)`` constructor, bound to one model."""
+    model, blocks = parse_spec(spec)
+
+    class BoundHFAdapter(HFAdapter):
+        def __init__(self, layer: int, device: torch.device | None = None, *, tiny: bool = False) -> None:
+            if tiny:
+                raise ValueError("--tiny is a V-JEPA 2 option; point hf at a small model instead")
+            super().__init__(model, layer, device, blocks=blocks)
+
+    BoundHFAdapter.__name__ = BoundHFAdapter.__qualname__ = "HFAdapter"
+    return BoundHFAdapter
+
+
+class HFAdapter:
+    def __init__(
+        self,
+        model: str,
+        layer: int,
+        device: torch.device | None = None,
+        *,
+        blocks: str | None = None,
+        frames: int = IMAGE_FRAMES,
+    ) -> None:
+        if layer < 1:
+            raise ValueError(f"hf layers are 1-indexed block outputs, got {layer}")
+        self.model_name = model
+        self.blocks_path = blocks
+        self.name = make_spec(model, blocks)
+        self.layer = int(layer)
+        self.device = device or torch.device("cpu")
+        ensure_mps_fallback(self.device)
+        self.image_frames = int(frames)
+        self.model: torch.nn.Module | None = None
+        self._random_init = False
+        self._hooks: list[HookHandle] = []
+        self._cache: dict = {}
+        self._transform = None
+        self._stop = False
+
+    # ------------------------------------------------------------------ setup
+
+    @property
+    def d_model(self) -> int:
+        return int(self._d_model)
+
+    @property
+    def random_init(self) -> bool:
+        return self._random_init
+
+    def grid(self) -> Grid:
+        return Grid(t=self._t, h=self._h, w=self._w, tubelet=self._tubelet, patch_px=self._patch)
+
+    def load(self, random_init: bool = False) -> None:
+        from transformers import AutoConfig, AutoModel
+
+        config = AutoConfig.from_pretrained(self.model_name)
+        if random_init:
+            torch.manual_seed(0)
+            model = _with_fast_attention(lambda attn: AutoModel.from_config(config, attn_implementation=attn))
+        else:
+            model = _with_fast_attention(
+                lambda attn: AutoModel.from_pretrained(self.model_name, attn_implementation=attn, dtype=torch.float32)
+            )
+        model = model.to(device=self.device, dtype=torch.float32).eval()
+        model.requires_grad_(False)
+        self.model = model
+        self._random_init = bool(random_init)
+        self._cache.clear()
+        self._bind(config)
+
+    def _bind(self, config) -> None:
+        assert self.model is not None
+        self._blocks = _find_blocks(self.model, config, self.blocks_path)
+        if self.layer > len(self._blocks):
+            raise ValueError(f"{self.model_name} has {len(self._blocks)} blocks; layer {self.layer} does not exist")
+        size = _pair(getattr(config, "image_size", None) or getattr(config, "crop_size", None))
+        patch = _pair(getattr(config, "patch_size", None))
+        if size is None or patch is None:
+            raise ValueError(f"{self.model_name} config has no image_size/crop_size and patch_size; is it a ViT-style vision model?")
+        if size[0] != size[1] or patch[0] != patch[1]:
+            raise ValueError(f"{self.model_name} needs square images and patches, got {size} and {patch}")
+        self._size, self._patch = int(size[0]), int(patch[0])
+        self._h = self._w = self._size // self._patch
+        params = inspect.signature(self.model.forward).parameters
+        self._input_key = "pixel_values_videos" if "pixel_values_videos" in params else "pixel_values"
+        if self._input_key not in params:
+            raise ValueError(f"{type(self.model).__name__}.forward takes no pixel_values; use a vision model")
+        self._extra = {"skip_predictor": True} if "skip_predictor" in params else {}
+        video_frames = getattr(config, "num_frames", None) or getattr(config, "frames_per_clip", None)
+        self.is_video = self._input_key == "pixel_values_videos" or bool(video_frames and getattr(config, "tubelet_size", None))
+        if self.is_video:
+            self.n_frames = int(video_frames)
+            self._tubelet = int(getattr(config, "tubelet_size", 1) or 1)
+            self._t = self.n_frames // self._tubelet
+        else:
+            self.n_frames = self.image_frames
+            self._tubelet = 1
+            self._t = self.n_frames
+        self._mean, self._std = _norm_stats(self.model_name)
+        self._probe()
+
+    def _probe(self) -> None:
+        """One dummy forward to learn the token count, prefix length, and width."""
+        pixels = torch.zeros(self._pixel_shape(), device=self.device)
+        seen: dict = {}
+
+        def grab(hidden: torch.Tensor):
+            seen["shape"] = tuple(hidden.shape)
+            raise _StopForward
+
+        with torch.no_grad():
+            self._forward(pixels, raw=grab)
+        batch, n_tokens, width = seen["shape"]
+        per_item = (self._t * self._h * self._w) // batch
+        prefix = n_tokens - per_item
+        if prefix < 0 or batch * per_item != self._t * self._h * self._w:
+            raise RuntimeError(
+                f"{self.model_name} block output {seen['shape']} does not fit a {self._t}x{self._h}x{self._w} patch grid"
+            )
+        self._prefix = int(prefix)
+        self._d_model = int(width)
+
+    def model_sha(self) -> str:
+        self._ensure()
+        assert self.model is not None
+        digest = hashlib.sha256()
+        digest.update(b"hf-v1")
+        digest.update(self.name.encode())
+        digest.update(b"random" if self._random_init else b"weights")
+        for name, tensor in self.model.state_dict().items():
+            digest.update(name.encode())
+            digest.update(np.ascontiguousarray(tensor.detach().to("cpu", torch.float32).numpy()).tobytes())
+        return digest.hexdigest()
+
+    # --------------------------------------------------------------- protocol
+
+    def windows(self, clip: Clip) -> list[Window]:
+        frames = np.asarray(clip.frames)
+        if frames.ndim != 4 or frames.shape[-1] not in (1, 3):
+            raise ValueError(f"hf clips must be [frames, height, width, 3], got {frames.shape}")
+        if frames.shape[0] < 1:
+            raise ValueError(f"{clip.clip_id} has no frames")
+        index = _sample_indices(int(frames.shape[0]), self.n_frames)
+        return [Window(index=0, start_frame=int(index[0]), frames=np.ascontiguousarray(frames[index]))]
+
+    def mask(self, window: Window) -> torch.Tensor:
+        del window
+        return torch.ones((self._t, self._h, self._w), dtype=torch.bool, device=self.device)
+
+    @contextmanager
+    def hook(self, layer: int, mode: str = "capture", fn=None):
+        if mode not in {"capture", "edit", "zero"}:
+            raise ValueError(f"hook mode must be capture|edit|zero, got {mode!r}")
+        if mode == "edit" and fn is None:
+            raise ValueError("edit hook requires fn")
+        if layer != self.layer:
+            raise ValueError(f"hf adapter is bound to layer {self.layer}, got hook on {layer}")
+        handle = HookHandle(layer=layer, mode=mode, fn=fn, captured=[])  # type: ignore[arg-type]
+        self._hooks.append(handle)
+        try:
+            yield handle
+        finally:
+            self._hooks.remove(handle)
+
+    def encode(self, clip: Clip, window: Window) -> torch.Tensor:
+        return self._apply_hooks(self.raw_activations(clip, window))
+
+    def raw_activations(self, clip: Clip, window: Window) -> torch.Tensor:
+        """Patch tokens at ``layer``, ``[t, h, w, d]``. Hooks are not applied."""
+        self._ensure()
+        key = ("raw", clip.clip_id, window.index)
+        cached = self._cache.get(key)
+        if cached is None:
+            seen: dict = {}
+
+            def grab(hidden: torch.Tensor):
+                seen["acts"] = self._to_grid(hidden).detach().clone()
+                raise _StopForward
+
+            with torch.no_grad():
+                self._forward(self.pixel_values(clip, window), raw=grab)
+            cached = seen["acts"]
+            self._cache[key] = cached
+        return cached.clone()
+
+    def predict_masked(self, clip: Clip, window: Window, edit=None):
+        """Final patch tokens with the layer edited, against the clean final tokens. Every token is scored."""
+        self._ensure()
+        target = self._clean_output(clip, window)
+        if edit is None and not self._hooks:
+            return target.clone(), target
+        transform = edit if edit is not None else self._apply_hooks
+        pred = self._final_tokens(self._forward(self.pixel_values(clip, window), transform=transform))
+        return pred, target
+
+    def visible_mean_baseline(self, clip: Clip, window: Window) -> torch.Tensor:
+        """Every token predicted as the model's average output token for this window."""
+        target = self._clean_output(clip, window)
+        return target.mean(dim=0, keepdim=True).expand_as(target).clone()
+
+    def attribution_objective(self, clip: Clip, window: Window, objective: str, edit=None) -> torch.Tensor:
+        if objective != "prediction_loss":
+            raise ValueError(f"hf attribution objective must be prediction_loss, got {objective!r}")
+        pred, target = self.predict_masked(clip, window, edit=edit)
+        return ((pred - target) ** 2).mean()
+
+    def pixel_values(self, clip: Clip, window: Window) -> torch.Tensor:
+        self._ensure()
+        key = ("pixels", clip.clip_id, window.index)
+        cached = self._cache.get(key)
+        if cached is None:
+            cached = self._preprocess(window.frames)
+            self._cache[key] = cached
+        return cached
+
+    # -------------------------------------------------------------- internals
+
+    def _clean_output(self, clip: Clip, window: Window) -> torch.Tensor:
+        key = ("target", clip.clip_id, window.index)
+        cached = self._cache.get(key)
+        if cached is None:
+            with torch.no_grad():
+                cached = self._final_tokens(self._forward(self.pixel_values(clip, window))).detach()
+            self._cache[key] = cached
+        return cached
+
+    def _forward(self, pixels: torch.Tensor, transform=None, raw=None):
+        """Run the model with the block output passed through ``transform`` (grid in, grid out).
+
+        ``raw`` sees the block output as transformers returns it and may raise
+        ``_StopForward`` to skip the rest of the network.
+        """
+        assert self.model is not None
+
+        def block_hook(_module, _args, output):
+            hidden = output[0] if isinstance(output, tuple) else output
+            if raw is not None:
+                raw(hidden)
+            if transform is None:
+                return None
+            grid = self._to_grid(hidden)
+            edited = transform(grid)
+            if tuple(edited.shape) != tuple(grid.shape):
+                raise ValueError(f"edit must return {tuple(grid.shape)}, got {tuple(edited.shape)}")
+            patches = edited.reshape(hidden.shape[0], -1, hidden.shape[-1]).to(hidden.dtype)
+            new = torch.cat([hidden[:, : self._prefix], patches], dim=1)
+            return (new, *output[1:]) if isinstance(output, tuple) else new
+
+        handle = self._blocks[self.layer - 1].register_forward_hook(block_hook)
+        try:
+            return self.model(**{self._input_key: pixels}, **self._extra)
+        except _StopForward:
+            return None
+        finally:
+            handle.remove()
+
+    def _final_tokens(self, outputs) -> torch.Tensor:
+        hidden = getattr(outputs, "last_hidden_state", None)
+        if hidden is None:
+            raise RuntimeError(f"{type(self.model).__name__} returned no last_hidden_state")
+        patches = hidden[:, self._prefix :]
+        if patches.shape[0] * patches.shape[1] != self._t * self._h * self._w:
+            raise RuntimeError(f"final output {tuple(hidden.shape)} does not match the patch grid")
+        return patches.reshape(-1, hidden.shape[-1])
+
+    def _to_grid(self, hidden: torch.Tensor) -> torch.Tensor:
+        return hidden[:, self._prefix :].reshape(self._t, self._h, self._w, hidden.shape[-1])
+
+    def _apply_hooks(self, acts: torch.Tensor) -> torch.Tensor:
+        edited = acts
+        for handle in self._hooks:
+            if handle.mode == "capture":
+                handle.captured.append(edited.detach().clone())
+            elif handle.mode == "zero":
+                edited = torch.zeros_like(edited)
+            else:
+                assert handle.fn is not None
+                edited = handle.fn(edited)
+        return edited
+
+    def _pixel_shape(self) -> tuple[int, ...]:
+        if self.is_video:
+            return (1, self.n_frames, 3, self._size, self._size)
+        return (self.n_frames, 3, self._size, self._size)
+
+    def _preprocess(self, frames: np.ndarray) -> torch.Tensor:
+        video = torch.from_numpy(np.ascontiguousarray(frames)).to(self.device).float()
+        if video.numel() == 0:
+            raise ValueError("window has no pixels")
+        if float(video.max()) > 1.5:
+            video = video / 255.0
+        video = video.permute(0, 3, 1, 2)
+        if video.shape[1] == 1:
+            video = video.expand(-1, 3, -1, -1)
+        if video.shape[-2:] != (self._size, self._size):
+            video = F.interpolate(video, size=(self._size, self._size), mode="bilinear", align_corners=False, antialias=True)
+        mean = video.new_tensor(self._mean).view(1, 3, 1, 1)
+        std = video.new_tensor(self._std).view(1, 3, 1, 1)
+        video = ((video - mean) / std).contiguous()
+        return video.unsqueeze(0) if self.is_video else video
+
+    def _ensure(self) -> None:
+        if self.model is None:
+            raise RuntimeError("call load() before using the hf adapter")
+
+
+def _with_fast_attention(build):
+    """Prefer PyTorch SDPA kernels; fall back to eager for models without them."""
+    try:
+        return build("sdpa")
+    except (ValueError, ImportError):
+        return build("eager")
+
+
+def _find_blocks(model: torch.nn.Module, config, path: str | None) -> torch.nn.ModuleList:
+    if path:
+        try:
+            found = model.get_submodule(path)
+        except AttributeError as exc:
+            raise ValueError(f"{type(model).__name__} has no submodule {path!r}") from exc
+        if not isinstance(found, torch.nn.ModuleList) or len(found) == 0:
+            raise ValueError(f"{path!r} is not a non-empty nn.ModuleList of blocks")
+        return found
+    lists = [(name, module) for name, module in model.named_modules() if isinstance(module, torch.nn.ModuleList) and len(module)]
+    if not lists:
+        raise ValueError(f"{type(model).__name__} has no block list; pass hf:<model>#<blocks path>")
+    depth = getattr(config, "num_hidden_layers", None)
+    ranked = sorted(
+        lists,
+        key=lambda item: (
+            len(item[1]) != depth,
+            any(word in item[0] for word in _SKIP_LISTS),
+            "encoder" not in item[0],
+            -len(item[1]),
+        ),
+    )
+    return ranked[0][1]
+
+
+def _norm_stats(model: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Mean and std from the model's preprocessor config, else ImageNet."""
+    for name in ("preprocessor_config.json", "video_preprocessor_config.json"):
+        try:
+            local = Path(model) / name
+            if local.is_file():
+                path = local
+            elif Path(model).is_dir():
+                continue
+            else:
+                from huggingface_hub import hf_hub_download
+
+                path = Path(hf_hub_download(model, name))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            mean, std = data.get("image_mean"), data.get("image_std")
+            if isinstance(mean, list) and isinstance(std, list) and len(mean) == len(std) == 3:
+                return tuple(float(x) for x in mean), tuple(float(x) for x in std)
+        except Exception:  # noqa: BLE001 (any lookup failure falls back to ImageNet)
+            continue
+    return IMAGENET_MEAN, IMAGENET_STD
+
+
+def _pair(value) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return (int(value[0]), int(value[-1]))
+    return (int(value), int(value))
+
+
+def _sample_indices(n_frames: int, n_out: int) -> np.ndarray:
+    """Centred window. Stride 2 when the clip is long enough, else stride 1, else pad."""
+    stride = 2 if n_frames >= n_out * 2 else 1
+    span = n_out * stride
+    if n_frames >= span:
+        start = (n_frames - span) // 2
+        return start + np.arange(n_out) * stride
+    return np.minimum(np.arange(n_out), n_frames - 1)
