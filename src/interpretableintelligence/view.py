@@ -434,9 +434,16 @@ def serve_run(
     host: str = "127.0.0.1",
     port: int = 7860,
     open_browser: bool = True,
+    steer: bool = False,
 ) -> None:
-    """Load ``run_dir``, serve the viewer, and optionally open a browser."""
+    """Load ``run_dir``, serve the viewer, and optionally open a browser.
+
+    ``steer`` loads the run's model and SAE (``interpretableintelligence.steer``) and turns on the
+    playground: ``POST /api/steer``. Without it the viewer only reads the run folder.
+    """
     model = load_run(Path(run_dir), None if clips_dir is None else Path(clips_dir))
+    if steer:
+        enable_steering(model, None if clips_dir is None else Path(clips_dir))
     httpd = bind_server(model, host, port)
     bound_host, bound_port = httpd.server_address[:2]
     url = f"http://{bound_host}:{bound_port}/"
@@ -452,6 +459,14 @@ def serve_run(
         pass
     finally:
         httpd.server_close()
+
+
+def enable_steering(model: RunModel, clips_dir: Path | None = None) -> None:
+    """Load the run's adapter and SAE so the viewer can answer ``POST /api/steer``."""
+    from interpretableintelligence.steer import Steerer  # noqa: PLC0415 (only the playground loads a model)
+
+    model.steerer = Steerer(model.run_dir, clips_dir)
+    model.run_payload = {**model.run_payload, "steer": {"enabled": True, "sae_usable": model.steerer.sae_usable}}
 
 
 def bind_server(model: RunModel, host: str, port: int) -> ThreadingHTTPServer:
@@ -480,6 +495,7 @@ class RunModel:
     run_dir: Path = field(default_factory=Path)
     adapter: str | None = None
     acts: "_Acts | None" = None
+    steerer: object | None = None
     _png: dict[tuple[str, int], bytes] = field(default_factory=dict)
     _media: dict[str, tuple[Path, str]] = field(default_factory=dict)
     _viz_stat: dict[int, Path | None] = field(default_factory=dict)
@@ -781,6 +797,42 @@ def _handler(model: RunModel):
             except Exception as exc:  # noqa: BLE001
                 body = json.dumps({"error": str(exc)}).encode()
                 self._send(body, "application/json", status=500)
+
+        def do_POST(self) -> None:  # noqa: N802
+            self.close_connection = True
+            try:
+                path, _query = self._target()
+                if path != "/api/steer":
+                    self._send_json({"error": "not found"}, status=404)
+                    return
+                self._steer()
+            except BrokenPipeError:
+                return
+            except Exception as exc:  # noqa: BLE001
+                body = json.dumps({"error": str(exc)}).encode()
+                self._send(body, "application/json", status=500)
+
+        def _steer(self) -> None:
+            if model.steerer is None:
+                self._send_json({"error": "steering is off; start the viewer with --steer"}, status=404)
+                return
+            from interpretableintelligence.steer import SteerError  # noqa: PLC0415
+
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > 64 * 1024:
+                self._send_json({"error": "request body must be a JSON object under 64 KiB"}, status=400)
+                return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except (ValueError, UnicodeDecodeError):
+                self._send_json({"error": "request body is not valid JSON"}, status=400)
+                return
+            try:
+                result = model.steerer.steer(payload)
+            except SteerError as exc:
+                self._send_json(exc.as_dict(), status=400)
+                return
+            self._send_json(result)
 
         def _target(self) -> tuple[str, dict[str, list[str]]]:
             parsed = urlparse(self.path)

@@ -400,10 +400,17 @@ def view(
     host: Annotated[str, typer.Option("--host", help="Interface to bind.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Port. 0 chooses a free port.")] = 7860,
     no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+    steer: Annotated[
+        bool,
+        typer.Option(
+            "--steer",
+            help="Load the run's model and SAE and turn on the playground: steer features and see the prediction move.",
+        ),
+    ] = False,
 ) -> None:
     """Start a local viewer for a run folder and open it in a browser."""
     try:
-        serve_run(run_dir, clips_dir=clips, host=host, port=port, open_browser=not no_open)
-    except (ValueError, FileNotFoundError, OSError) as exc:
+        serve_run(run_dir, clips_dir=clips, host=host, port=port, open_browser=not no_open, steer=steer)
+    except (ValueError, FileNotFoundError, OSError, ExplainError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

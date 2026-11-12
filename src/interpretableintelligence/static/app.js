@@ -10,6 +10,14 @@ const state = {
   heatToken: 0,
   heatPack: null,
   heatClip: null,
+  steer: { kind: "scale", value: 3, result: null, busy: false, show: false, error: "", token: 0 },
+};
+
+const STEER_KINDS = {
+  ablate: { label: "Remove", help: "Set the feature to zero wherever it fires.", min: 0, max: 0, step: 1, value: 0 },
+  scale: { label: "Scale", help: "Multiply the feature by this amount where it fires. 0 removes it, 2 doubles it.", min: -5, max: 10, step: 0.1, value: 3 },
+  clamp: { label: "Clamp", help: "Force the feature to this value on every patch, even where it was silent.", min: -5, max: 10, step: 0.1, value: 1 },
+  add: { label: "Add", help: "Add this amount of the feature on every patch.", min: -5, max: 10, step: 0.1, value: 1 },
 };
 
 const app = document.getElementById("app");
@@ -66,6 +74,12 @@ function fmtEffect(value) {
 
 function fmtUnit(value) {
   return Number.isFinite(value) ? value.toFixed(3) : "—";
+}
+
+function fmtSmall(value) {
+  if (!Number.isFinite(value)) return "—";
+  if (value === 0) return "0";
+  return Math.abs(value) >= 0.01 ? value.toFixed(3) : value.toExponential(1);
 }
 
 function fmtFlag(value) {
@@ -434,6 +448,7 @@ function renderClip() {
           el("p", { class: "frame-readout", "data-testid": "frame-readout" }),
         ]),
         el("p", { class: "heat-caption", "data-testid": "heatmap-label" }),
+        steerPanel(),
       ]),
       el("section", {}, [
         el("h2", { class: "panel-title" }, "At this frame"),
@@ -570,8 +585,15 @@ function renderFrame(options) {
   list.replaceChildren(...(frame.features.length ? frame.features.map((feature) => renderFeatureRow(feature, active)) : [
     el("li", { class: "empty" }, "No feature fired on this frame."),
   ]));
-  paintCaption(active);
-  renderHeat(active);
+  state.activeFeature = active;
+  paintSteer();
+  if (steerShowing()) {
+    paintSteerCaption();
+    drawSteer();
+  } else {
+    paintCaption(active);
+    renderHeat(active);
+  }
   document.title = `${clip.clip_id} · frame ${state.frame} · interpretableintelligence`;
 }
 
@@ -722,7 +744,7 @@ function emptyHeat(clip) {
   return Array.from({ length: height }, () => Array.from({ length: width }, () => 0));
 }
 
-function drawHeat(rows) {
+function drawHeat(rows, rgb = "226, 162, 58") {
   const grid = document.querySelector("[data-testid=heatmap]");
   if (!grid || !rows.length) return;
   grid.replaceChildren();
@@ -743,7 +765,7 @@ function drawHeat(rows) {
         "data-w": w,
         "data-value": String(value),
       });
-      cell.style.background = alpha > 0 ? `rgba(226, 162, 58, ${alpha.toFixed(3)})` : "transparent";
+      cell.style.background = alpha > 0 ? `rgba(${rgb}, ${alpha.toFixed(3)})` : "transparent";
       grid.append(cell);
     }
   }
@@ -793,3 +815,180 @@ function stop() {
 }
 
 boot();
+
+// Playground: steer a feature and see where the model's prediction moves. Exploration only.
+
+function steerEnabled() {
+  return Boolean(state.run && state.run.steer && state.run.steer.enabled && !iiRoot());
+}
+
+function steerFrame() {
+  return state.clip ? state.clip.frames[state.frame] : null;
+}
+
+function steerResultHere() {
+  const result = state.steer.result;
+  const frame = steerFrame();
+  if (!result || !frame || result.clip_id !== state.clipId) return null;
+  if (Number(result.window) !== Number(frame.window)) return null;
+  return result;
+}
+
+function steerShowing() {
+  return steerEnabled() && state.steer.show && Boolean(steerResultHere());
+}
+
+function steerPanel() {
+  if (!steerEnabled()) return el("div", { hidden: "" });
+  const kind = el("select", { "data-testid": "steer-kind", "aria-label": "Edit" },
+    Object.entries(STEER_KINDS).map(([key, spec]) => el("option", { value: key }, spec.label)));
+  kind.value = state.steer.kind;
+  const value = el("input", {
+    type: "range",
+    "data-testid": "steer-value",
+    "aria-label": "Strength",
+  });
+  const readout = el("output", { class: "steer-readout", "data-testid": "steer-readout" });
+  const run = el("button", { type: "button", class: "steer-run", "data-testid": "steer-run" }, "Steer");
+  const show = el("input", { type: "checkbox", "data-testid": "steer-show" });
+  show.checked = state.steer.show;
+  kind.addEventListener("change", () => {
+    state.steer.kind = kind.value;
+    state.steer.value = STEER_KINDS[kind.value].value;
+    paintSteer();
+  });
+  value.addEventListener("input", () => {
+    state.steer.value = Number(value.value);
+    paintSteer();
+  });
+  run.addEventListener("click", runSteer);
+  show.addEventListener("change", () => {
+    state.steer.show = show.checked;
+    renderFrame({ seek: false });
+  });
+  const usable = state.run.steer.sae_usable;
+  return el("div", { class: "steer", "data-testid": "steer-panel" }, [
+    el("h3", { class: "panel-title" }, "Playground"),
+    el("p", { class: "steer-target", "data-testid": "steer-target" }),
+    el("div", { class: "steer-controls" }, [kind, value, readout, run]),
+    el("p", { class: "steer-help", "data-testid": "steer-help" }),
+    el("label", { class: "steer-toggle" }, [show, " Show where the prediction moved"]),
+    el("div", { class: "steer-result", "data-testid": "steer-result" }),
+    usable ? null : el("p", { class: "steer-warn", "data-testid": "steer-warn" },
+      "This run's SAE is not marked usable, so its features may not mean much yet. Steering still works."),
+    el("p", { class: "steer-note" }, "Exploration only. Steering never marks a feature real; only the scored gates do."),
+  ].filter(Boolean));
+}
+
+function paintSteer() {
+  const panel = document.querySelector("[data-testid=steer-panel]");
+  if (!panel) return;
+  const spec = STEER_KINDS[state.steer.kind];
+  const value = panel.querySelector("[data-testid=steer-value]");
+  value.min = String(spec.min);
+  value.max = String(spec.max);
+  value.step = String(spec.step);
+  value.value = String(state.steer.value);
+  value.disabled = state.steer.kind === "ablate";
+  panel.querySelector("[data-testid=steer-readout]").textContent = state.steer.kind === "ablate" ? "" : `${state.steer.value}`;
+  panel.querySelector("[data-testid=steer-help]").textContent = spec.help;
+  const target = panel.querySelector("[data-testid=steer-target]");
+  const feature = state.activeFeature;
+  target.replaceChildren(feature ? "Feature: " : "Pick a feature from the list to steer it.");
+  if (feature) target.append(el("strong", {}, displayLabel(feature)));
+  const run = panel.querySelector("[data-testid=steer-run]");
+  run.disabled = !feature || state.steer.busy;
+  run.textContent = state.steer.busy ? "Steering…" : "Steer";
+  const box = panel.querySelector("[data-testid=steer-result]");
+  box.replaceChildren();
+  if (state.steer.error) {
+    box.append(el("p", { class: "steer-error", "data-testid": "steer-error" }, state.steer.error));
+    return;
+  }
+  const result = state.steer.result;
+  if (!result || result.clip_id !== state.clipId) return;
+  const sum = result.summary;
+  const kindLabel = STEER_KINDS[result.kind]?.label || result.kind;
+  const amount = result.kind === "ablate" ? "" : ` ${result.value}`;
+  box.dataset.meanShift = String(sum.mean_shift);
+  box.append(
+    el("p", {}, [
+      `${kindLabel}${amount} on feature ${result.features.join(", ")}, window ${result.window}: `,
+      "the prediction moved ",
+      el("strong", { "data-testid": "steer-mean" }, fmtSmall(sum.mean_shift)),
+      " on average (cosine distance), up to ",
+      el("strong", {}, fmtSmall(sum.max_shift)),
+      ".",
+    ]),
+    el("p", {}, [
+      "Prediction error went from ",
+      el("strong", {}, fmtSmall(sum.loss_clean)),
+      " to ",
+      el("strong", {}, fmtSmall(sum.loss_edited)),
+      `. The feature fired on ${sum.tokens_where_feature_fired} of ${sum.tokens_total} patches in this window.`,
+    ]),
+  );
+  if (!steerResultHere()) box.append(el("p", { class: "steer-warn" }, "This frame is in another window. Steer again to see it here."));
+}
+
+function paintSteerCaption() {
+  const caption = document.querySelector("[data-testid=heatmap-label]");
+  if (!caption) return;
+  const names = state.steer.result.features.map((id) => {
+    const known = (state.run.features || []).find((feature) => Number(feature.id) === Number(id));
+    return known ? displayLabel(known) : `feature ${id}`;
+  });
+  caption.replaceChildren("prediction change · ", el("strong", {}, names.join(", ")));
+}
+
+function drawSteer() {
+  const result = steerResultHere();
+  const frame = steerFrame();
+  const grid = document.querySelector("[data-testid=heatmap]");
+  if (!result || !frame || !grid) return;
+  state.heatToken += 1;
+  grid.replaceChildren();
+  grid.dataset.steer = "true";
+  const t = Number(frame.t);
+  const rows = (result.shift[t] || []).map((row) => row.map((value) => (value === null ? 0 : value)));
+  drawHeat(rows, "70, 140, 230");
+}
+
+async function runSteer() {
+  const feature = state.activeFeature;
+  const frame = steerFrame();
+  if (!feature || !frame || state.steer.busy) return;
+  const token = ++state.steer.token;
+  state.steer.busy = true;
+  state.steer.error = "";
+  paintSteer();
+  try {
+    const response = await fetch("/api/steer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clip_id: state.clipId,
+        window: Number(frame.window) || 0,
+        features: [Number(feature.id)],
+        kind: state.steer.kind,
+        value: state.steer.value,
+      }),
+    });
+    const payload = await response.json();
+    if (token !== state.steer.token) return;
+    if (!response.ok) {
+      state.steer.error = (payload.detail && payload.detail.error) || payload.error || "Steering failed.";
+      state.steer.result = null;
+    } else {
+      state.steer.result = payload;
+      state.steer.show = true;
+      const toggle = document.querySelector("[data-testid=steer-show]");
+      if (toggle) toggle.checked = true;
+    }
+  } catch (error) {
+    state.steer.error = `Steering failed: ${error}`;
+  } finally {
+    if (token === state.steer.token) state.steer.busy = false;
+    renderFrame({ seek: false });
+  }
+}

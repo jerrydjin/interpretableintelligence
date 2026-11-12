@@ -608,3 +608,41 @@ button, input { font: inherit; color: inherit; }
   .clip-list { max-height: 220px; }
   .score { grid-template-columns: minmax(140px, 46%) 1fr; }
 }
+
+/* Playground (ii view --steer). Blue marks steering, amber marks activation. */
+.steer {
+  width: min(100%, 520px);
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  font-size: 13px;
+}
+.steer .panel-title { margin: 0 0 8px; }
+.steer p { margin: 6px 0; }
+.steer-target strong { font-weight: 600; }
+.steer-controls {
+  display: grid;
+  grid-template-columns: auto 1fr 3em auto;
+  gap: 8px;
+  align-items: center;
+}
+.steer-controls select,
+.steer-run {
+  font: inherit;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+}
+.steer-run { background: var(--ink); color: var(--paper); cursor: pointer; }
+.steer-run:disabled { opacity: 0.5; cursor: default; }
+.steer-readout { font-variant-numeric: tabular-nums; color: var(--muted); }
+.steer-help, .steer-note { color: var(--muted); }
+.steer-toggle { display: flex; gap: 6px; align-items: center; margin: 6px 0; color: var(--muted); }
+.steer-result strong { color: rgb(40, 100, 190); font-weight: 600; }
+.steer-warn { color: var(--unv); }
+.steer-error { color: #a33a2a; }
+@media (max-width: 520px) {
+  .steer-controls { grid-template-columns: 1fr 1fr; }
+}

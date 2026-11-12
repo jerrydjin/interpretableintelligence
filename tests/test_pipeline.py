@@ -133,7 +133,8 @@ def test_fake_run_serves_then_skips_every_stage(tmp_path: Path):
     assert report["video_s"] == pytest.approx(30 * 16 / 8)
     assert report["tokens"] == manifest["stages"]["capture"]["tokens"]
     elapsed = sum(float(stage["wall_s"]) for stage in manifest["stages"].values())
-    assert report["cost"] == pytest.approx(footage_cost(elapsed, report["video_s"], 3.5))
+    # The report prints cost_per_hour_footage with 6 decimals, so allow half of that last digit.
+    assert report["cost"] == pytest.approx(footage_cost(elapsed, report["video_s"], 3.5), abs=5e-7)
     stamped = {
         path: path.stat().st_mtime_ns
         for path in (
