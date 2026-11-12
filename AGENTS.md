@@ -90,9 +90,9 @@ These override intuition, offline plots, and demo-site copy.
 
 ## Git workflow
 
-- **Never push to `main`.** Branch from latest `main`, one topic per branch (`cursor/<topic>-bedd`).
-- Open a PR; **Michael Truell** reviews and merges.
-- Keep PRs small; **`uv run pytest` must stay green** before you push.
+- **Never push to `main`.** Branch from latest `main`, one topic per branch (for example `claude/<topic>`).
+- Open a PR against `main`; the repo owner (**@jerrydjin**) reviews and merges.
+- Keep PRs small; **`uv run pytest` must stay green** before you push. CI (`.github/workflows/ci.yml`) runs the same suite on every PR.
 
 Docs-only PRs are fine; do not touch `scoreboard.json`, `split.json`, held-out labels, or committed run artifacts.
 
