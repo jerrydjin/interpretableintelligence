@@ -376,5 +376,5 @@ def test_fake_run_read_endpoints_match(demo_run: Path) -> None:
 def test_static_asset_bytes_match(tmp_path: Path) -> None:
     runs, clips = _write_min_run(tmp_path)
     with _PythonServer(runs, clips) as python_url, _RustServer(runs, clips) as rust_url:
-        for path in ("/", "/static/app.js", "/static/style.css", "/static/fonts/geist-400.woff2"):
+        for path in ("/", "/static/guide.js", "/static/app.js", "/static/style.css", "/static/fonts/geist-400.woff2"):
             _compare(python_url, rust_url, path, raw=True)
