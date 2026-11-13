@@ -77,6 +77,8 @@ SIDECAR_SUFFIX = ".groot.json"
 # The text and image processor for the Cosmos-Reason2-2B backbone. That repo is gated; its
 # processor files are byte-identical to this ungated one (see v8/inproc_v8.py).
 VLM_PROCESSOR_REPO = os.environ.get("GROOT_VLM_PROCESSOR_REPO", "Qwen/Qwen3-VL-2B-Instruct")
+# Loaded GR00T policies and preprocessors, by (checkpoint, device, dtype).
+_LOADED: dict = {}
 # Edited copies per DiT batch in ``predict_masked_many``.
 MANY_BATCH = 32
 
@@ -465,26 +467,33 @@ class LeRobotGroot:
         from interpretableintelligence.adapters.groot.low_ram_policy_load import load_groot_low_ram
 
         dtype = _groot_dtype(device)
-        policy, _stats = load_groot_low_ram(self.checkpoint, device=str(device), dtype=dtype, log=_quiet)
-        policy.config.use_bf16 = False  # weights are already in ``dtype``; no autocast on top
+        key = (self.checkpoint, str(device), dtype)
+        if key not in _LOADED:
+            # One copy of the 3B model per process: the random-init control reuses its backbone.
+            policy, _stats = load_groot_low_ram(self.checkpoint, device=str(device), dtype=dtype, log=_quiet)
+            policy.config.use_bf16 = False  # weights are already in ``dtype``; no autocast on top
+            overrides = {
+                "device_processor": {"device": str(device)},
+                "rename_observations_processor": {"rename_map": {}},
+                "groot_n1_7_vlm_encode_v1": {"device": str(device), "model_name": VLM_PROCESSOR_REPO},
+            }
+            pre, _post = make_pre_post_processors(
+                policy_cfg=policy.config, pretrained_path=self.checkpoint, preprocessor_overrides=overrides
+            )
+            _LOADED[key] = (policy, pre)
+        policy, self.pre = _LOADED[key]
         model = policy._groot_model
         head = model.action_head
         if random_init:
-            # The control the random-init gate needs: same backbone, an untrained action head.
+            # The control the random-init gate needs: the same backbone, a fresh untrained copy of the
+            # action head (1.6B parameters). The trained head stays untouched for other adapters.
+            head = copy.deepcopy(head)
             torch.manual_seed(0)
             for module in head.modules():
                 reset = getattr(module, "reset_parameters", None)
                 if callable(reset) and not isinstance(module, torch.nn.ModuleList):
                     reset()
             head.to(device=device, dtype=dtype)
-        overrides = {
-            "device_processor": {"device": str(device)},
-            "rename_observations_processor": {"rename_map": {}},
-            "groot_n1_7_vlm_encode_v1": {"device": str(device), "model_name": VLM_PROCESSOR_REPO},
-        }
-        self.pre, _post = make_pre_post_processors(
-            policy_cfg=policy.config, pretrained_path=self.checkpoint, preprocessor_overrides=overrides
-        )
         self.policy, self.model, self.head = policy, model, head
         self.device, self.dtype = device, dtype
         self.blocks = head.model.transformer_blocks
