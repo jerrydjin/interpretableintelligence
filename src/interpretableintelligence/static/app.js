@@ -150,6 +150,7 @@ function route() {
   const raw = (location.hash || "#/").replace(/^#/, "");
   const [path, query = ""] = raw.split("?");
   const params = new URLSearchParams(query);
+  markNav(path.startsWith("/features") ? "features" : "explore");
   if (path === "/features") {
     renderIndex();
     return;
@@ -170,6 +171,19 @@ function route() {
     return;
   }
   location.replace(`#/clips/${encodeURIComponent(first.clip_id)}`);
+}
+
+function markNav(section) {
+  for (const link of document.querySelectorAll(".nav a[data-nav]")) {
+    if (link.dataset.nav === section) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+}
+
+// Theme colours live in style.css; the canvas-free heatmap reads them from there.
+function themeRgb(name, fallback) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
 }
 
 function renderError(message) {
@@ -202,6 +216,10 @@ function renderIndex() {
     moments,
     el("section", { class: "feature-index", "data-testid": "feature-index" }, [
       el("h1", {}, "Features"),
+      el("p", { class: "lede" }, [
+        el("b", {}, real === 1 ? "One verified feature." : `${real === 0 ? "No" : real} verified features.`),
+        ` ${features.length - real} more to explore. Every one can be opened and steered; the checks only decide the badge.`,
+      ]),
       el("p", { class: "kicker", "data-testid": "real-count" }, `${real} real · ${features.length - real} unverified`),
       indexGuide(features),
       list,
@@ -232,6 +250,7 @@ function renderMoments() {
   });
   return el("section", { class: "hardest", "data-testid": "hardest-moments" }, [
     el("h2", {}, "Hardest moments"),
+    el("p", { class: "lede" }, [el("b", {}, "Where the model was most surprised."), " Start here: these frames have the highest prediction error."]),
     el("ol", { class: "hardest-list" }, rows),
   ]);
 }
@@ -287,17 +306,19 @@ function renderFeature(feature) {
       "data-label": feature.label || "",
       "data-badge": feature.badge,
     }, [
-      el("p", { class: "kicker" }, `Feature ${feature.id}`),
+      el("p", { class: "kicker" }, `Feature ${feature.id}${feature.label_model ? ` · named by ${feature.label_model}` : ""}`),
       el("div", { class: "feature-title" }, [el("h1", {}, displayLabel(feature)), badge(feature)]),
-      feature.label_model ? el("p", { class: "label-model" }, feature.label_model) : null,
+      featureLede(feature),
+      featureHero(feature),
       feature.viz
         ? el("img", { class: "viz", alt: "", src: apiUrl(`/api/features/${feature.id}/viz`), "data-testid": "feature-viz" })
         : null,
+      el("h2", { class: "section-title" }, "What the checks say"),
       feature.scored === false
         ? el("p", { class: "kicker", "data-testid": "scoreboard-missing" }, "No scoreboard record. Shown as unverified.")
         : null,
       featureGuide(feature),
-      el("h2", { class: "panel-title" }, "Raw scores"),
+      el("h2", { class: "panel-title" }, "The numbers"),
       el("dl", { class: "score", "data-testid": "scoreboard" }, [
         scoreItem("distinct_clips_top20", fmtMaybe(feature.distinct_clips_top20, String), feature.distinct_clips_top20),
         scoreItem("label_holds_heldout", fmtFlag(feature.label_holds_heldout), feature.label_holds_heldout),
@@ -305,7 +326,7 @@ function renderFeature(feature) {
         scoreVersus(feature),
         scoreItem("absent_in_random_init", fmtFlag(feature.absent_in_random_init), feature.absent_in_random_init),
       ]),
-      el("h2", { class: "panel-title" }, "Top clips"),
+      el("h2", { class: "section-title" }, "Where it fires hardest"),
       feature.top_clips.length ? strip : null,
       el("table", { class: "top-table" }, [
         el("thead", {}, el("tr", {}, ["clip", "split", "frame", "window / t", "activation"].map((label) => el("th", {}, label)))),
@@ -365,8 +386,6 @@ function featureGuide(feature) {
     ]);
   });
   return el("section", { class: "guide", "data-testid": "guide", "data-real": read.real ? "true" : "false" }, [
-    el("h2", { class: "panel-title" }, "What the checks say"),
-    el("p", { class: "guide-verdict", "data-testid": "guide-verdict" }, read.verdict),
     read.status ? el("p", { class: "guide-status", "data-testid": "guide-status" }, read.status) : null,
     el("ol", { class: "guide-gates" }, items),
     el("p", { class: "guide-note" },
@@ -397,15 +416,137 @@ function indexGuide(features) {
   ]);
 }
 
+// Two-tone lede: the first sentence in ink, the rest in grey.
+function twoTone(text) {
+  const match = String(text).match(/^(.+?[.!?])\s+(.*)$/s);
+  return match ? [el("b", {}, match[1]), ` ${match[2]}`] : [el("b", {}, text)];
+}
+
+function featureLede(feature) {
+  const g = guide();
+  if (g) {
+    const run = state.run;
+    const read = g.feature(feature, { steerHref: steerHrefFor(feature), sae: run.scoreboard === false ? null : run.sae });
+    return el("p", { class: "lede", "data-testid": "guide-verdict" }, twoTone(read.verdict));
+  }
+  if (feature.badge === "real") {
+    return el("p", { class: "lede" }, [
+      el("b", {}, "Verified."),
+      " It shows up across many clips, its name holds on clips the model never trained on, removing it matters more than removing a random feature, and an untrained model has nothing like it.",
+    ]);
+  }
+  if (feature.scored === false) {
+    return el("p", { class: "lede" }, [el("b", {}, "Not scored yet."), " Treat it as exploratory: open its top clips and steer it to see what it does."]);
+  }
+  const status = typeof feature.status === "string" ? feature.status.trim() : "";
+  const failed = status.toLowerCase().startsWith("failed:")
+    ? status.slice(7).split(",").map((part) => part.trim()).filter(Boolean)
+    : [];
+  const count = failed.length ? `It misses ${failed.length === 1 ? "one check" : `${failed.length} checks`}` : "It has not passed every check";
+  return el("p", { class: "lede" }, [
+    el("b", {}, "Not verified yet."),
+    ` ${count}, so treat it as exploratory. You can still look at where it fires and steer it.`,
+  ]);
+}
+
+// Hero: the frame where the feature fires hardest, next to its activation as isometric blocks.
+function featureHero(feature) {
+  const top = feature.top_clips && feature.top_clips[0];
+  if (!top) return null;
+  const href = `#/clips/${encodeURIComponent(top.clip_id)}?frame=${top.frame}&feature=${feature.id}`;
+  const shot = el("a", { class: "hero-shot", href, "data-testid": "feature-hero-shot" }, [
+    el("img", { alt: `${top.clip_id} frame ${top.frame}`, src: apiUrl(`/api/clips/${encodeURIComponent(top.clip_id)}/frames/${top.frame}.png`) }),
+  ]);
+  shot.querySelector("img").addEventListener("error", (event) => event.target.remove());
+  const terrain = el("div", { class: "hero-terrain", "data-testid": "feature-terrain" });
+  const caption = el("p", { class: "hero-caption" }, `${top.clip_id} · frame ${top.frame} · peak ${fmtActivation(top.value)}`);
+  const token = state.token;
+  fetchHeat(top.clip_id, top.frame, feature.id).then((rows) => {
+    if (token !== state.token || !rows || !rows.length) return;
+    terrain.innerHTML = isoTerrain(rows);
+  }).catch(() => {});
+  return el("div", { class: "hero" }, [shot, el("div", { style: "position: relative" }, [terrain, caption])]);
+}
+
+async function fetchHeat(clipId, frame, featureId) {
+  if (iiRoot()) {
+    const pack = await heatPack(clipId);
+    return (pack && pack[`${frame}:${featureId}`]) || null;
+  }
+  const response = await fetch(
+    `/api/clips/${encodeURIComponent(clipId)}/heatmap?frame=${frame}&feature=${featureId}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) return null;
+  const payload = await response.json();
+  return payload.heatmap || null;
+}
+
+// Isometric blocks, one per patch, height proportional to activation. Numbers only, so innerHTML is safe.
+function isoTerrain(rows) {
+  const h = rows.length;
+  const w = rows[0].length;
+  let max = 0;
+  for (const row of rows) for (const value of row) if (value > max) max = value;
+  const tile = Math.min(28, 360 / (w + h));
+  const dx = tile * 0.866;
+  const dy = tile * 0.5;
+  const lift = tile * 4.2;
+  const width = (w + h) * dx;
+  const height = (w + h) * dy + lift + 4;
+  const x0 = h * dx;
+  const y0 = lift + 2;
+  const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+  const base = [233, 230, 221];
+  const hot = [242, 84, 27];
+  const parts = [];
+  for (let s = 0; s < w + h - 1; s += 1) {
+    for (let r = 0; r < h; r += 1) {
+      const c = s - r;
+      if (c < 0 || c >= w) continue;
+      const value = rows[r][c] > 0 && max > 0 ? rows[r][c] / max : 0;
+      const z = value > 0 ? Math.max(2, value * lift) : 0;
+      const k = 0.88;
+      const cx = x0 + (c - r) * dx;
+      const cy = y0 + (c + r) * dy;
+      const top = [
+        [cx, cy - z],
+        [cx + dx * k, cy + dy * k - z],
+        [cx, cy + 2 * dy * k - z],
+        [cx - dx * k, cy + dy * k - z],
+      ];
+      const face = value > 0 ? mix([246, 205, 186], hot, Math.pow(value, 0.7)) : base;
+      const pts = (list) => list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+      if (z > 0) {
+        const left = mix(face, [60, 30, 15], 0.22);
+        const right = mix(face, [60, 30, 15], 0.1);
+        parts.push(`<polygon points="${pts([top[3], top[2], [top[2][0], top[2][1] + z], [top[3][0], top[3][1] + z]])}" fill="${rgb(left)}"/>`);
+        parts.push(`<polygon points="${pts([top[2], top[1], [top[1][0], top[1][1] + z], [top[2][0], top[2][1] + z]])}" fill="${rgb(right)}"/>`);
+      }
+      parts.push(`<polygon points="${pts(top)}" fill="${rgb(face)}"/>`);
+    }
+  }
+  return `<svg viewBox="0 0 ${width.toFixed(1)} ${height.toFixed(1)}" role="img" aria-label="Activation on each patch, drawn as blocks">${parts.join("")}</svg>`;
+}
+
 function fmtMaybe(value, render) {
   if (value === null || value === undefined) return "—";
   return render(value);
 }
 
+const SCORE_NAMES = {
+  distinct_clips_top20: "Different clips in its top 20",
+  label_holds_heldout: "Name holds on unseen clips",
+  ablation_effect: "Prediction shift when removed",
+  random_percentile: "Beats random features (percentile)",
+  absent_in_random_init: "Absent from an untrained model",
+};
+
 function scoreItem(name, text, raw) {
   const shown = raw === null || raw === undefined ? "null" : String(raw);
   return el("div", {}, [
-    el("dt", {}, name),
+    el("dt", { title: name }, SCORE_NAMES[name] || name),
     el("dd", { "data-testid": name, "data-value": shown }, text),
   ]);
 }
@@ -416,7 +557,7 @@ function scoreVersus(feature) {
     : fmtPercentile(feature.random_percentile);
   const randomCount = feature.n_random === null || feature.n_random === undefined ? "—" : String(feature.n_random);
   return el("div", {}, [
-    el("dt", {}, "random_percentile"),
+    el("dt", { title: "random_percentile" }, SCORE_NAMES.random_percentile),
     el("dd", {}, [
       el("span", { "data-testid": "random_percentile", "data-value": feature.random_percentile === null || feature.random_percentile === undefined ? "null" : String(feature.random_percentile) }, percentile),
       " ",
@@ -485,6 +626,7 @@ function renderClip() {
     const hw = state.clip?.hw;
     if (video.videoWidth && video.videoHeight && !(hw && hw[0] > 0 && hw[1] > 0)) {
       stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+      stage.parentElement?.style.setProperty("--stage-aspect", String(video.videoWidth / video.videoHeight));
     }
     if (state.clip?.media === "video" && !state.playing) renderFrame({ seek: true });
   });
@@ -523,10 +665,10 @@ function renderClip() {
       el("section", { class: "player" }, [
         el("div", { class: "clip-kicker" }, [
           el("h2", { "data-testid": "clip-title" }, clip.clip_id),
-          el("span", { class: "split-tag" }, clip.split || ""),
+          el("span", { class: "split-tag" }, clip.split === "heldout" ? "held-out clip" : clip.split ? `${clip.split} clip` : "clip"),
           el("p", { class: "clip-task", "data-testid": "clip-task", hidden: "" }),
         ]),
-        stage,
+        el("div", { class: "stage-frame" }, stage),
         el("div", { class: "transport" }, [
           play,
           scrubberWrap,
@@ -535,8 +677,9 @@ function renderClip() {
         el("p", { class: "heat-caption", "data-testid": "heatmap-label" }),
         steerPanel(),
       ]),
-      el("section", {}, [
-        el("h2", { class: "panel-title" }, "At this frame"),
+      el("section", { class: "notices" }, [
+        el("h2", {}, "What the model notices"),
+        el("p", { class: "lead" }, "Features firing on this frame, strongest first. Pick one to see where it fires."),
         el("ol", { class: "feature-list", "data-testid": "frame-features" }),
       ]),
     ]),
@@ -617,8 +760,13 @@ function renderFrame(options) {
 
   const useVideo = clip.media === "video" && clip.pixels === "ok";
   stage.dataset.media = useVideo ? "video" : clip.pixels === "ok" ? "frames" : "none";
-  if (clip.hw && clip.hw[0] > 0 && clip.hw[1] > 0) stage.style.aspectRatio = `${clip.hw[1]} / ${clip.hw[0]}`;
-  else if (clip.width && clip.height) stage.style.aspectRatio = `${clip.width} / ${clip.height}`;
+  let aspect = null;
+  if (clip.hw && clip.hw[0] > 0 && clip.hw[1] > 0) aspect = [clip.hw[1], clip.hw[0]];
+  else if (clip.width && clip.height) aspect = [clip.width, clip.height];
+  if (aspect) {
+    stage.style.aspectRatio = `${aspect[0]} / ${aspect[1]}`;
+    stage.parentElement?.style.setProperty("--stage-aspect", String(aspect[0] / aspect[1]));
+  }
   placeCrop(clip);
   if (useVideo) {
     stage.classList.remove("is-empty");
@@ -667,7 +815,8 @@ function renderFrame(options) {
     active = frame.features[0] || null;
   }
   list.dataset.feature = active ? String(active.id) : "";
-  list.replaceChildren(...(frame.features.length ? frame.features.map((feature) => renderFeatureRow(feature, active)) : [
+  const peak = frame.features.reduce((best, feature) => Math.max(best, Number(feature.activation) || 0), 0);
+  list.replaceChildren(...(frame.features.length ? frame.features.map((feature) => renderFeatureRow(feature, active, peak)) : [
     el("li", { class: "empty" }, "No feature fired on this frame."),
   ]));
   state.activeFeature = active;
@@ -686,6 +835,7 @@ function paintCaption(feature) {
   const caption = document.querySelector("[data-testid=heatmap-label]");
   if (!caption) return;
   caption.replaceChildren();
+  caption.dataset.mode = "activation";
   if (!feature) {
     caption.textContent = "Nothing fired on this frame.";
     return;
@@ -694,10 +844,10 @@ function paintCaption(feature) {
     caption.textContent = `feature ${feature.id} not active at this frame`;
     return;
   }
-  caption.append("heatmap · ", el("strong", {}, displayLabel(feature)));
+  caption.append("Lit up where ", el("strong", {}, displayLabel(feature)), " fires");
 }
 
-function renderFeatureRow(feature, active) {
+function renderFeatureRow(feature, active, peak) {
   const selected = active && feature.id === active.id;
   const row = el("li", {
     class: "frame-feature",
@@ -716,7 +866,10 @@ function renderFeatureRow(feature, active) {
   link.addEventListener("click", (event) => event.stopPropagation());
   row.append(
     el("div", { class: "feature-head" }, [link, badge(feature)]),
-    el("div", { class: "activation" }, ["activation ", el("b", { "data-testid": "activation" }, fmtActivation(feature.activation))]),
+    el("div", { class: "activation" }, [
+      el("span", { class: "bar", "aria-hidden": "true" }, el("i", { style: `width: ${barWidth(feature.activation, peak)}%` })),
+      el("b", { "data-testid": "activation" }, fmtActivation(feature.activation)),
+    ]),
   );
   if (feature.effects && feature.effects.length) {
     row.append(el("div", { class: "effects" }, feature.effects.map(renderEffect)));
@@ -728,6 +881,11 @@ function renderFeatureRow(feature, active) {
     if (location.hash !== hash) history.replaceState(null, "", hash);
   });
   return row;
+}
+
+function barWidth(value, peak) {
+  if (!Number.isFinite(value) || !(peak > 0) || value <= 0) return 0;
+  return Math.max(4, Math.min(100, (value / peak) * 100)).toFixed(1);
 }
 
 function renderEffect(effect) {
@@ -796,6 +954,7 @@ async function renderHeat(feature) {
   const token = ++state.heatToken;
   const frame = state.frame;
   grid.replaceChildren();
+  delete grid.dataset.steer;
   if (feature) grid.dataset.featureId = String(feature.id);
   else delete grid.dataset.featureId;
   if (!feature) return;
@@ -829,7 +988,7 @@ function emptyHeat(clip) {
   return Array.from({ length: height }, () => Array.from({ length: width }, () => 0));
 }
 
-function drawHeat(rows, rgb = "226, 162, 58") {
+function drawHeat(rows, rgb = themeRgb("--signal-rgb", "242, 84, 27")) {
   const grid = document.querySelector("[data-testid=heatmap]");
   if (!grid || !rows.length) return;
   grid.replaceChildren();
@@ -837,6 +996,7 @@ function drawHeat(rows, rgb = "226, 162, 58") {
   const width = rows[0].length;
   let max = 0;
   for (const row of rows) for (const value of row) if (value > max) max = value;
+  grid.dataset.dense = width * height > 400 ? "true" : "false";
   grid.style.gridTemplateColumns = `repeat(${width}, 1fr)`;
   grid.style.gridTemplateRows = `repeat(${height}, 1fr)`;
   for (let h = 0; h < height; h += 1) {
@@ -1023,7 +1183,8 @@ function paintSteerCaption() {
     const known = (state.run.features || []).find((feature) => Number(feature.id) === Number(id));
     return known ? displayLabel(known) : `feature ${id}`;
   });
-  caption.replaceChildren("prediction change · ", el("strong", {}, names.join(", ")));
+  caption.dataset.mode = "steer";
+  caption.replaceChildren("Showing the prediction change from steering ", el("strong", {}, names.join(", ")));
 }
 
 function drawSteer() {
@@ -1036,7 +1197,7 @@ function drawSteer() {
   grid.dataset.steer = "true";
   const t = Number(frame.t);
   const rows = (result.shift[t] || []).map((row) => row.map((value) => (value === null ? 0 : value)));
-  drawHeat(rows, "70, 140, 230");
+  drawHeat(rows, themeRgb("--steer-rgb", "47, 85, 228"));
 }
 
 async function runSteer() {
