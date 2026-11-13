@@ -12,6 +12,17 @@ Runs on CPU and Apple Silicon (MPS). PyTorch is the only tensor library; nothing
 
 ## Quickstart
 
+New here? One command, no download and no setup:
+
+```bash
+uv sync
+uv run ii try
+```
+
+`ii try` writes 30 practice clips to `clips/try`, runs the whole pipeline on the `fake` model into `runs/try` (about 15 seconds on a laptop), and opens the viewer with the playground on. The page starts on the verified feature with the biggest effect, at the held-out moment where it fires hardest, and the terminal suggests what to try first: remove that feature, then remove a decoy and compare. The practice model has three features planted on purpose, so you can check what the tool finds against the truth before you point it at a real model. A second `ii try` reuses the run and opens in a couple of seconds. `--no-open` skips the browser and `--verbose` prints the full pipeline log.
+
+The rest of this section is the same pipeline step by step.
+
 ```bash
 uv sync
 uv run interpretableintelligence generate-clips --out clips/demo --n 30 --seed 0
