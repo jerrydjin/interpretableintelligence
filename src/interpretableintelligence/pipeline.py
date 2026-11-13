@@ -70,6 +70,8 @@ from interpretableintelligence.thresholds import (
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
     DEFAULT_PREFILTER_K,
+    HF_SAE_EXPANSION,
+    SCORE_ALL_MAX_FEATURES,
     DEFAULT_SEED,
     LABEL_ASSIGN_MIN_CORR,
     LABEL_HOLD_MIN_CORR,
@@ -144,6 +146,18 @@ def format_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+def sae_dictionary_size(adapter_name: str, d_model: int, requested: int | None = None) -> int:
+    """SAE width. ``fake`` and ``vjepa2`` keep the 12-feature acceptance dictionary;
+    a real model behind ``hf`` gets ``HF_SAE_EXPANSION`` features per activation dimension."""
+    if requested is not None:
+        if int(requested) < 1:
+            raise ValueError(f"--sae-features must be >= 1, got {requested}")
+        return int(requested)
+    if adapter_name.startswith("hf:"):
+        return HF_SAE_EXPANSION * int(d_model)
+    return SAEConfig(d_model=int(d_model)).n_features
+
+
 def execute_pipeline(
     adapter_name: str,
     clips_dir: Path,
@@ -155,6 +169,7 @@ def execute_pipeline(
     prefilter: int | None = None,
     extra_effects: tuple[str, ...] = (),
     gpu_cost_per_hour: float | None = None,
+    sae_features: int | None = None,
     score: bool = True,
     serve: bool = True,
     host: str = "127.0.0.1",
@@ -200,7 +215,14 @@ def execute_pipeline(
         meta=meta,
         tiny=tiny,
     )
-    config = SAEConfig(d_model=d_model, seed=int(seed))
+    n_features = sae_dictionary_size(adapter.name, d_model, sae_features)
+    config = SAEConfig(d_model=d_model, n_features=n_features, seed=int(seed))
+    if prefilter is None and n_features > SCORE_ALL_MAX_FEATURES:
+        prefilter = DEFAULT_PREFILTER_K
+        log(
+            f"{n_features} SAE features: scoring the {prefilter} with the largest attribution "
+            "(pass --prefilter K to change). The rest stay unverified."
+        )
     sae_inputs = _with_kind(capture_inputs, "sae", sae=config.as_dict())
 
     if _capture_ready(out, capture_inputs, grid, len(meta)):

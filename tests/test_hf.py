@@ -155,6 +155,37 @@ def test_edit_only_touches_patch_tokens_and_carries_gradient(tiny_models):
     assert bool(moved[0].any()) and not bool(moved[1:].any())
 
 
+def test_input_size_follows_the_preprocessor_when_the_model_accepts_it(tmp_path):
+    """DINOv2's config says 518 px but its preprocessor crops to 224. Feed what the model card feeds."""
+    from transformers import AutoModel, Dinov2Config, VideoMAEConfig
+
+    torch.manual_seed(0)
+    dino = tmp_path / "dino"
+    AutoModel.from_config(Dinov2Config(image_size=64, patch_size=8, **_SMALL)).save_pretrained(dino)
+    (dino / "preprocessor_config.json").write_text(json.dumps({"crop_size": {"height": 32, "width": 32}, "image_mean": [0.5] * 3, "image_std": [0.5] * 3}))
+    adapter = _adapter(dino)
+    assert (adapter._size, adapter.grid().h) == (32, 4)
+    assert adapter._mean == (0.5, 0.5, 0.5)
+
+    # VideoMAE's position table is fixed to its config size, so it keeps 32 px.
+    vmae = tmp_path / "vmae"
+    AutoModel.from_config(VideoMAEConfig(image_size=32, patch_size=8, num_frames=4, tubelet_size=2, **_SMALL)).save_pretrained(vmae)
+    (vmae / "preprocessor_config.json").write_text(json.dumps({"crop_size": {"height": 16, "width": 16}}))
+    adapter = _adapter(vmae)
+    assert (adapter._size, adapter.grid().h) == (32, 4)
+
+
+def test_sae_width_scales_with_the_model_for_hf_only():
+    from interpretableintelligence.pipeline import sae_dictionary_size
+
+    assert sae_dictionary_size("fake", 64) == 12
+    assert sae_dictionary_size("vjepa2", 1024) == 12
+    assert sae_dictionary_size("hf:facebook/dinov2-small", 384) == 8 * 384
+    assert sae_dictionary_size("hf:x", 384, requested=100) == 100
+    with pytest.raises(ValueError):
+        sae_dictionary_size("hf:x", 384, requested=0)
+
+
 def test_random_init_changes_the_sha_and_layers_are_checked(tiny_models):
     trained = _adapter(tiny_models["vit"])
     control = _adapter(tiny_models["vit"], random_init=True)
@@ -179,6 +210,8 @@ def test_ii_run_hf_end_to_end_then_steer(tiny_models, tmp_path):
     assert manifest["layer"] == 1  # middle block of two
     scoreboard = json.loads((out / "scoreboard.json").read_text(encoding="utf-8"))
     assert scoreboard["sae"]["loss_visible_mean"] > 0
+    sae_config = json.loads((out / "sae" / "config.json").read_text(encoding="utf-8"))
+    assert sae_config["n_features"] == 8 * 32
 
     steerer = Steerer(out, clips)
     clip_id = manifest["clips"][0]["clip_id"]

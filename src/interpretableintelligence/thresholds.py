@@ -28,6 +28,12 @@ TOP_K_ABLATION_PER_CLIP = 10
 # Default width of the attribution shortlist (`interpretableintelligence rank --prefilter`).
 # `interpretableintelligence run` still ablates every feature unless --prefilter is set.
 DEFAULT_PREFILTER_K = 10
+# SAE width for a real model behind the hf adapter, per activation dimension.
+HF_SAE_EXPANSION = 8
+# Above this many SAE features, ``ii run`` scores an attribution shortlist by
+# default: each scored feature costs a held-out ablation plus its matched
+# random controls, so scoring thousands is not a laptop job.
+SCORE_ALL_MAX_FEATURES = 64
 
 # Loss-based ablations. alpha matches the cosine percentile gate:
 # real iff the Monte Carlo p-value is <= alpha (ties count against the candidate).
