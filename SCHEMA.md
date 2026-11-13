@@ -102,7 +102,7 @@ f = relu(W_enc @ (x - b_dec) + b_enc)
 x_hat = W_dec @ f + b_dec
 ```
 
-Decoder columns are unit-norm. `sae/config.json` records `d_model`, `n_features`, `l1_coeff`, `ortho_coeff`, `lr`, `steps`, `batch_size`, `seed`, `normalize_decoder`, and `activation` (`relu`). Training uses train-split activations only. The orthogonality term keeps one planted direction from splitting into two live features.
+Decoder columns are unit-norm. `sae/config.json` records `d_model`, `n_features`, `l1_coeff`, `ortho_coeff`, `lr`, `steps`, `batch_size`, `seed`, `normalize_decoder`, and `activation` (`relu` or `topk`). A `topk` SAE also records `k`, the number of features kept per token; its `l1_coeff` and `ortho_coeff` are 0. Training uses train-split activations only. The orthogonality term keeps one planted direction from splitting into two live features.
 
 ## features/feature_acts.parquet
 

@@ -70,7 +70,11 @@ from interpretableintelligence.thresholds import (
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
     DEFAULT_PREFILTER_K,
+    HF_SAE_BATCH,
     HF_SAE_EXPANSION,
+    HF_SAE_LR,
+    HF_SAE_STEPS,
+    HF_SAE_TOPK,
     SCORE_ALL_MAX_FEATURES,
     DEFAULT_SEED,
     LABEL_ASSIGN_MIN_CORR,
@@ -158,6 +162,31 @@ def sae_dictionary_size(adapter_name: str, d_model: int, requested: int | None =
     return SAEConfig(d_model=int(d_model)).n_features
 
 
+def sae_config_for(adapter_name: str, d_model: int, seed: int, requested: int | None = None) -> SAEConfig:
+    """``fake`` and ``vjepa2``: the L1 ReLU acceptance SAE. ``hf``: a TopK SAE sized to the model.
+
+    The L1 and decoder-orthogonality terms are tuned for the 12-feature
+    acceptance dictionary; the orthogonality term sums over every pair of
+    features, so at thousands of features it swamps the reconstruction loss.
+    TopK fixes sparsity directly and needs neither term.
+    """
+    n_features = sae_dictionary_size(adapter_name, d_model, requested)
+    if not adapter_name.startswith("hf:"):
+        return SAEConfig(d_model=int(d_model), n_features=n_features, seed=int(seed))
+    return SAEConfig(
+        d_model=int(d_model),
+        n_features=n_features,
+        seed=int(seed),
+        activation="topk",
+        k=min(HF_SAE_TOPK, n_features),
+        l1_coeff=0.0,
+        ortho_coeff=0.0,
+        lr=HF_SAE_LR,
+        steps=HF_SAE_STEPS,
+        batch_size=HF_SAE_BATCH,
+    )
+
+
 def execute_pipeline(
     adapter_name: str,
     clips_dir: Path,
@@ -215,8 +244,8 @@ def execute_pipeline(
         meta=meta,
         tiny=tiny,
     )
-    n_features = sae_dictionary_size(adapter.name, d_model, sae_features)
-    config = SAEConfig(d_model=d_model, n_features=n_features, seed=int(seed))
+    config = sae_config_for(adapter.name, d_model, int(seed), sae_features)
+    n_features = config.n_features
     if prefilter is None and n_features > SCORE_ALL_MAX_FEATURES:
         prefilter = DEFAULT_PREFILTER_K
         log(

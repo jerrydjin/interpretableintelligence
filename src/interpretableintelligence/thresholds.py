@@ -30,6 +30,11 @@ TOP_K_ABLATION_PER_CLIP = 10
 DEFAULT_PREFILTER_K = 10
 # SAE width for a real model behind the hf adapter, per activation dimension.
 HF_SAE_EXPANSION = 8
+# TopK SAE for hf: active features per token, and its optimiser schedule.
+HF_SAE_TOPK = 32
+HF_SAE_LR = 1e-3
+HF_SAE_STEPS = 3000
+HF_SAE_BATCH = 1024
 # Above this many SAE features, ``ii run`` scores an attribution shortlist by
 # default: each scored feature costs a held-out ablation plus its matched
 # random controls, so scoring thousands is not a laptop job.
