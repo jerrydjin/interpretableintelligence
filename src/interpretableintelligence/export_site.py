@@ -69,7 +69,7 @@ def export_site(
 
 def _copy_static(dest: Path) -> None:
     dest.mkdir(parents=True)
-    for name in ("app.js", "style.css", "demo.css"):
+    for name in ("guide.js", "app.js", "style.css", "demo.css"):
         source = STATIC / name
         if source.is_file():
             shutil.copy2(source, dest / name)
@@ -158,6 +158,7 @@ def _viewer_page(sentence: str) -> str:
     <p class="score-line" data-testid="score-line">{escape(sentence)}</p>
   </header>
   <main id="app"></main>
+  <script src="/static/guide.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -1701,3 +1701,29 @@ def test_ten_million_acts_bind_under_five_seconds_and_one_point_five_gb(tmp_path
     finally:
         proc.kill()
         proc.wait(timeout=10)
+
+
+def test_playwright_guide_explains_gates_and_status(tmp_path: Path):
+    from playwright.sync_api import expect, sync_playwright
+
+    with _view_server(_status_run(tmp_path), tmp_path / "clips") as url, sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=_chrome(),
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        page = browser.new_page(viewport={"width": 1100, "height": 800})
+        page.goto(url + "#/features/1", wait_until="domcontentloaded")
+        page.wait_for_selector("[data-testid=guide]")
+        expect(page.locator("[data-testid=guide]")).to_have_attribute("data-real", "false")
+        expect(page.locator("[data-testid=guide-status]")).to_contain_text("still running")
+        gates = page.locator("[data-testid=guide-gate]")
+        expect(gates).to_have_count(5)
+        expect(page.locator("[data-testid=guide-gate][data-passed=pass]")).to_have_count(0)
+        expect(page.locator("[data-testid=guide-next]")).to_have_count(5)
+        page.goto(url + "#/features/3", wait_until="domcontentloaded")
+        page.wait_for_selector("[data-testid=guide][data-real=true]")
+        expect(page.locator("[data-testid=guide-verdict]")).to_contain_text("Verified")
+        page.goto(url + "#/features", wait_until="domcontentloaded")
+        expect(page.locator("[data-testid=guide-sae]")).to_contain_text("not checked")
+        browser.close()

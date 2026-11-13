@@ -141,6 +141,7 @@ function renderHeader() {
     saeEl.dataset.usable = usable ? "true" : "false";
     saeEl.textContent = `${usable ? "usable" : "not usable"} · ev_heldout ${fmtUnit(sae.ev_heldout)} · loss_recovered ${fmtUnit(sae.loss_recovered)}`;
   }
+  if (guide()) saeEl.title = guide().sae(run.scoreboard === false ? null : run.sae).result;
   document.title = `${run.run_id} · interpretableintelligence`;
 }
 
@@ -202,6 +203,7 @@ function renderIndex() {
     el("section", { class: "feature-index", "data-testid": "feature-index" }, [
       el("h1", {}, "Features"),
       el("p", { class: "kicker", "data-testid": "real-count" }, `${real} real · ${features.length - real} unverified`),
+      indexGuide(features),
       list,
     ]),
   ].filter(Boolean);
@@ -294,6 +296,8 @@ function renderFeature(feature) {
       feature.scored === false
         ? el("p", { class: "kicker", "data-testid": "scoreboard-missing" }, "No scoreboard record. Shown as unverified.")
         : null,
+      featureGuide(feature),
+      el("h2", { class: "panel-title" }, "Raw scores"),
       el("dl", { class: "score", "data-testid": "scoreboard" }, [
         scoreItem("distinct_clips_top20", fmtMaybe(feature.distinct_clips_top20, String), feature.distinct_clips_top20),
         scoreItem("label_holds_heldout", fmtFlag(feature.label_holds_heldout), feature.label_holds_heldout),
@@ -310,6 +314,87 @@ function renderFeature(feature) {
     ]),
   );
   document.title = `${displayLabel(feature)} · interpretableintelligence`;
+}
+
+// Plain-English guide (static/guide.js). The badge never comes from here.
+function guide() {
+  return typeof window !== "undefined" && window.IIGuide ? window.IIGuide : null;
+}
+
+// Text with `code` spans.
+function richText(text) {
+  return String(text).split("`").map((part, index) => (index % 2 ? el("code", {}, part) : part));
+}
+
+function steerHrefFor(feature) {
+  if (!steerEnabled() || !feature.top_clips || !feature.top_clips.length) return null;
+  const top = feature.top_clips[0];
+  return `#/clips/${encodeURIComponent(top.clip_id)}?frame=${top.frame}&feature=${feature.id}`;
+}
+
+function featureGuide(feature) {
+  const g = guide();
+  if (!g) return null;
+  const run = state.run;
+  const ctx = { steerHref: steerHrefFor(feature), sae: run.scoreboard === false ? null : run.sae };
+  const read = g.feature(feature, ctx);
+  const items = read.gates.map((gate) => {
+    const mark = gate.passed === true ? "pass" : gate.passed === false ? "fail" : "skip";
+    const symbol = { pass: "✓", fail: "✗", skip: "–" }[mark];
+    const word = { pass: "Passed", fail: "Failed", skip: "Not run" }[mark];
+    let next = null;
+    if (gate.next) {
+      const hint = !gate.next.href && /playground/.test(gate.next.text) && !steerEnabled() && !iiRoot()
+        ? [" ", el("span", { class: "guide-hint" }, richText("Start the viewer with `ii view RUN --steer` to turn the playground on."))]
+        : [];
+      next = el("p", { class: "guide-next", "data-testid": "guide-next" }, [
+        el("strong", {}, "Try next: "),
+        ...richText(gate.next.text),
+        gate.next.href ? [" ", el("a", { href: gate.next.href, "data-testid": "guide-steer" }, `${gate.next.action || "Open"} →`)] : null,
+        ...hint,
+      ].flat());
+    }
+    return el("li", { class: `guide-gate guide-${mark}`, "data-testid": "guide-gate", "data-gate": gate.key, "data-passed": mark }, [
+      el("span", { class: "guide-mark", "aria-label": word, title: word }, symbol),
+      el("div", { class: "guide-body" }, [
+        el("h3", {}, gate.title),
+        el("p", { class: "guide-result" }, richText(gate.result)),
+        el("details", { class: "guide-asks" }, [el("summary", {}, "What this check asks"), el("p", {}, richText(gate.asks))]),
+        next,
+      ]),
+    ]);
+  });
+  return el("section", { class: "guide", "data-testid": "guide", "data-real": read.real ? "true" : "false" }, [
+    el("h2", { class: "panel-title" }, "What the checks say"),
+    el("p", { class: "guide-verdict", "data-testid": "guide-verdict" }, read.verdict),
+    read.status ? el("p", { class: "guide-status", "data-testid": "guide-status" }, read.status) : null,
+    el("ol", { class: "guide-gates" }, items),
+    el("p", { class: "guide-note" },
+      "These checks only decide the verified badge. Every feature stays open to explore and steer, whatever its badge."),
+  ]);
+}
+
+function indexGuide(features) {
+  const g = guide();
+  if (!g) return null;
+  const run = state.run;
+  const dictionary = g.sae(run.scoreboard === false ? null : run.sae);
+  const summary = g.summary(features);
+  const reasons = summary.lines.length
+    ? el("p", { class: "guide-why", "data-testid": "guide-why" }, [
+        "Why the rest are unverified: ",
+        summary.lines.map((line) => line.text).join(", "),
+        ". Open a feature to see what to try next.",
+      ])
+    : null;
+  return el("div", { class: "guide guide-index", "data-testid": "guide-index" }, [
+    el("p", { class: `guide-sae guide-${dictionary.passed === true ? "pass" : dictionary.passed === false ? "fail" : "skip"}`, "data-testid": "guide-sae" }, [
+      el("strong", {}, dictionary.passed === true ? "Dictionary: usable. " : dictionary.passed === false ? "Dictionary: not usable. " : "Dictionary: not checked. "),
+      ...richText(dictionary.result),
+      dictionary.next ? [" ", el("strong", {}, "Try next: "), ...richText(dictionary.next.text)] : [],
+    ].flat()),
+    reasons,
+  ]);
 }
 
 function fmtMaybe(value, render) {
