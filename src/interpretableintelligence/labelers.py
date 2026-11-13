@@ -117,7 +117,7 @@ class LLMLabeller:
 # CLIP concept labeller for real video (hf adapter)
 
 CLIP_MODEL_ID = "openai/clip-vit-base-patch16"
-CLIP_LABEL_MODEL = f"clip-concepts-v1:{CLIP_MODEL_ID}"
+CLIP_LABEL_MODEL = f"clip-concepts-v2:{CLIP_MODEL_ID}"
 CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
 CLIP_STD = (0.26862954, 0.26130258, 0.27577711)
 CLIP_PROMPT = "a photo of {}."
@@ -169,12 +169,16 @@ class ClipConceptSource:
     so each patch keeps its own content instead of the image summary. The
     similarity maps are resized to the model's ``h x w`` grid (frames are
     squashed to a square exactly as the hf adapter does) and averaged over each
-    tubelet. A feature is labelled with the concept whose map it tracks best
-    on train clips, and the label holds only if that correlation survives on
-    held-out clips (the same gate the fake cue labeller uses).
+    tubelet. A feature is labelled with the concept that best separates the
+    tokens where it fires from those where it does not (ROC AUC on train
+    clips, at least 0.80), and the label holds only if that concept's AUC is
+    also at least 0.80 on held-out clips. Pearson, which the fake cue
+    labeller uses, cannot reach its threshold for features that fire on ~1%
+    of tokens, however cleanly a concept predicts them.
     """
 
     name = CLIP_LABEL_MODEL
+    statistic = "auroc"
 
     def __init__(self, adapter, names: list[str], device=None) -> None:
         import torch

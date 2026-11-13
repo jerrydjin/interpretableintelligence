@@ -70,6 +70,8 @@ from interpretableintelligence.thresholds import (
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
     DEFAULT_PREFILTER_K,
+    LABEL_ASSIGN_MIN_AUROC,
+    LABEL_HOLD_MIN_AUROC,
     HF_SAE_BATCH,
     HF_SAE_EXPANSION,
     HF_SAE_LR,
@@ -932,6 +934,7 @@ def _correlate(
     cross = np.zeros((n_features, n_features), dtype=np.float64)
     seen = 0
     cues = concepts
+    auroc = _AurocLabels(n_features, n_cues) if getattr(concepts, "statistic", "pearson") == "auroc" else None
     chunk = _chunk_rows(n_features, model.d_model)
     with RowSource(main_acts) as main, RowSource(control_acts) as control:
         if main.n != control.n or main.d_model != control.d_model:
@@ -949,7 +952,10 @@ def _correlate(
                 ctrl_f = control_model.encode(torch.from_numpy(control_rows).to(device)).detach().cpu().numpy()
             if label_cues:
                 cue_rows = cues.rows(meta, clip_index, t, h, w)
-                _accumulate_labels(label_n, sum_a, sum_a2, sum_c, sum_c2, sum_ac, main_f, cue_rows, split)
+                if auroc is not None:
+                    auroc.add_concepts(cue_rows, split)
+                else:
+                    _accumulate_labels(label_n, sum_a, sum_a2, sum_c, sum_c2, sum_ac, main_f, cue_rows, split)
             main64 = main_f.astype(np.float64, copy=False)
             ctrl64 = ctrl_f.astype(np.float64, copy=False)
             sum_main += main64.sum(axis=0)
@@ -968,7 +974,9 @@ def _correlate(
         ]
     else:
         labels = []
-    for feature_id in range(n_features) if label_cues else []:
+    if auroc is not None:
+        labels = auroc.labels(main_acts, model, device, chunk, concept_names, label_model)
+    for feature_id in range(n_features) if label_cues and auroc is None else []:
         best_name = ""
         best_r = LABEL_ASSIGN_MIN_CORR
         for cue_index, name in enumerate(concept_names):
@@ -1350,6 +1358,73 @@ def _concept_source(adapter, concepts_file, device, log):
     names = load_concepts(concepts_file)
     log(f"score: labelling with {len(names)} CLIP concepts")
     return ClipConceptSource(adapter, names, device=device)
+
+
+class _AurocLabels:
+    """Concept labels for sparse features: how well a concept separates tokens where
+    the feature fires from tokens where it does not (ROC AUC, Mann-Whitney).
+
+    Pearson against a dense concept map is capped far below 1 when a feature fires
+    on about 1% of tokens, however cleanly the concept predicts it. Pass one keeps
+    the concept rows; ``labels`` ranks them per split and re-encodes the
+    activations, so the firing x rank sums are one matrix product per chunk.
+    """
+
+    def __init__(self, n_features: int, n_concepts: int) -> None:
+        self.n_features = n_features
+        self.n_concepts = n_concepts
+        self.concepts: list[np.ndarray] = []
+        self.splits: list[np.ndarray] = []
+
+    def add_concepts(self, rows: np.ndarray, split: np.ndarray) -> None:
+        self.concepts.append(np.asarray(rows, dtype=np.float32))
+        self.splits.append(np.asarray(split, dtype=np.uint8))
+
+    def labels(self, main_acts, model, device, chunk, names, label_model) -> list[dict]:
+        concepts = np.concatenate(self.concepts)
+        split = np.concatenate(self.splits)
+        ranks = np.zeros_like(concepts, dtype=np.float64)
+        n_split = np.zeros(2, dtype=np.int64)
+        for split_id in (0, 1):
+            mask = split == split_id
+            n_split[split_id] = int(mask.sum())
+            if n_split[split_id]:
+                ranks[mask] = np.argsort(np.argsort(concepts[mask], axis=0, kind="stable"), axis=0) + 1.0
+        rank_sum = np.zeros((2, self.n_features, self.n_concepts), dtype=np.float64)
+        n_fire = np.zeros((2, self.n_features), dtype=np.float64)
+        with RowSource(main_acts) as main:
+            for start, stop in main.chunks(chunk):
+                rows = np.array(main.rows[start:stop], dtype=np.float32, copy=True)
+                with torch.no_grad():
+                    fire = (model.encode(torch.from_numpy(rows).to(device)) > DEAD_ACT_EPS).cpu().numpy()
+                part = split[start:stop]
+                for split_id in (0, 1):
+                    mask = part == split_id
+                    if np.any(mask):
+                        chosen = fire[mask].astype(np.float64)
+                        rank_sum[split_id] += chosen.T @ ranks[start:stop][mask]
+                        n_fire[split_id] += chosen.sum(axis=0)
+        auc = np.full((2, self.n_features, self.n_concepts), 0.5)
+        for split_id in (0, 1):
+            pos = n_fire[split_id][:, None]
+            neg = n_split[split_id] - pos
+            ok = (pos > 0) & (neg > 0)
+            value = (rank_sum[split_id] - pos * (pos + 1) / 2) / np.where(ok, pos * neg, 1.0)
+            auc[split_id] = np.where(ok, value, 0.5)
+        out = []
+        for feature_id in range(self.n_features):
+            best = int(np.argmax(auc[0, feature_id]))
+            if auc[0, feature_id, best] < LABEL_ASSIGN_MIN_AUROC:
+                out.append({"label": "", "label_model": label_model, "label_holds_heldout": False})
+                continue
+            out.append(
+                {
+                    "label": names[best],
+                    "label_model": label_model,
+                    "label_holds_heldout": bool(auc[1, feature_id, best] >= LABEL_HOLD_MIN_AUROC),
+                }
+            )
+        return out
 
 
 class _CueCache:

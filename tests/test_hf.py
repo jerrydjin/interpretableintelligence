@@ -289,3 +289,42 @@ def test_real_dinov2_small_end_to_end(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert validate_run(out) == []
+
+
+def test_auroc_labels_a_sparse_feature_that_pearson_would_miss(monkeypatch):
+    import interpretableintelligence.pipeline as pipeline
+
+    rng = np.random.default_rng(0)
+    n = 4000
+    concepts = rng.random((n, 2)).astype(np.float32)
+    split = (rng.random(n) < 0.25).astype(np.uint8)
+    planted = concepts[:, 0] > 0.97  # fires on ~3% of tokens, exactly where concept A is strong
+    noise = rng.random(n) < 0.03
+    acts = np.stack([planted, noise], axis=1).astype(np.float32)
+
+    class Rows:
+        def __init__(self, _path):
+            self.rows = acts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def chunks(self, size):
+            for start in range(0, n, size):
+                yield start, min(n, start + size)
+
+    class Identity:
+        def encode(self, x):
+            return x
+
+    monkeypatch.setattr(pipeline, "RowSource", Rows)
+    labels = pipeline._AurocLabels(2, 2)
+    labels.add_concepts(concepts[:1500], split[:1500])
+    labels.add_concepts(concepts[1500:], split[1500:])
+    out = labels.labels(None, Identity(), torch.device("cpu"), 700, ["A", "B"], "m")
+    assert out[0] == {"label": "A", "label_model": "m", "label_holds_heldout": True}
+    assert out[1]["label"] == "" and out[1]["label_holds_heldout"] is False
+    assert np.corrcoef(planted, concepts[:, 0])[0, 1] < 0.5  # the Pearson gate would not label it
