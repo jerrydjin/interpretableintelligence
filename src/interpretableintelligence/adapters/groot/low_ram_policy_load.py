@@ -56,6 +56,12 @@ class CpuWeightArena:
             self.mm = _mmap.mmap(fd, self.nbytes)
         finally:
             os.close(fd)
+        # The mapping keeps the pages alive; unlinking now means a crash or a normal exit
+        # never leaves a multi-GB file behind in /tmp (POSIX only; Windows keeps the file).
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
         self.off = 0
         self._views: list[torch.Tensor] = []
 

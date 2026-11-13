@@ -6,7 +6,7 @@ Shared rules for Claude Code, Codex, and other coding agents working in this rep
 
 **interpretableintelligence** (`ii`) is infrastructure for mechanistic interpretability on video world models and robot / VLA policies: a shared **run folder** format, SAE training, offline scoreboard gates, local viewers, and causal rollouts.
 
-The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, and the generic `hf:<model>` adapter (any ViT-style Hugging Face vision model, `ii run hf --model <id>`). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
+The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, the generic `hf:<model>` adapter (any ViT-style Hugging Face vision model, `ii run hf --model <id>`), and `groot:<checkpoint>` (NVIDIA GR00T N1.7 through LeRobot, `ii run groot`; needs `lerobot[groot]==0.7.0`, and `--tiny` is a random-weights stand-in for tests). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
 
 Contract details: `SCHEMA.md`, `ARCHITECTURE.md`, `README.md`. Do not drift from them in agent docs.
 
@@ -42,7 +42,7 @@ All experiments that belong in this repo should be reachable through these comma
 
 World-model path: `ii run fake --clips … --out runs/…` or `vjepa2`. Policy path on main: `ii rollouts runs/… --policy fake`.
 
-**Known gap:** GR00T is **not on `ii` yet**. Live LIBERO-plus work runs through `src/interpretableintelligence/adapters/groot/v9/` (Colab, `ablate_v9.py`, ablation plans)—the current pre-CLI route, not a violation of the long-term CLI rule.
+**Known gap:** GR00T is on `ii` for the offline lane (`ii run groot`: capture at DiT block 5 on the final denoise step, SAE, scoring, `ii view --steer`), but **closed-loop LIBERO-plus rollouts are not**. They still run through `src/interpretableintelligence/adapters/groot/v9/` (Colab, `ablate_v9.py`, ablation plans), the current pre-CLI route, not a violation of the long-term CLI rule. Steering GR00T in the playground is exploration, never evidence; the research rules below still decide findings.
 
 ## Run folder layout
 
@@ -84,7 +84,7 @@ These override intuition, offline plots, and demo-site copy.
 
 **How to run work:**
 
-- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. Until GR00T and the random-weights SAE control land on `ii`, the v9 adapter path above is the documented exception (known gap).
+- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. Until GR00T rollouts and the random-weights SAE control land on `ii`, the v9 adapter path above is the documented exception (known gap).
 - **Never edit `split.json` or held-out labels** in an existing run.
 - **No paid compute** on behalf of this repo (no cloud GPU rental, etc.). GR00T rollouts use existing Colab/box paths under `adapters/groot/`.
 

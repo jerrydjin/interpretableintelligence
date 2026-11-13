@@ -367,6 +367,16 @@ def _center_square(height: float, width: float) -> dict[str, float]:
     return {"x": (width - side) / 2, "y": (height - side) / 2, "width": side, "height": side}
 
 
+def token_layout(adapter: object) -> str:
+    """``patches`` when grid cells are image patches; ``actions`` for a policy's action tokens.
+
+    GR00T's grid is ``[state] + one token per future action step``, not a place
+    in the frame, so the viewer draws it as a strip under the frame (now on the
+    left, later steps to the right) instead of a heatmap over it.
+    """
+    return "actions" if isinstance(adapter, str) and adapter.startswith("groot:") else "patches"
+
+
 def _parse_crop(raw: object, hw: list[float] | None) -> dict[str, float] | None:
     if isinstance(raw, str) and raw.strip().lower() in {"center", "centre", "center_square", "centre_square"}:
         return _center_square(hw[0], hw[1]) if hw is not None else None
@@ -1482,6 +1492,7 @@ def _clip_payload(clip, grid, loaded, timeline, effect_rows, meta_by_id, extra, 
         "height": loaded.height,
         "hw": hw,
         "crop": crop,
+        "layout": token_layout(adapter),
         "window_starts": starts,
         "stride": sample_stride,
         "grid": {key: grid[key] for key in ("t", "h", "w", "tubelet", "patch_px") if key in grid},

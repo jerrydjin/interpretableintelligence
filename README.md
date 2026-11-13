@@ -4,7 +4,7 @@
 
 A feature is marked `real` only when the SAE is good enough to splice back into the predictor and the feature passes four checks: it fires across clips, its label holds on held-out clips, its ablation effect beats matched random features, and a randomly initialised copy of the model does not reproduce its firing pattern. A missing check is `null`, and `null` never counts as a pass.
 
-`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings any ViT-style Hugging Face image or video model by name (see below). pi0.5 is still a later lane.
+`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings any ViT-style Hugging Face image or video model by name (see below). `groot` is NVIDIA's GR00T N1.7 robot policy through LeRobot. pi0.5 is still a later lane.
 
 `interpretableintelligence rollouts` is the causal check on a policy. It runs paired baseline and intervention episodes, plus matched random-feature controls, and writes `rollouts/` into the run folder (schema version 1). The fake policy is a reacher whose planted feature drops success from about 0.80 to about 0.30 when ablated; other features do not move it. LIBERO, OpenVLA, and pi0.5 sit behind the optional `robots` extra as stubs. That extra installs no simulator and no GPU package.
 
@@ -80,6 +80,20 @@ uv run ii view runs/dinov2 --clips clips/mine --steer
 
 A generic encoder has no masked-prediction head, so for `hf` the "prediction" is the model's own final patch tokens. Every token is scored, the target is the clean output, and the visible-mean baseline replaces every token with the average token. An ablation effect therefore reads as "how far does removing this feature move the model's output". Image models see each sampled frame (8 by default) as its own image; video models see the window at once. Frames are resized to the model's square input without cropping, so the heatmap covers the whole frame. Prefix tokens (CLS, registers) pass through unedited.
 
+### NVIDIA GR00T N1.7 (robot policy)
+
+```bash
+uv pip install "lerobot[groot]==0.7.0"     # LeRobot's GR00T port; not in the default install
+uv run ii run groot --clips clips/libero --out runs/groot
+uv run ii view runs/groot --clips clips/libero --steer
+```
+
+The adapter is `groot:<checkpoint>`, and `--model` defaults to `nvidia/gr00t17-lerobot-libero_10-640` (the checkpoint behind the task 1028 work). It hooks DiT block `--layer` (default 5, 0-indexed) of the action head on the final flow-matching step, the same tensor as the Colab capture and ablation runs. The grid is one state token plus one token per planned action step (40), so in the viewer and playground the activation strip under the frame reads left to right as "now" to "40 steps ahead", and steering shows which future action steps move. The "prediction" is the action chunk under fixed noise, so an edit is the only thing that changes between the clean and edited chunk. A window is one observation, spanning the 16 steps the robot executes from it.
+
+GR00T also needs a wrist camera, the robot state and an instruction. Put them in a sidecar next to each clip, `<stem>.groot.json`: `{"task": "...", "state": [[8 floats per frame]], "wrist": "<stem>.wrist.npy"}`. Without one the model still runs, on the main frame twice, a zero state and an empty instruction, and warns that its actions are off-distribution.
+
+Weights stream in at half precision (6.3 GB). On a 4-core CPU the model loads in about a minute and each window takes a few seconds; a GPU is much faster. `ii run groot --tiny` runs a GR00T-shaped random network instead, with no download; it is for tests and is not GR00T. Closed-loop LIBERO rollouts for GR00T still go through `adapters/groot/v9/`.
+
 ```bash
 uv run interpretableintelligence rollouts runs/demo --policy fake --episodes 32 --features 3 --controls 10 --workers 2
 uv run pytest
@@ -98,6 +112,7 @@ Feature `3` is the planted reacher feature. The command prints the success delta
 | `src/interpretableintelligence/adapters/fake.py` | Synthetic model, clips, and planted cues |
 | `src/interpretableintelligence/adapters/vjepa2/` | V-JEPA 2 adapter |
 | `src/interpretableintelligence/adapters/hf.py` | Generic Hugging Face vision adapter (`hf:<model>`) |
+| `src/interpretableintelligence/adapters/groot/adapter.py` | GR00T N1.7 adapter (`groot:<checkpoint>`) and its random `groot:tiny` stand-in |
 | `docs/FRICTION-vjepa2.md` | Jeff's setup log for the V-JEPA 2 port |
 | `src/interpretableintelligence/sae.py` | ReLU SAE trainer |
 | `src/interpretableintelligence/score.py` | Explained variance, loss recovered, ablations, random controls |
