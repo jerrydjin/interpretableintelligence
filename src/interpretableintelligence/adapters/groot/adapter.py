@@ -472,6 +472,9 @@ class LeRobotGroot:
             # One copy of the 3B model per process: the random-init control reuses its backbone.
             policy, _stats = load_groot_low_ram(self.checkpoint, device=str(device), dtype=dtype, log=_quiet)
             policy.config.use_bf16 = False  # weights are already in ``dtype``; no autocast on top
+            # LeRobot leaves the action head trainable; attribution only needs gradients for the edit,
+            # and a gradient for each of the head's 1.6B weights would not fit in RAM.
+            policy.requires_grad_(False)
             overrides = {
                 "device_processor": {"device": str(device)},
                 "rename_observations_processor": {"rename_map": {}},
