@@ -166,27 +166,54 @@ class Steerer:
         self._clips = {clip_id: clip}  # keep one decoded clip in memory
         return clip
 
+    def sweep(self, clip_id: str, window: int, edits: list[tuple[int, str, float]]) -> list[dict]:
+        """Answer many single-feature edits on one window, sharing the clean forward pass.
+
+        ``edits`` holds ``(feature_id, kind, value)``. Each result has the same shape as
+        :meth:`steer`'s. The static export (``ii export``) uses this to precompute a playground.
+        """
+        requests = [
+            SteerRequest.parse({"clip_id": clip_id, "window": window, "features": [feature], "kind": kind, "value": value}, self.config.n_features)
+            for feature, kind, value in edits
+        ]
+        with self._lock:
+            clip = self._clip(clip_id)
+            windows = self.adapter.windows(clip)
+            if window >= len(windows):
+                raise SteerError(f"clip {clip_id} has {len(windows)} window(s); window {window} does not exist")
+            clean = self._clean(clip, windows[window])
+            return [self._edited(request, clip, windows[window], clean) for request in requests]
+
     def _run(self, request: SteerRequest, clip: Clip, window: Window) -> dict:
+        return self._edited(request, clip, window, self._clean(clip, window))
+
+    def _clean(self, clip: Clip, window: Window) -> "_Clean":
         adapter, sae = self.adapter, self.sae
         grid = adapter.grid()
-        edit = steer_edit(sae, request.feature_ids, request.kind, request.value)
         with torch.no_grad():
             with adapter.hook(self.ctx.layer, mode="capture") as handle:
                 adapter.encode(clip, window)
             acts = handle.captured[0].detach().to(dtype=torch.float32, device=sae.W_enc.device)
             features = sae.encode(acts.reshape(-1, sae.d_model)).reshape(grid.t, grid.h, grid.w, sae.n_features)
-            index = torch.tensor(list(request.feature_ids), dtype=torch.long, device=features.device)
-            chosen = features.index_select(3, index).sum(dim=3).cpu()
             baseline, target = adapter.predict_masked(clip, window)
+        coords = adapter.mask(window).detach().cpu().nonzero(as_tuple=False).tolist()
+        return _Clean(grid=grid, features=features, baseline=baseline, target=target, coords=coords)
+
+    def _edited(self, request: SteerRequest, clip: Clip, window: Window, clean: "_Clean") -> dict:
+        adapter, sae, grid = self.adapter, self.sae, clean.grid
+        baseline, target = clean.baseline, clean.target
+        edit = steer_edit(sae, request.feature_ids, request.kind, request.value)
+        with torch.no_grad():
+            index = torch.tensor(list(request.feature_ids), dtype=torch.long, device=clean.features.device)
+            chosen = clean.features.index_select(3, index).sum(dim=3).cpu()
             edited, _target = adapter.predict_masked(clip, window, edit=edit)
             dist = cosine_distance(baseline, edited).detach().cpu()
             norm = baseline.norm(dim=-1).clamp(min=1e-12)
             rel = ((edited - baseline).norm(dim=-1) / norm).detach().cpu()
             loss_clean = float(((baseline - target) ** 2).mean())
             loss_edited = float(((edited - target) ** 2).mean())
-        coords = adapter.mask(window).detach().cpu().nonzero(as_tuple=False).tolist()
         shift = [[[None for _w in range(grid.w)] for _h in range(grid.h)] for _t in range(grid.t)]
-        for (t, h, w), value in zip(coords, dist.tolist()):
+        for (t, h, w), value in zip(clean.coords, dist.tolist()):
             shift[t][h][w] = _finite(value)
         activation = [[[_finite(chosen[t, h, w].item()) for w in range(grid.w)] for h in range(grid.h)] for t in range(grid.t)]
         fired = int((chosen > DEAD_ACT_EPS).sum())
@@ -216,6 +243,17 @@ class Steerer:
             "evidence": False,
             "note": "Exploration only. Steering does not change the scoreboard; only the scored gates mark a feature real.",
         }
+
+
+@dataclass
+class _Clean:
+    """The unedited pass for one window, shared by every edit on it."""
+
+    grid: object
+    features: torch.Tensor
+    baseline: torch.Tensor
+    target: torch.Tensor
+    coords: list
 
 
 def _finite(value: float) -> float:

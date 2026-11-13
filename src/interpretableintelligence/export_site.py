@@ -12,6 +12,7 @@ from html import escape
 from pathlib import Path
 
 from interpretableintelligence.adapters.fake import generate_clips
+from interpretableintelligence.export_run import write_viewer_data
 from interpretableintelligence.pipeline import execute_pipeline
 from interpretableintelligence.view import load_run
 
@@ -79,43 +80,7 @@ def _copy_static(dest: Path) -> None:
 
 
 def _export_viewer(model, dest: Path, sentence: str) -> None:
-    data = dest / "data"
-    data.mkdir(parents=True)
-    _write_json(data / "run.json", model.run_payload)
-    feature_ids = [int(feature["id"]) for feature in model.run_payload["features"]]
-    feature_dir = data / "features"
-    feature_dir.mkdir()
-    for feature_id in feature_ids:
-        detail = model.feature(feature_id)
-        if detail is None:
-            continue
-        _write_json(feature_dir / f"{feature_id}.json", detail)
-        viz = model.viz_file(feature_id)
-        if viz is not None:
-            shutil.copy2(viz, feature_dir / f"{feature_id}.png")
-    for clip in model.run_payload["clips"]:
-        clip_id = str(clip["clip_id"])
-        payload = model.clips[clip_id]
-        clip_dir = data / "clips" / clip_id
-        clip_dir.mkdir(parents=True)
-        _write_json(data / "clips" / f"{clip_id}.json", payload)
-        frames = clip_dir / "frames"
-        frames.mkdir()
-        n_frames = int(payload["n_frames"])
-        pack: dict[str, list] = {}
-        for frame in range(n_frames):
-            png = model.frame_png(clip_id, frame)
-            if png:
-                (frames / f"{frame}.png").write_bytes(png)
-            for feature_id in feature_ids:
-                grid = model.heatmap(clip_id, frame, feature_id)
-                if grid and any(value > 0 for row in grid for value in row):
-                    pack[f"{frame}:{feature_id}"] = grid
-        _write_json(clip_dir / "heat.json", pack)
-        media = model.media_file(clip_id)
-        if media is not None:
-            path, _kind = media
-            shutil.copy2(path, clip_dir / "media.mp4")
+    write_viewer_data(model, dest / "data", indent=1)
     (dest / "index.html").write_text(_viewer_page(sentence), encoding="utf-8")
 
 

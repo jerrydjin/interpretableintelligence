@@ -87,6 +87,17 @@ uv run pytest
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
 
+### Share a run as a static page
+
+```bash
+uv run ii export runs/dinov2 --clips clips/mine --out site/dinov2
+python -m http.server -d site/dinov2 8000
+```
+
+`ii export` writes the viewer and every file it would ask the local server for into one folder. Paths are relative, so the folder works from any static host or subpath (GitHub Pages, Netlify, Cloudflare Pages, an S3 bucket), and the page carries link-preview tags for X and other sites. Nothing in it calls a server.
+
+The playground needs the model, so the export precomputes it: remove, scale, clamp and add at a few strengths, for the strongest features in each window, on `--steer-clips` clips (default 12, starting with the top clips of `real` and candidate features). The slider steps through those strengths. `--steer-features` sets features per window (default 6) and `--no-steer` turns the playground off. Like the live playground this is exploration only and never touches the run folder or the scoreboard. The fake run exports in about 10 seconds to 3 MB.
+
 `make demo-site` (or `ii export-site --out demo-site`) rebuilds the static site in `demo-site/`. Serve that directory with any static host. It does not start the viewer API.
 
 ## Layout

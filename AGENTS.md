@@ -36,6 +36,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
 | `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
+| `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
 | `validate` | Check a run folder against `SCHEMA.md`. |
 | `view` | Local browser viewer for a finished run. `--steer` adds the playground (steer SAE features, see the prediction move; exploration only, never evidence). |
