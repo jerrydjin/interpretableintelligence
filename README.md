@@ -82,6 +82,8 @@ A generic encoder has no masked-prediction head, so for `hf` the "prediction" is
 
 The SAE for `hf` is a TopK SAE (32 active features per token) with 8 features per activation dimension (3072 for DINOv2-small); `fake` and `vjepa2` keep the 12-feature L1 acceptance dictionary, whose orthogonality penalty sums over every feature pair and would swamp reconstruction at that width. `--sae-features N` overrides either. When the SAE has more than 64 features, `ii run` scores the 10 features with the largest attribution unless `--prefilter K` says otherwise, because each scored feature costs a held-out ablation plus its matched random controls. Unscored features stay unverified and are still explorable in the playground.
 
+Labels for `hf` come from a local CLIP model (`openai/clip-vit-base-patch16`, downloaded on first use). Each concept in a list of everyday objects, parts, surfaces and textures gets a per-token similarity map, and a feature is labelled with the concept it tracks best on train clips (Pearson > 0.5). The label holds only if that correlation is ≥ 0.6 on held-out clips. Pass `--concepts my_concepts.txt` (one per line) to label with your own vocabulary.
+
 ```bash
 uv run interpretableintelligence rollouts runs/demo --policy fake --episodes 32 --features 3 --controls 10 --workers 2
 uv run pytest

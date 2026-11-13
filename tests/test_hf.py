@@ -195,13 +195,28 @@ def test_random_init_changes_the_sha_and_layers_are_checked(tiny_models):
         _adapter(tiny_models["vit"], layer=3)
 
 
-def test_ii_run_hf_end_to_end_then_steer(tiny_models, tmp_path):
+def _colour_similarity(self, frames):
+    """Stand-in for CLIP: concept i is the mean of colour channel i % 3 on a 4x4 patch grid."""
+    pixels = torch.from_numpy(np.ascontiguousarray(frames)).float().permute(0, 3, 1, 2)
+    pooled = torch.nn.functional.adaptive_avg_pool2d(pixels, 4)  # [frames, 3, 4, 4]
+    return torch.stack([pooled[:, i % 3] for i in range(len(self.names))], dim=1)
+
+
+def test_ii_run_hf_end_to_end_then_steer(tiny_models, tmp_path, monkeypatch):
+    from interpretableintelligence.labelers import CLIP_LABEL_MODEL, ClipConceptSource
+
+    monkeypatch.setattr(ClipConceptSource, "_dense_similarity", _colour_similarity)
+    concepts = tmp_path / "concepts.txt"
+    concepts.write_text("red things\n# a comment\ngreen things\nblue things\n")
     clips = tmp_path / "clips"
     generate_tiny_clips(clips, 20)
     out = tmp_path / "runs" / "dino"
     result = CliRunner().invoke(
         app,
-        ["run", "hf", "--model", str(tiny_models["dinov2-registers"]), "--clips", str(clips), "--out", str(out), "--prefilter", "2", "--no-serve"],
+        [
+            "run", "hf", "--model", str(tiny_models["dinov2-registers"]), "--clips", str(clips), "--out", str(out),
+            "--prefilter", "2", "--concepts", str(concepts), "--no-serve",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert validate_run(out) == []
@@ -212,6 +227,10 @@ def test_ii_run_hf_end_to_end_then_steer(tiny_models, tmp_path):
     assert scoreboard["sae"]["loss_visible_mean"] > 0
     sae_config = json.loads((out / "sae" / "config.json").read_text(encoding="utf-8"))
     assert sae_config["n_features"] == 8 * 32
+    assert sae_config["activation"] == "topk"
+    features = [json.loads(line) for line in (out / "features" / "features.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert {feature.get("label_model") for feature in features} == {CLIP_LABEL_MODEL}
+    assert {feature["label"] for feature in features} <= {"", "red things", "green things", "blue things"}
 
     steerer = Steerer(out, clips)
     clip_id = manifest["clips"][0]["clip_id"]
@@ -219,6 +238,31 @@ def test_ii_run_hf_end_to_end_then_steer(tiny_models, tmp_path):
     moved = steerer.steer({"clip_id": clip_id, "features": [0], "kind": "clamp", "value": 3.0})
     assert same["summary"]["mean_shift"] < 1e-5
     assert moved["summary"]["mean_shift"] > 1e-3
+
+
+def test_concept_maps_follow_the_token_grid(tiny_models):
+    from transformers import CLIPConfig, CLIPModel
+
+    from interpretableintelligence.labelers import ClipConceptSource, load_concepts
+
+    assert len(load_concepts()) > 50
+    for name, frames in (("vit", 8), ("videomae", 4)):
+        adapter = _adapter(tiny_models[name])
+        source = ClipConceptSource(adapter, ["a", "b", "c"])
+        torch.manual_seed(0)
+        config = CLIPConfig(
+            text_config={"hidden_size": 16, "intermediate_size": 32, "num_hidden_layers": 1, "num_attention_heads": 2},
+            vision_config={"hidden_size": 16, "intermediate_size": 32, "num_hidden_layers": 2, "num_attention_heads": 2, "image_size": 32, "patch_size": 8},
+            projection_dim=8,
+        )
+        source._model = CLIPModel(config).eval()  # random weights; bypasses the download and tokenizer
+        source._text = torch.nn.functional.normalize(torch.randn(3, 8), dim=-1)
+        window = adapter.windows(_clip(3))[0]
+        maps = source.concept_maps(window.frames)
+        grid = adapter.grid()
+        assert window.frames.shape[0] == frames
+        assert maps.shape == (3, grid.t, grid.h, grid.w)
+        assert np.isfinite(maps).all()
 
 
 def test_cli_rejects_hf_without_model_and_model_without_hf(tmp_path):

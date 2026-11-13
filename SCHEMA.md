@@ -243,7 +243,7 @@ One record per run. No extra keys.
 
 `absent_in_random_init` reruns capture and SAE training with the same hyperparameters on `load(random_init=True)`. It is true when the feature's activation pattern has variance and no random-init feature has Pearson correlation ≥ `0.45` with it. A flat pattern is not absent: dead features share that pattern.
 
-`label_holds_heldout` is the labeller's held-out check. For the fake labeller (`fake-cue-v1`), the label is the planted cue with the highest train-token Pearson correlation, and only if that correlation is > `0.50`. The label holds when the same cue correlates ≥ `0.60` on held-out tokens. Otherwise the field is false. `null` means the check was not run.
+`label_holds_heldout` is the labeller's held-out check. For the fake labeller (`fake-cue-v1`), the label is the planted cue with the highest train-token Pearson correlation, and only if that correlation is > `0.50`. The label holds when the same cue correlates ≥ `0.60` on held-out tokens. Otherwise the field is false. `null` means the check was not run. The `hf` adapter uses `clip-concepts-v1:openai/clip-vit-base-patch16` with the same thresholds: each concept's "cue" is the per-token CLIP similarity between the patch (MaskCLIP dense embedding, resized to the token grid and averaged per tubelet) and the prompt `a photo of {concept}.`. The concept list is built in, or one per line from `ii run hf --concepts FILE`.
 
 `real` is true only when `usable` is true and all four of the following hold:
 

@@ -133,6 +133,15 @@ def run(
             help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf.",
         ),
     ] = None,
+    concepts: Annotated[
+        Path | None,
+        typer.Option(
+            "--concepts",
+            exists=True,
+            dir_okay=False,
+            help="hf only: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
+        ),
+    ] = None,
     tiny: Annotated[
         bool,
         typer.Option(
@@ -182,6 +191,7 @@ def run(
             extra_effects=modes,
             gpu_cost_per_hour=gpu_cost_per_hour,
             sae_features=sae_features,
+            concepts_file=concepts,
             score=not no_score,
             serve=not no_serve,
             host=host,
