@@ -243,7 +243,7 @@ def test_ii_run_hf_end_to_end_then_steer(tiny_models, tmp_path, monkeypatch):
 def test_concept_maps_follow_the_token_grid(tiny_models):
     from transformers import CLIPConfig, CLIPModel
 
-    from interpretableintelligence.labelers import ClipConceptSource, load_concepts
+    from interpretableintelligence.labelers import ClipConceptSource, clip_text_embeddings, load_concepts
 
     assert len(load_concepts()) > 50
     for name, frames in (("vit", 8), ("videomae", 4)):
@@ -256,7 +256,10 @@ def test_concept_maps_follow_the_token_grid(tiny_models):
             projection_dim=8,
         )
         source._model = CLIPModel(config).eval()  # random weights; bypasses the download and tokenizer
-        source._text = torch.nn.functional.normalize(torch.randn(3, 8), dim=-1)
+        ids = torch.randint(0, 100, (3, 5))
+        text = clip_text_embeddings(source._model, ids, torch.ones_like(ids))
+        assert tuple(text.shape) == (3, 8)
+        source._text = torch.nn.functional.normalize(text, dim=-1)
         window = adapter.windows(_clip(3))[0]
         maps = source.concept_maps(window.frames)
         grid = adapter.grid()

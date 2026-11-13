@@ -155,6 +155,12 @@ def load_concepts(path=None) -> list[str]:
     return names
 
 
+def clip_text_embeddings(model, input_ids, attention_mask):
+    """Projected CLIP text embeddings. ``get_text_features`` changed return type in transformers 5."""
+    pooled = model.text_model(input_ids=input_ids, attention_mask=attention_mask).pooler_output
+    return model.text_projection(pooled)
+
+
 class ClipConceptSource:
     """Per-token CLIP similarity to each concept, aligned with the run's token grid.
 
@@ -255,7 +261,7 @@ class ClipConceptSource:
             prompts = [CLIP_PROMPT.format(name) for name in self.names]
             with torch.no_grad():
                 tokens = tokenizer(prompts, padding=True, return_tensors="pt").to(self.device)
-                text = model.get_text_features(**tokens)
+                text = clip_text_embeddings(model, tokens["input_ids"], tokens["attention_mask"])
             self._model = model
             self._text = F.normalize(text, dim=-1)
         return self._model, self._text
