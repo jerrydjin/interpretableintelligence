@@ -682,7 +682,8 @@ def _score(
 
     _clear_cache(adapter)
     attribution_started = time.perf_counter()
-    by_clip = attribution_by_clip(adapter, model, [load_clip(item) for item in meta], objective=PREDICTION_LOSS)
+    # One decoded clip at a time: a long episode is hundreds of MB as float32 frames.
+    by_clip = attribution_by_clip(adapter, model, (load_clip(item) for item in meta), objective=PREDICTION_LOSS)
     attribution_seconds = time.perf_counter() - attribution_started
     _clear_cache(adapter)
     attr_rows, mean_scores = summarize_attribution(by_clip)

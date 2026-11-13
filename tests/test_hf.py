@@ -328,3 +328,33 @@ def test_auroc_labels_a_sparse_feature_that_pearson_would_miss(monkeypatch):
     assert out[0] == {"label": "A", "label_model": "m", "label_holds_heldout": True}
     assert out[1]["label"] == "" and out[1]["label_holds_heldout"] is False
     assert np.corrcoef(planted, concepts[:, 0])[0, 1] < 0.5  # the Pearson gate would not label it
+
+
+def test_score_stage_holds_one_decoded_clip_at_a_time(tiny_models, tmp_path, monkeypatch):
+    """A 100-episode DROID run was killed for memory when attribution decoded every clip at once."""
+    import weakref
+
+    import interpretableintelligence.pipeline as pipeline
+    from interpretableintelligence.labelers import ClipConceptSource
+
+    monkeypatch.setattr(ClipConceptSource, "_dense_similarity", _colour_similarity)
+    live = {"now": 0, "peak": 0}
+    real_load = pipeline.load_clip
+
+    def counted(item):
+        clip = real_load(item)
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        weakref.finalize(clip, lambda: live.__setitem__("now", live["now"] - 1))
+        return clip
+
+    monkeypatch.setattr(pipeline, "load_clip", counted)
+    clips = tmp_path / "clips"
+    generate_tiny_clips(clips, 20)
+    out = tmp_path / "runs" / "lazy"
+    result = CliRunner().invoke(
+        app,
+        ["run", "hf", "--model", str(tiny_models["vit"]), "--clips", str(clips), "--out", str(out), "--prefilter", "2", "--no-serve"],
+    )
+    assert result.exit_code == 0, result.output
+    assert live["peak"] <= 2, live
