@@ -514,6 +514,10 @@ button, input, select { font: inherit; color: inherit; }
 }
 @media (max-width: 520px) {
   .steer-controls { grid-template-columns: 1fr 1fr; }
+  /* Phone header: the mark alone, so the nav fits without a sideways scroll. */
+  .top { gap: 8px; padding: 10px 12px; }
+  .wordmark { font-size: 0; gap: 0; }
+  .nav a { padding: 6px 9px; }
 }
 
 /* Plain-English guide to the scoreboard gates (guide.js). */
@@ -542,3 +546,28 @@ button, input, select { font: inherit; color: inherit; }
 .guide-sae strong:first-child { color: var(--ink); font-weight: 500; }
 .guide-sae.guide-fail strong:first-child { color: #a33a2a; }
 .guide-sae.guide-pass strong:first-child { color: var(--real); }
+
+/* ---- steering scorecard ------------------------------------------------- */
+.steering, .steering-feature { max-width: 1180px; }
+.steer-table-wrap { overflow-x: auto; margin: 8px 0 12px; }
+.steer-table { min-width: 820px; }
+.steer-table td { vertical-align: middle; }
+.steer-table td b { font-family: var(--serif); font-size: 18px; font-weight: 400; color: var(--ink); }
+.steer-sub { display: block; font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.steer-feature a { color: var(--ink); }
+.steer-ci { white-space: nowrap; }
+.steer-strip { display: block; overflow: visible; }
+.steer-axis { stroke: var(--line-2); stroke-width: 1; }
+.steer-ctrl-band { fill: var(--line); }
+.steer-ctrl-mean { stroke: var(--ink-2); stroke-width: 2; stroke-linecap: round; }
+.steer-edit-ci { stroke: var(--steer); stroke-width: 2; stroke-linecap: round; }
+.steer-edit-dot { fill: var(--steer); stroke: var(--sheet); stroke-width: 2; }
+.steer-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--ink-2); margin: 6px 0 0; }
+.steer-key { display: inline-block; width: 18px; height: 10px; border-radius: 3px; }
+.steer-key-edit { background: linear-gradient(var(--steer), var(--steer)) center / 100% 2px no-repeat; position: relative; }
+.steer-key-edit::after { content: ""; position: absolute; left: 5px; top: 1px; width: 8px; height: 8px; border-radius: 50%; background: var(--steer); }
+.steer-key-ctrl { background: linear-gradient(var(--ink-2), var(--ink-2)) center / 2px 100% no-repeat, var(--line); }
+.steer-verdict { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; padding: 4px 6px 3px; border-radius: 3px; white-space: nowrap; }
+.steer-beats { color: var(--steer); background: var(--steer-wash); }
+.steer-within, .steer-silent { color: var(--ink-3); background: var(--well); }
+.nav a[hidden] { display: none; }

@@ -142,6 +142,8 @@ function renderHeader() {
     saeEl.textContent = `${usable ? "usable" : "not usable"} · ev_heldout ${fmtUnit(sae.ev_heldout)} · loss_recovered ${fmtUnit(sae.loss_recovered)}`;
   }
   if (guide()) saeEl.title = guide().sae(run.scoreboard === false ? null : run.sae).result;
+  const steeringLink = document.querySelector('.nav a[data-nav="steering"]');
+  if (steeringLink) steeringLink.hidden = !steeringCard();
   document.title = `${run.run_id} · interpretableintelligence`;
 }
 
@@ -150,7 +152,11 @@ function route() {
   const raw = (location.hash || "#/").replace(/^#/, "");
   const [path, query = ""] = raw.split("?");
   const params = new URLSearchParams(query);
-  markNav(path.startsWith("/features") ? "features" : "explore");
+  markNav(path.startsWith("/features") ? "features" : path === "/steering" ? "steering" : "explore");
+  if (path === "/steering") {
+    renderSteering();
+    return;
+  }
   if (path === "/features") {
     renderIndex();
     return;
@@ -326,6 +332,7 @@ function renderFeature(feature) {
         scoreVersus(feature),
         scoreItem("absent_in_random_init", fmtFlag(feature.absent_in_random_init), feature.absent_in_random_init),
       ]),
+      steeringSection(feature.id),
       el("h2", { class: "section-title" }, "Where it fires hardest"),
       feature.top_clips.length ? strip : null,
       el("table", { class: "top-table" }, [
@@ -1296,4 +1303,215 @@ async function runSteer() {
     if (token === state.steer.token) state.steer.busy = false;
     renderFrame({ seek: false });
   }
+}
+
+// ---- steering scorecard (steering/scorecard.json, written by `ii steer-scorecard`) ----
+// Offline measurement on held-out clips. It never sets a badge; the scoreboard does.
+
+function steeringCard() {
+  const card = state.run && state.run.steering;
+  return card && Array.isArray(card.rows) ? card : null;
+}
+
+function steerTarget(card) {
+  return card.target === "action_chunk" ? "planned actions" : "prediction";
+}
+
+function steerMoves(card) {
+  return card.target === "action_chunk" ? "the planned actions move" : "the prediction moves";
+}
+
+function fmtPct(value) {
+  return Number.isFinite(value) ? `${Math.round(100 * value)}%` : "—";
+}
+
+function fmtCi(low, high, render) {
+  return Number.isFinite(low) && Number.isFinite(high) ? `[${render(low)}, ${render(high)}]` : "[no interval]";
+}
+
+function fmtRatio(value) {
+  return Number.isFinite(value) ? `${value.toFixed(2)}×` : "—";
+}
+
+function steerEditName(row) {
+  return row.kind === "remove" ? "Remove" : `Boost ×${Number(row.factor).toLocaleString()}`;
+}
+
+function steerVerdict(row) {
+  if (!row.n_windows) return { key: "silent", text: "never fires" };
+  return row.beats_controls ? { key: "beats", text: "beats controls" } : { key: "within", text: "within controls" };
+}
+
+// One shared axis: relative change of the output, 0 at the left.
+function steerAxisMax(rows) {
+  let peak = 0;
+  for (const row of rows) {
+    for (const block of [row.action_change, row.control_change]) {
+      for (const value of [block.mean, block.ci_high]) if (Number.isFinite(value)) peak = Math.max(peak, value);
+    }
+  }
+  return peak > 0 ? peak * 1.08 : 1;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(tag, attrs = {}, title = null) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+  if (title) {
+    const tip = document.createElementNS(SVG_NS, "title");
+    tip.textContent = title;
+    node.append(tip);
+  }
+  return node;
+}
+
+// Interval strip: the controls as a grey band (95% interval) with a tick at their mean,
+// the feature edit as a cobalt dot (mean) on a whisker (95% interval).
+function steerStrip(row, max, target) {
+  const width = 240;
+  const height = 30;
+  const pad = 6;
+  const x = (value) => pad + (Math.max(0, value) / max) * (width - 2 * pad);
+  const svg = svgEl("svg", { class: "steer-strip", viewBox: `0 0 ${width} ${height}`, width, height, role: "img",
+    "aria-label": row.n_windows
+      ? `${steerEditName(row)} moves the ${target} by ${fmtSmall(row.action_change.mean)}; matched controls ${fmtSmall(row.control_change.mean)}`
+      : "never fires on held-out windows" });
+  const mid = height / 2;
+  svg.append(svgEl("line", { x1: pad, x2: width - pad, y1: mid, y2: mid, class: "steer-axis" }));
+  if (!row.n_windows) return svg;
+  const ctrl = row.control_change;
+  const ctrlTip = `Matched random controls: mean ${fmtSmall(ctrl.mean)} ${fmtCi(ctrl.ci_low, ctrl.ci_high, fmtSmall)}`;
+  if (Number.isFinite(ctrl.ci_low) && Number.isFinite(ctrl.ci_high)) {
+    const left = x(ctrl.ci_low);
+    svg.append(svgEl("rect", { x: left, y: mid - 7, width: Math.max(2, x(ctrl.ci_high) - left), height: 14, rx: 3, class: "steer-ctrl-band" }, ctrlTip));
+  }
+  svg.append(svgEl("line", { x1: x(ctrl.mean), x2: x(ctrl.mean), y1: mid - 9, y2: mid + 9, class: "steer-ctrl-mean" }, ctrlTip));
+  const edit = row.action_change;
+  const editTip = `${steerEditName(row)}: mean ${fmtSmall(edit.mean)} ${fmtCi(edit.ci_low, edit.ci_high, fmtSmall)}`;
+  if (Number.isFinite(edit.ci_low) && Number.isFinite(edit.ci_high)) {
+    svg.append(svgEl("line", { x1: x(edit.ci_low), x2: x(edit.ci_high), y1: mid, y2: mid, class: "steer-edit-ci" }, editTip));
+  }
+  svg.append(svgEl("circle", { cx: x(edit.mean), cy: mid, r: 4.5, class: "steer-edit-dot" }, editTip));
+  // Wide invisible hit target so the tooltip is easy to reach.
+  svg.append(svgEl("rect", { x: 0, y: 0, width, height, fill: "transparent" }, `${editTip}\n${ctrlTip}`));
+  return svg;
+}
+
+function steeringLegend(card) {
+  const swatch = (cls) => el("span", { class: `steer-key ${cls}`, "aria-hidden": "true" });
+  return el("p", { class: "steer-legend", "data-testid": "steering-legend" }, [
+    swatch("steer-key-edit"), `feature edit, mean and ${Math.round(100 * card.confidence)}% interval`,
+    swatch("steer-key-ctrl"), `${card.n_controls} matched random controls`,
+  ]);
+}
+
+function steeringTable(card, rows, { showFeature }) {
+  const max = steerAxisMax(card.rows);
+  const target = steerTarget(card);
+  const head = [
+    showFeature ? "feature" : null,
+    "edit",
+    `${target} change`,
+    "vs controls",
+    "excess",
+    "beats every control",
+    "p",
+    "",
+  ].filter((label) => label !== null);
+  const body = rows.map((row) => {
+    const verdict = steerVerdict(row);
+    const rel = row.reliability || {};
+    const featureCell = showFeature
+      ? el("td", { class: "steer-feature" }, [
+          el("a", { href: `#/features/${row.feature_id}` }, row.label ? `${row.feature_id} · ${row.label}` : `feature ${row.feature_id}`),
+          " ",
+          badge({ badge: row.real ? "real" : "unverified" }),
+        ])
+      : null;
+    const cells = row.n_windows
+      ? [
+          el("td", {}, [steerStrip(row, max, target), el("span", { class: "steer-sub" }, `${fmtSmall(row.action_change.mean)} vs ${fmtSmall(row.control_change.mean)}`)]),
+          el("td", { "data-testid": "steering-ratio" }, [el("b", {}, fmtRatio(row.ratio.mean)), el("span", { class: "steer-sub steer-ci" }, fmtCi(row.ratio.ci_low, row.ratio.ci_high, fmtRatio))]),
+          el("td", {}, [fmtSmall(row.excess.mean), el("span", { class: "steer-sub steer-ci" }, fmtCi(row.excess.ci_low, row.excess.ci_high, fmtSmall))]),
+          el("td", { "data-testid": "steering-reliability" }, [
+            el("b", {}, fmtPct(rel.rate)),
+            el("span", { class: "steer-sub steer-ci" }, `${fmtCi(rel.ci_low, rel.ci_high, fmtPct)} · chance ${fmtPct(rel.chance)}`),
+          ]),
+          el("td", {}, Number.isFinite(row.p_value) ? row.p_value.toFixed(3) : "—"),
+        ]
+      : [el("td", { colspan: "5", class: "steer-sub" }, "Never fires on a held-out window, so there is nothing to edit.")];
+    return el("tr", {
+      "data-testid": "steering-row",
+      "data-feature-id": row.feature_id,
+      "data-kind": row.kind,
+      "data-beats": row.beats_controls ? "true" : "false",
+    }, [
+      featureCell,
+      el("td", {}, [steerEditName(row), el("span", { class: "steer-sub" }, row.n_windows ? `${row.n_windows} windows · ${row.n_episodes} episodes · fires in ${fmtPct(row.coverage)}` : "")]),
+      ...cells,
+      el("td", {}, el("span", { class: `steer-verdict steer-${verdict.key}`, "data-testid": "steering-verdict" }, verdict.text)),
+    ]);
+  });
+  return el("div", { class: "steer-table-wrap" }, el("table", { class: "top-table steer-table", "data-testid": "steering-table" }, [
+    el("thead", {}, el("tr", {}, head.map((label) => el("th", {}, label)))),
+    el("tbody", {}, body),
+  ]));
+}
+
+function steeringNote(card) {
+  return el("p", { class: "guide-note", "data-testid": "steering-note" }, [
+    `${card.n_episodes} held-out episodes, ${card.n_windows} windows. Intervals resample episodes, so they are wide when there are few. `,
+    "This scorecard does not change any badge or the scoreboard",
+    card.target === "action_chunk" ? ", and it is offline: it is not a closed-loop rollout finding." : ".",
+  ]);
+}
+
+function renderSteering() {
+  const card = steeringCard();
+  if (!card) {
+    app.replaceChildren(el("section", { class: "feature-index", "data-testid": "steering-missing" }, [
+      el("h1", {}, "Steering"),
+      el("p", { class: "lede" }, richText("No steering scorecard yet. Run `ii steer-scorecard RUN` to make one.")),
+    ]));
+    return;
+  }
+  const target = steerTarget(card);
+  const scored = card.rows.filter((row) => row.n_windows);
+  const beats = scored.filter((row) => row.beats_controls).length;
+  const who = card.selection === "verified" ? "the top verified features" : "the requested features";
+  app.replaceChildren(el("section", { class: "feature-index steering", "data-testid": "steering-page" }, [
+    el("p", { class: "kicker" }, "Steering scorecard"),
+    el("h1", {}, card.target === "action_chunk" ? "How much do the planned actions move?" : "How much does the prediction move?"),
+    el("p", { class: "lede" }, [
+      el("b", {}, `${beats} of ${card.rows.length} edits beat matched random controls.`),
+      ` Each of ${who} is removed and boosted ×${Number(card.boost_factor).toLocaleString()} on held-out clips, and the change in the ${target} is compared with ${card.n_controls} random directions of the same size.`,
+    ]),
+    steeringLegend(card),
+    steeringTable(card, card.rows, { showFeature: true }),
+    el("details", { class: "guide-asks" }, [
+      el("summary", {}, "How to read this"),
+      el("p", {}, richText(
+        `Change is the relative L2 change of the ${target} against the clean output (\`||edited − clean|| / ||clean||\`), averaged over held-out windows where the feature fires. ` +
+        "Vs controls is that change divided by the controls' change. Beats every control is the share of windows where the edit moved the output more than all of the controls did on that window; chance is 1 / (controls + 1). " +
+        `An edit beats controls when its p-value is at most ${card.alpha} and the excess over controls has a lower bound above zero.`,
+      )),
+    ]),
+    steeringNote(card),
+  ]));
+  document.title = `steering · ${state.run.run_id} · interpretableintelligence`;
+}
+
+function steeringSection(featureId) {
+  const card = steeringCard();
+  if (!card) return null;
+  const rows = card.rows.filter((row) => row.feature_id === featureId);
+  if (!rows.length) return null;
+  return el("section", { class: "steering-feature", "data-testid": "steering-feature" }, [
+    el("h2", { class: "section-title" }, `Steering on held-out clips`),
+    el("p", { class: "kicker" }, `How much ${steerMoves(card)} when this feature is removed or boosted, next to ${card.n_controls} matched random controls. `),
+    steeringLegend(card),
+    steeringTable(card, rows, { showFeature: false }),
+    el("p", { class: "guide-note" }, [el("a", { href: "#/steering" }, "Full scorecard →"), " Does not change the badge."]),
+  ]);
 }
