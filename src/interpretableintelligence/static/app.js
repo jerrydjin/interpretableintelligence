@@ -904,7 +904,38 @@ boot();
 // Playground: steer a feature and see where the model's prediction moves. Exploration only.
 
 function steerEnabled() {
-  return Boolean(state.run && state.run.steer && state.run.steer.enabled && !iiRoot());
+  return Boolean(state.run && state.run.steer && state.run.steer.enabled && (!iiRoot() || steerStatic()));
+}
+
+// A static export (`ii export`) ships precomputed edits instead of a model.
+function steerStatic() {
+  return Boolean(iiRoot() && state.run && state.run.steer && state.run.steer.static);
+}
+
+function steerPresets(kind) {
+  const presets = steerStatic() && state.run.steer.presets ? state.run.steer.presets[kind] : null;
+  return Array.isArray(presets) && presets.length ? presets : null;
+}
+
+function steerKey(window, featureId, kind, value) {
+  return `${Number(window)}:${Number(featureId)}:${kind}:${Number(value)}`;
+}
+
+const steerPacks = {};
+
+async function staticSteer(clipId, window, featureId, kind, value) {
+  if (!(state.run.steer.clips || []).includes(clipId)) {
+    return { error: "This export precomputed the playground on other clips. Open a top clip from a feature page, or run ii view RUN --steer locally to steer any clip." };
+  }
+  if (!steerPacks[clipId]) {
+    const response = await fetch(`${iiRoot()}/steer/${encodeURIComponent(clipId)}.json`, { cache: "no-store" });
+    steerPacks[clipId] = response.ok ? await response.json() : {};
+  }
+  const result = steerPacks[clipId][steerKey(window, featureId, kind, value)];
+  if (!result) {
+    return { error: "This export did not precompute that feature here. Try one of the strongest features on this frame, or run ii view RUN --steer locally to steer anything." };
+  }
+  return { result };
 }
 
 function steerFrame() {
@@ -941,10 +972,13 @@ function steerPanel() {
     state.steer.kind = kind.value;
     state.steer.value = STEER_KINDS[kind.value].value;
     paintSteer();
+    if (steerStatic()) runSteer();
   });
   value.addEventListener("input", () => {
-    state.steer.value = Number(value.value);
+    const presets = steerPresets(state.steer.kind);
+    state.steer.value = presets ? presets[Number(value.value)] : Number(value.value);
     paintSteer();
+    if (steerStatic()) runSteer();
   });
   run.addEventListener("click", runSteer);
   show.addEventListener("change", () => {
@@ -970,10 +1004,20 @@ function paintSteer() {
   if (!panel) return;
   const spec = STEER_KINDS[state.steer.kind];
   const value = panel.querySelector("[data-testid=steer-value]");
-  value.min = String(spec.min);
-  value.max = String(spec.max);
-  value.step = String(spec.step);
-  value.value = String(state.steer.value);
+  const presets = steerPresets(state.steer.kind);
+  if (presets) {
+    // Static exports only have the precomputed strengths, so the slider steps through them.
+    if (!presets.includes(state.steer.value)) state.steer.value = presets.includes(spec.value) ? spec.value : presets[0];
+    value.min = "0";
+    value.max = String(presets.length - 1);
+    value.step = "1";
+    value.value = String(presets.indexOf(state.steer.value));
+  } else {
+    value.min = String(spec.min);
+    value.max = String(spec.max);
+    value.step = String(spec.step);
+    value.value = String(state.steer.value);
+  }
   value.disabled = state.steer.kind === "ablate";
   panel.querySelector("[data-testid=steer-readout]").textContent = state.steer.kind === "ablate" ? "" : `${state.steer.value}`;
   panel.querySelector("[data-testid=steer-help]").textContent = spec.help;
@@ -1048,6 +1092,18 @@ async function runSteer() {
   state.steer.error = "";
   paintSteer();
   try {
+    if (steerStatic()) {
+      const found = await staticSteer(state.clipId, Number(frame.window) || 0, feature.id, state.steer.kind, state.steer.value);
+      if (token !== state.steer.token) return;
+      state.steer.error = found.error || "";
+      state.steer.result = found.result || null;
+      if (found.result) {
+        state.steer.show = true;
+        const toggle = document.querySelector("[data-testid=steer-show]");
+        if (toggle) toggle.checked = true;
+      }
+      return;
+    }
     const response = await fetch("/api/steer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

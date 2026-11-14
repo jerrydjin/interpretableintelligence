@@ -439,6 +439,53 @@ def rollouts(
     typer.echo(f"wrote {run_dir / 'rollouts'}")
 
 
+@app.command("export")
+def export_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder to export.")],
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the static site into.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Directory of clip files. Overrides a clip path recorded in the manifest."),
+    ] = None,
+    steer: Annotated[
+        bool,
+        typer.Option("--steer/--no-steer", help="Precompute playground edits so the static page can still steer features."),
+    ] = True,
+    steer_clips: Annotated[
+        int, typer.Option("--steer-clips", min=0, help="How many clips get a precomputed playground.")
+    ] = 12,
+    steer_features: Annotated[
+        int, typer.Option("--steer-features", min=1, help="Strongest features per clip window to precompute.")
+    ] = 6,
+    title: Annotated[str | None, typer.Option("--title", help="Page title, also used on the link preview.")] = None,
+) -> None:
+    """Export a run as a static site: host the folder anywhere and share the link. No server needed."""
+    from interpretableintelligence.explain import ExplainError
+    from interpretableintelligence.export_run import export_run
+
+    try:
+        summary = export_run(
+            run_dir,
+            out,
+            clips_dir=clips,
+            steer=steer,
+            steer_clips=steer_clips,
+            steer_features=steer_features,
+            title=title,
+            log=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ExplainError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    playground = (
+        f"playground on {len(summary.steer_clips)} clips ({summary.steer_results} edits)"
+        if summary.steer_clips
+        else "playground off"
+    )
+    typer.echo(f"wrote {summary.out_dir}: {summary.clips} clips, {summary.features} features, {playground}, {summary.bytes_total / 1e6:.1f} MB")
+    typer.echo(f"preview: python -m http.server -d {summary.out_dir} 8000, then open http://localhost:8000")
+
+
 @app.command("export-site")
 def export_site_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the static site into.")] = Path("demo-site"),
