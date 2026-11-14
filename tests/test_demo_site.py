@@ -235,10 +235,12 @@ def test_product_page_is_the_front_door():
         "On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar."
         in text
     )
+    today = page.split("What you get today", 1)[1].split("<h2", 1)[0]
+    assert "GR00T" not in today
     assert (
-        "ii rollouts compares baseline and intervened task success with matched random-feature controls, "
-        "on the synthetic reacher today; GR00T joins once it lands."
-    ) in text
+        "ii rollouts compares baseline and intervened task success with matched random-feature controls "
+        "and early stopping, on the bundled fake policy."
+    ) in _text(today)
     assert "on the synthetic reacher. Resume skips episodes already written." in text
     assert "ii runs the" not in text
     assert "not through an ii command" not in text
@@ -299,6 +301,7 @@ def test_product_page_commands_exist_or_are_coming():
     assert "random-weights SAE control" in _text(coming)
     assert "a feature has to beat an untrained SAE before it counts" in _text(coming)
     assert "Closed-loop rollouts at scale" in coming
+    assert "Live GR00T rollouts through" in _text(coming) and re.search(r"through <code>ii</code>\.", coming)
     assert "ii import" not in _text(rest)
     assert "ii probe" not in page
 
