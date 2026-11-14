@@ -27,9 +27,11 @@ class SAEConfig:
     seed: int = 0
     normalize_decoder: bool = True
     activation: str = "relu"
+    # Active features per token for ``activation="topk"`` (Gao et al. 2024).
+    k: int | None = None
 
     def as_dict(self) -> dict:
-        return {
+        out = {
             "d_model": self.d_model,
             "n_features": self.n_features,
             "l1_coeff": self.l1_coeff,
@@ -41,20 +43,38 @@ class SAEConfig:
             "normalize_decoder": self.normalize_decoder,
             "activation": self.activation,
         }
+        if self.activation == "topk":
+            out["k"] = self.k
+        return out
+
+
+ACTIVATIONS = ("relu", "topk")
 
 
 class SAE(torch.nn.Module):
-    def __init__(self, d_model: int, n_features: int) -> None:
+    """``relu``: L1-sparse ReLU SAE. ``topk``: keep the ``k`` largest ReLU pre-activations per token."""
+
+    def __init__(self, d_model: int, n_features: int, activation: str = "relu", k: int | None = None) -> None:
         super().__init__()
+        if activation not in ACTIVATIONS:
+            raise ValueError(f"SAE activation must be one of {ACTIVATIONS}, got {activation!r}")
+        if activation == "topk" and (k is None or not 1 <= int(k) <= n_features):
+            raise ValueError(f"topk SAE needs 1 <= k <= n_features, got k={k}")
         self.d_model = d_model
         self.n_features = n_features
+        self.activation = activation
+        self.k = None if k is None else int(k)
         self.W_enc = torch.nn.Parameter(torch.empty(n_features, d_model))
         self.b_enc = torch.nn.Parameter(torch.empty(n_features))
         self.W_dec = torch.nn.Parameter(torch.empty(d_model, n_features))
         self.b_dec = torch.nn.Parameter(torch.empty(d_model))
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
-        return F.relu((x - self.b_dec) @ self.W_enc.T + self.b_enc)
+        pre = F.relu((x - self.b_dec) @ self.W_enc.T + self.b_enc)
+        if self.activation != "topk":
+            return pre
+        top = pre.topk(self.k, dim=-1)
+        return torch.zeros_like(pre).scatter(-1, top.indices, top.values)
 
     def decode(self, features: torch.Tensor) -> torch.Tensor:
         return features @ self.W_dec.T + self.b_dec
@@ -80,6 +100,15 @@ def _decoder_ortho(decoder: torch.Tensor) -> torch.Tensor:
     return ((cosine - identity) ** 2).sum()
 
 
+def _loss(mse: torch.Tensor, features: torch.Tensor, model: SAE, config: SAEConfig) -> torch.Tensor:
+    loss = mse
+    if config.l1_coeff:
+        loss = loss + config.l1_coeff * features.abs().sum(dim=-1).mean()
+    if config.ortho_coeff:
+        loss = loss + config.ortho_coeff * _decoder_ortho(model.W_dec)
+    return loss
+
+
 def train_sae(
     activations: torch.Tensor,
     config: SAEConfig,
@@ -96,7 +125,7 @@ def train_sae(
 
     torch.manual_seed(config.seed)
     data = activations.detach().to(device=device, dtype=torch.float32)
-    model = SAE(config.d_model, config.n_features).to(device)
+    model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
     with torch.no_grad():
         decoder = torch.randn(config.d_model, config.n_features, device=device)
         decoder = decoder / decoder.norm(dim=0, keepdim=True).clamp(min=1e-8)
@@ -115,8 +144,7 @@ def train_sae(
         batch_x = data[idx]
         features, recon = model(batch_x)
         mse = ((recon - batch_x) ** 2).mean()
-        l1 = features.abs().sum(dim=-1).mean()
-        loss = mse + config.l1_coeff * l1 + config.ortho_coeff * _decoder_ortho(model.W_dec)
+        loss = _loss(mse, features, model, config)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
@@ -155,7 +183,7 @@ def train_sae_fetched(
         raise ValueError(f"d_model {config.d_model} != mean {tuple(mean.shape)}")
 
     torch.manual_seed(config.seed)
-    model = SAE(config.d_model, config.n_features).to(device)
+    model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
     with torch.no_grad():
         decoder = torch.randn(config.d_model, config.n_features, device=device)
         decoder = decoder / decoder.norm(dim=0, keepdim=True).clamp(min=1e-8)
@@ -176,8 +204,7 @@ def train_sae_fetched(
         batch_x = torch.from_numpy(fetched).to(device=device, dtype=torch.float32)
         features, recon = model(batch_x)
         mse = ((recon - batch_x) ** 2).mean()
-        l1 = features.abs().sum(dim=-1).mean()
-        loss = mse + config.l1_coeff * l1 + config.ortho_coeff * _decoder_ortho(model.W_dec)
+        loss = _loss(mse, features, model, config)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
@@ -217,8 +244,9 @@ def load_sae(directory: Path, device: torch.device) -> tuple[SAE, SAEConfig]:
         seed=int(raw["seed"]),
         normalize_decoder=bool(raw["normalize_decoder"]),
         activation=str(raw["activation"]),
+        k=None if raw.get("k") is None else int(raw["k"]),
     )
-    model = SAE(config.d_model, config.n_features)
+    model = SAE(config.d_model, config.n_features, config.activation, config.k)
     state = load_file(str(directory / "weights.safetensors"), device="cpu")
     model.load_state_dict(state)
     model.to(device)

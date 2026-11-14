@@ -28,6 +28,17 @@ TOP_K_ABLATION_PER_CLIP = 10
 # Default width of the attribution shortlist (`interpretableintelligence rank --prefilter`).
 # `interpretableintelligence run` still ablates every feature unless --prefilter is set.
 DEFAULT_PREFILTER_K = 10
+# SAE width for a real model behind the hf adapter, per activation dimension.
+HF_SAE_EXPANSION = 8
+# TopK SAE for hf: active features per token, and its optimiser schedule.
+HF_SAE_TOPK = 32
+HF_SAE_LR = 1e-3
+HF_SAE_STEPS = 3000
+HF_SAE_BATCH = 1024
+# Above this many SAE features, ``ii run`` scores an attribution shortlist by
+# default: each scored feature costs a held-out ablation plus its matched
+# random controls, so scoring thousands is not a laptop job.
+SCORE_ALL_MAX_FEATURES = 64
 
 # Loss-based ablations. alpha matches the cosine percentile gate:
 # real iff the Monte Carlo p-value is <= alpha (ties count against the candidate).
@@ -59,6 +70,10 @@ KNOWN_EFFECT_KINDS = (
 # and require this held-out correlation for label_holds_heldout.
 LABEL_ASSIGN_MIN_CORR = 0.50
 LABEL_HOLD_MIN_CORR = 0.60
+# CLIP concept labels (hf): ROC AUC of the concept map for tokens where the
+# feature fires against tokens where it does not. 0.5 is chance.
+LABEL_ASSIGN_MIN_AUROC = 0.80
+LABEL_HOLD_MIN_AUROC = 0.80
 
 # absent_in_random_init is true when no random-init SAE feature
 # correlates with this feature above this Pearson value.

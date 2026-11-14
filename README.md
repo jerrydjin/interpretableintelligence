@@ -4,13 +4,24 @@
 
 A feature is marked `real` only when the SAE is good enough to splice back into the predictor and the feature passes four checks: it fires across clips, its label holds on held-out clips, its ablation effect beats matched random features, and a randomly initialised copy of the model does not reproduce its firing pattern. A missing check is `null`, and `null` never counts as a pass.
 
-`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings any ViT-style Hugging Face image or video model by name (see below). pi0.5 is still a later lane.
+`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings any ViT-style Hugging Face image or video model by name (see below). `groot` is NVIDIA's GR00T N1.7 robot policy through LeRobot. pi0.5 is still a later lane.
 
 `interpretableintelligence rollouts` is the causal check on a policy. It runs paired baseline and intervention episodes, plus matched random-feature controls, and writes `rollouts/` into the run folder (schema version 1). The fake policy is a reacher whose planted feature drops success from about 0.80 to about 0.30 when ablated; other features do not move it. LIBERO, OpenVLA, and pi0.5 sit behind the optional `robots` extra as stubs. That extra installs no simulator and no GPU package.
 
 Runs on CPU and Apple Silicon (MPS). PyTorch is the only tensor library; nothing here requires CUDA.
 
 ## Quickstart
+
+New here? One command, no download and no setup:
+
+```bash
+uv sync
+uv run ii try
+```
+
+`ii try` writes 30 practice clips to `clips/try`, runs the whole pipeline on the `fake` model into `runs/try` (about 15 seconds on a laptop), and opens the viewer with the playground on. The page starts on the verified feature with the biggest effect, at the held-out moment where it fires hardest, and the terminal suggests what to try first: remove that feature, then remove a decoy and compare. The practice model has three features planted on purpose, so you can check what the tool finds against the truth before you point it at a real model. A second `ii try` reuses the run and opens in a couple of seconds. `--no-open` skips the browser and `--verbose` prints the full pipeline log.
+
+The rest of this section is the same pipeline step by step.
 
 ```bash
 uv sync
@@ -78,7 +89,25 @@ uv run ii view runs/dinov2 --clips clips/mine --steer
 
 `--model` is a Hub id or a local directory (anything `AutoModel` loads that takes `pixel_values` or `pixel_values_videos`: ViT, DINOv2, VideoMAE, V-JEPA 2 and similar). The run records the adapter as `hf:<model>`, so `explain` and the playground reload the same model later. `--layer` is the 1-indexed block output (`hidden_states[layer]`) and defaults to the middle block. The block list is detected from `config.num_hidden_layers`; `--blocks encoder.layer` picks it by hand.
 
-A generic encoder has no masked-prediction head, so for `hf` the "prediction" is the model's own final patch tokens. Every token is scored, the target is the clean output, and the visible-mean baseline replaces every token with the average token. An ablation effect therefore reads as "how far does removing this feature move the model's output". Image models see each sampled frame (8 by default) as its own image; video models see the window at once. Frames are resized to the model's square input without cropping, so the heatmap covers the whole frame. Prefix tokens (CLS, registers) pass through unedited.
+A generic encoder has no masked-prediction head, so for `hf` the "prediction" is the model's own final patch tokens. Every token is scored, the target is the clean output, and the visible-mean baseline replaces every token with the average token. An ablation effect therefore reads as "how far does removing this feature move the model's output". Image models see each sampled frame (8 by default) as its own image; video models see the window at once. Frames are resized to the model's square input without cropping, so the heatmap covers the whole frame. The input side comes from the model's preprocessor config when the model accepts it (DINOv2: 224 px, although its config says 518), else from the model config. Prefix tokens (CLS, registers) pass through unedited.
+
+The SAE for `hf` is a TopK SAE (32 active features per token) with 8 features per activation dimension (3072 for DINOv2-small); `fake` and `vjepa2` keep the 12-feature L1 acceptance dictionary, whose orthogonality penalty sums over every feature pair and would swamp reconstruction at that width. `--sae-features N` overrides either. When the SAE has more than 64 features, `ii run` scores the 10 features with the largest attribution unless `--prefilter K` says otherwise, because each scored feature costs a held-out ablation plus its matched random controls. Unscored features stay unverified and are still explorable in the playground.
+
+Labels for `hf` come from a local CLIP model (`openai/clip-vit-base-patch16`, downloaded on first use). Each concept in a list of everyday objects, parts, surfaces and textures gets a per-token similarity map, and a feature is labelled with the concept that best separates the tokens where it fires from those where it does not (ROC AUC ≥ 0.80 on train clips). The label holds only if that AUC is also ≥ 0.80 on held-out clips. Pass `--concepts my_concepts.txt` (one per line) to label with your own vocabulary.
+
+### NVIDIA GR00T N1.7 (robot policy)
+
+```bash
+uv pip install "lerobot[groot]==0.7.0"     # LeRobot's GR00T port; not in the default install
+uv run ii run groot --clips clips/libero --out runs/groot
+uv run ii view runs/groot --clips clips/libero --steer
+```
+
+The adapter is `groot:<checkpoint>`, and `--model` defaults to `nvidia/gr00t17-lerobot-libero_10-640` (the checkpoint behind the task 1028 work). It hooks DiT block `--layer` (default 5, 0-indexed) of the action head on the final flow-matching step, the same tensor as the Colab capture and ablation runs. The grid is one state token plus one token per planned action step (40), so in the viewer and playground the activation strip under the frame reads left to right as "now" to "40 steps ahead", and steering shows which future action steps move. The "prediction" is the action chunk under fixed noise, so an edit is the only thing that changes between the clean and edited chunk. A window is one observation, spanning the 16 steps the robot executes from it.
+
+GR00T also needs a wrist camera, the robot state and an instruction. Put them in a sidecar next to each clip, `<stem>.groot.json`: `{"task": "...", "state": [[8 floats per frame]], "wrist": "<stem>.wrist.npy"}`. Without one the model still runs, on the main frame twice, a zero state and an empty instruction, and warns that its actions are off-distribution.
+
+Weights stream in at half precision (6.3 GB). On a 4-core CPU the model loads in about a minute and each window takes a few seconds; a GPU is much faster. `ii run groot --tiny` runs a GR00T-shaped random network instead, with no download; it is for tests and is not GR00T. Closed-loop LIBERO rollouts for GR00T still go through `adapters/groot/v9/`.
 
 ```bash
 uv run interpretableintelligence rollouts runs/demo --policy fake --episodes 32 --features 3 --controls 10 --workers 2
@@ -86,6 +115,17 @@ uv run pytest
 ```
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
+
+### Share a run as a static page
+
+```bash
+uv run ii export runs/dinov2 --clips clips/mine --out site/dinov2
+python -m http.server -d site/dinov2 8000
+```
+
+`ii export` writes the viewer and every file it would ask the local server for into one folder. Paths are relative, so the folder works from any static host or subpath (GitHub Pages, Netlify, Cloudflare Pages, an S3 bucket), and the page carries link-preview tags for X and other sites. Nothing in it calls a server.
+
+The playground needs the model, so the export precomputes it: remove, scale, clamp and add at a few strengths, for the strongest features in each window, on `--steer-clips` clips (default 12, starting with the top clips of `real` and candidate features). The slider steps through those strengths. `--steer-features` sets features per window (default 6) and `--no-steer` turns the playground off. Like the live playground this is exploration only and never touches the run folder or the scoreboard. The fake run exports in about 10 seconds to 3 MB.
 
 `make demo-site` (or `ii export-site --out demo-site`) rebuilds the static site in `demo-site/`. Serve that directory with any static host. It does not start the viewer API.
 
@@ -98,6 +138,7 @@ Feature `3` is the planted reacher feature. The command prints the success delta
 | `src/interpretableintelligence/adapters/fake.py` | Synthetic model, clips, and planted cues |
 | `src/interpretableintelligence/adapters/vjepa2/` | V-JEPA 2 adapter |
 | `src/interpretableintelligence/adapters/hf.py` | Generic Hugging Face vision adapter (`hf:<model>`) |
+| `src/interpretableintelligence/adapters/groot/adapter.py` | GR00T N1.7 adapter (`groot:<checkpoint>`) and its random `groot:tiny` stand-in |
 | `docs/FRICTION-vjepa2.md` | Jeff's setup log for the V-JEPA 2 port |
 | `src/interpretableintelligence/sae.py` | ReLU SAE trainer |
 | `src/interpretableintelligence/score.py` | Explained variance, loss recovered, ablations, random controls |

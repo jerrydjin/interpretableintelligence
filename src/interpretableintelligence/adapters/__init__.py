@@ -1,6 +1,7 @@
 """Model adapters. ``fake`` is the scoring acceptance test; ``vjepa2`` is V-JEPA 2.
 
 ``hf:<model>`` is the generic Hugging Face vision adapter (see ``adapters/hf.py``).
+``groot:<checkpoint>`` is NVIDIA GR00T N1.7 through LeRobot (see ``adapters/groot/adapter.py``).
 """
 
 from interpretableintelligence.adapters.base import Adapter, Clip, Grid, Window
@@ -14,6 +15,10 @@ def get_adapter(name: str) -> type:
         from interpretableintelligence.adapters.hf import adapter_class
 
         return adapter_class(name)
+    if name.startswith("groot:"):
+        from interpretableintelligence.adapters.groot.adapter import adapter_class as groot_class
+
+        return groot_class(name)
     if name == "vjepa2" and name not in ADAPTERS:
         from interpretableintelligence.adapters.vjepa2 import VJEPA2Adapter
 
@@ -21,7 +26,7 @@ def get_adapter(name: str) -> type:
     try:
         return ADAPTERS[name]
     except KeyError as exc:
-        known = ", ".join(sorted(set(ADAPTERS) | {"vjepa2", "hf:<model>"}))
+        known = ", ".join(sorted(set(ADAPTERS) | {"vjepa2", "hf:<model>", "groot:<checkpoint>"}))
         raise ValueError(f"unknown adapter {name!r}. Known adapters: {known}.") from exc
 
 

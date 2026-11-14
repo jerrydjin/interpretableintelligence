@@ -56,6 +56,12 @@ class CpuWeightArena:
             self.mm = _mmap.mmap(fd, self.nbytes)
         finally:
             os.close(fd)
+        # The mapping keeps the pages alive; unlinking now means a crash or a normal exit
+        # never leaves a multi-GB file behind in /tmp (POSIX only; Windows keeps the file).
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
         self.off = 0
         self._views: list[torch.Tensor] = []
 
@@ -109,6 +115,26 @@ class CpuWeightArena:
             self.mm.flush()
         except Exception:
             pass
+
+
+def _use_cpu_arena(nbytes: int, log: Callable[[str], None] | None = None) -> bool:
+    """File-backed weights only when /tmp can hold them.
+
+    Writing through a shared mapping on a full disk kills the process with
+    SIGBUS and no traceback, so with too little free space the weights stay in
+    RAM instead. ``GROOT_CPU_ARENA=0`` or ``1`` forces the choice.
+    """
+    forced = os.environ.get("GROOT_CPU_ARENA", "").strip()
+    if forced in {"0", "1"}:
+        return forced == "1"
+    import shutil
+
+    free = shutil.disk_usage("/tmp").free
+    if free >= nbytes + (1 << 30):
+        return True
+    message = f"/tmp has {free/1e9:.1f} GB free, under the {nbytes/1e9:.1f} GB weight arena; keeping weights in RAM"
+    (log or (lambda m: print(m, flush=True)))(message)
+    return False
 
 
 def _arena_bytes_for_file(fh, dtype: torch.dtype) -> int:
@@ -517,7 +543,7 @@ def stream_safetensors_into(
             ties[b] = a
         n = len(keys)
         arena = None
-        if device.type == "cpu":
+        if device.type == "cpu" and _use_cpu_arena(_arena_bytes_for_file(fh, dtype), log):
             arena_bytes = _arena_bytes_for_file(fh, dtype)
             arena_path = Path("/tmp") / f"weight_arena_{os.getpid()}.bin"
             arena = CpuWeightArena(arena_bytes, arena_path)

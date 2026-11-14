@@ -367,6 +367,16 @@ def _center_square(height: float, width: float) -> dict[str, float]:
     return {"x": (width - side) / 2, "y": (height - side) / 2, "width": side, "height": side}
 
 
+def token_layout(adapter: object) -> str:
+    """``patches`` when grid cells are image patches; ``actions`` for a policy's action tokens.
+
+    GR00T's grid is ``[state] + one token per future action step``, not a place
+    in the frame, so the viewer draws it as a strip under the frame (now on the
+    left, later steps to the right) instead of a heatmap over it.
+    """
+    return "actions" if isinstance(adapter, str) and adapter.startswith("groot:") else "patches"
+
+
 def _parse_crop(raw: object, hw: list[float] | None) -> dict[str, float] | None:
     if isinstance(raw, str) and raw.strip().lower() in {"center", "centre", "center_square", "centre_square"}:
         return _center_square(hw[0], hw[1]) if hw is not None else None
@@ -444,10 +454,29 @@ def serve_run(
     model = load_run(Path(run_dir), None if clips_dir is None else Path(clips_dir))
     if steer:
         enable_steering(model, None if clips_dir is None else Path(clips_dir))
+    serve_model(model, host=host, port=port, open_browser=open_browser)
+
+
+def serve_model(
+    model: RunModel,
+    host: str = "127.0.0.1",
+    port: int = 7860,
+    open_browser: bool = True,
+    fragment: str = "",
+    announce=None,
+) -> None:
+    """Serve an already loaded run until interrupted.
+
+    ``fragment`` is a viewer route such as ``#/clips/clip-001?frame=4&feature=2``, opened in the
+    browser so the page starts somewhere useful. ``announce(url)`` replaces the default banner.
+    """
     httpd = bind_server(model, host, port)
     bound_host, bound_port = httpd.server_address[:2]
-    url = f"http://{bound_host}:{bound_port}/"
-    print(f"interpretableintelligence view  {url}", flush=True)
+    url = f"http://{bound_host}:{bound_port}/{fragment}"
+    if announce is None:
+        print(f"interpretableintelligence view  {url}", flush=True)
+    else:
+        announce(url)
     if open_browser:
         try:
             webbrowser.open(url)
@@ -1482,6 +1511,7 @@ def _clip_payload(clip, grid, loaded, timeline, effect_rows, meta_by_id, extra, 
         "height": loaded.height,
         "hw": hw,
         "crop": crop,
+        "layout": token_layout(adapter),
         "window_starts": starts,
         "stride": sample_stride,
         "grid": {key: grid[key] for key in ("t", "h", "w", "tubelet", "patch_px") if key in grid},

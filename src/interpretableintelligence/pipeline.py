@@ -70,6 +70,14 @@ from interpretableintelligence.thresholds import (
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
     DEFAULT_PREFILTER_K,
+    LABEL_ASSIGN_MIN_AUROC,
+    LABEL_HOLD_MIN_AUROC,
+    HF_SAE_BATCH,
+    HF_SAE_EXPANSION,
+    HF_SAE_LR,
+    HF_SAE_STEPS,
+    HF_SAE_TOPK,
+    SCORE_ALL_MAX_FEATURES,
     DEFAULT_SEED,
     LABEL_ASSIGN_MIN_CORR,
     LABEL_HOLD_MIN_CORR,
@@ -144,6 +152,43 @@ def format_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+def sae_dictionary_size(adapter_name: str, d_model: int, requested: int | None = None) -> int:
+    """SAE width. ``fake`` and ``vjepa2`` keep the 12-feature acceptance dictionary;
+    a real model behind ``hf`` gets ``HF_SAE_EXPANSION`` features per activation dimension."""
+    if requested is not None:
+        if int(requested) < 1:
+            raise ValueError(f"--sae-features must be >= 1, got {requested}")
+        return int(requested)
+    if adapter_name.startswith("hf:"):
+        return HF_SAE_EXPANSION * int(d_model)
+    return SAEConfig(d_model=int(d_model)).n_features
+
+
+def sae_config_for(adapter_name: str, d_model: int, seed: int, requested: int | None = None) -> SAEConfig:
+    """``fake`` and ``vjepa2``: the L1 ReLU acceptance SAE. ``hf``: a TopK SAE sized to the model.
+
+    The L1 and decoder-orthogonality terms are tuned for the 12-feature
+    acceptance dictionary; the orthogonality term sums over every pair of
+    features, so at thousands of features it swamps the reconstruction loss.
+    TopK fixes sparsity directly and needs neither term.
+    """
+    n_features = sae_dictionary_size(adapter_name, d_model, requested)
+    if not adapter_name.startswith("hf:"):
+        return SAEConfig(d_model=int(d_model), n_features=n_features, seed=int(seed))
+    return SAEConfig(
+        d_model=int(d_model),
+        n_features=n_features,
+        seed=int(seed),
+        activation="topk",
+        k=min(HF_SAE_TOPK, n_features),
+        l1_coeff=0.0,
+        ortho_coeff=0.0,
+        lr=HF_SAE_LR,
+        steps=HF_SAE_STEPS,
+        batch_size=HF_SAE_BATCH,
+    )
+
+
 def execute_pipeline(
     adapter_name: str,
     clips_dir: Path,
@@ -155,6 +200,8 @@ def execute_pipeline(
     prefilter: int | None = None,
     extra_effects: tuple[str, ...] = (),
     gpu_cost_per_hour: float | None = None,
+    sae_features: int | None = None,
+    concepts_file: Path | None = None,
     score: bool = True,
     serve: bool = True,
     host: str = "127.0.0.1",
@@ -169,6 +216,8 @@ def execute_pipeline(
         raise ValueError(f"heldout_frac must be in (0, 1), got {heldout_frac}")
     if tiny and adapter_name != "vjepa2":
         raise ValueError("--tiny is only supported for the vjepa2 adapter")
+    if concepts_file is not None and not adapter_name.startswith("hf:"):
+        raise ValueError("--concepts applies to the hf adapter; fake labels from its planted cues")
     if prefilter is not None and int(prefilter) < 1:
         raise ValueError(f"prefilter K must be >= 1, got {prefilter}")
     prefilter = None if prefilter is None else int(prefilter)
@@ -200,7 +249,14 @@ def execute_pipeline(
         meta=meta,
         tiny=tiny,
     )
-    config = SAEConfig(d_model=d_model, seed=int(seed))
+    config = sae_config_for(adapter.name, d_model, int(seed), sae_features)
+    n_features = config.n_features
+    if prefilter is None and n_features > SCORE_ALL_MAX_FEATURES:
+        prefilter = DEFAULT_PREFILTER_K
+        log(
+            f"{n_features} SAE features: scoring the {prefilter} with the largest attribution "
+            "(pass --prefilter K to change). The rest stay unverified."
+        )
     sae_inputs = _with_kind(capture_inputs, "sae", sae=config.as_dict())
 
     if _capture_ready(out, capture_inputs, grid, len(meta)):
@@ -248,6 +304,7 @@ def execute_pipeline(
         stats_sha=file_sha256(stats_path),
         prefilter=prefilter,
         extra_effects=list(extra_effects),
+        **_concept_inputs(adapter.name, concepts_file),
     )
     scoreboard = _read_scoreboard(out)
     if not score:
@@ -274,6 +331,7 @@ def execute_pipeline(
                 tiny=tiny,
                 prefilter=prefilter,
                 extra_effects=extra_effects,
+                concepts_file=concepts_file,
             )
             measured["rows"] = effect_rows
             measured["tokens"] = int(read_json(out / "acts" / "stream" / "meta.json")["n"])
@@ -555,6 +613,7 @@ def _score(
     tiny: bool = False,
     prefilter: int | None = None,
     extra_effects: tuple[str, ...] = (),
+    concepts_file: Path | None = None,
 ) -> tuple[dict, int]:
     stats = json.loads((out / "features" / "stats.json").read_text(encoding="utf-8"))
     manifest = read_json(out / "manifest.json")
@@ -601,6 +660,7 @@ def _score(
         meta,
         device,
         label_cues=adapter.name == "fake",
+        concepts=_concept_source(adapter, concepts_file, device, log),
     )
     del control_model
 
@@ -622,7 +682,8 @@ def _score(
 
     _clear_cache(adapter)
     attribution_started = time.perf_counter()
-    by_clip = attribution_by_clip(adapter, model, [load_clip(item) for item in meta], objective=PREDICTION_LOSS)
+    # One decoded clip at a time: a long episode is hundreds of MB as float32 frames.
+    by_clip = attribution_by_clip(adapter, model, (load_clip(item) for item in meta), objective=PREDICTION_LOSS)
     attribution_seconds = time.perf_counter() - attribution_started
     _clear_cache(adapter)
     attr_rows, mean_scores = summarize_attribution(by_clip)
@@ -845,9 +906,22 @@ def _correlate(
     meta,
     device,
     label_cues: bool = True,
+    concepts=None,
 ) -> tuple[list[dict], list[bool]]:
+    """Labels and the random-init absence check, in one pass over the activations.
+
+    ``concepts`` supplies per-token concept strengths (``names``, ``name`` for
+    ``label_model``, ``rows(meta, clip_index, t, h, w)``). With ``label_cues``
+    and no ``concepts``, the fake adapter's planted cue channels are the concepts.
+    Without either, every label is empty.
+    """
     n_features = int(model.n_features)
-    n_cues = len(CUE_NAMES)
+    if concepts is None and label_cues:
+        concepts = _CueCache()
+    label_cues = concepts is not None
+    concept_names = tuple(concepts.names) if concepts is not None else CUE_NAMES
+    label_model = concepts.name if concepts is not None else NullLabeller.name
+    n_cues = len(concept_names)
     label_n = np.zeros(2, dtype=np.int64)
     sum_a = np.zeros((2, n_features), dtype=np.float64)
     sum_a2 = np.zeros((2, n_features), dtype=np.float64)
@@ -860,7 +934,8 @@ def _correlate(
     sum_ctrl2 = np.zeros(n_features, dtype=np.float64)
     cross = np.zeros((n_features, n_features), dtype=np.float64)
     seen = 0
-    cues = _CueCache()
+    cues = concepts
+    auroc = _AurocLabels(n_features, n_cues) if getattr(concepts, "statistic", "pearson") == "auroc" else None
     chunk = _chunk_rows(n_features, model.d_model)
     with RowSource(main_acts) as main, RowSource(control_acts) as control:
         if main.n != control.n or main.d_model != control.d_model:
@@ -878,7 +953,10 @@ def _correlate(
                 ctrl_f = control_model.encode(torch.from_numpy(control_rows).to(device)).detach().cpu().numpy()
             if label_cues:
                 cue_rows = cues.rows(meta, clip_index, t, h, w)
-                _accumulate_labels(label_n, sum_a, sum_a2, sum_c, sum_c2, sum_ac, main_f, cue_rows, split)
+                if auroc is not None:
+                    auroc.add_concepts(cue_rows, split)
+                else:
+                    _accumulate_labels(label_n, sum_a, sum_a2, sum_c, sum_c2, sum_ac, main_f, cue_rows, split)
             main64 = main_f.astype(np.float64, copy=False)
             ctrl64 = ctrl_f.astype(np.float64, copy=False)
             sum_main += main64.sum(axis=0)
@@ -897,10 +975,12 @@ def _correlate(
         ]
     else:
         labels = []
-    for feature_id in range(n_features) if label_cues else []:
+    if auroc is not None:
+        labels = auroc.labels(main_acts, model, device, chunk, concept_names, label_model)
+    for feature_id in range(n_features) if label_cues and auroc is None else []:
         best_name = ""
         best_r = LABEL_ASSIGN_MIN_CORR
-        for cue_index, name in enumerate(CUE_NAMES):
+        for cue_index, name in enumerate(concept_names):
             corr = _corr(
                 sum_a[0, feature_id],
                 sum_c[0, cue_index],
@@ -913,9 +993,9 @@ def _correlate(
                 best_r = corr
                 best_name = name
         if not best_name:
-            labels.append({"label": "", "label_model": FakeCueLabeller.name, "label_holds_heldout": False})
+            labels.append({"label": "", "label_model": label_model, "label_holds_heldout": False})
             continue
-        cue_index = CUE_NAMES.index(best_name)
+        cue_index = concept_names.index(best_name)
         held = _corr(
             sum_a[1, feature_id],
             sum_c[1, cue_index],
@@ -927,7 +1007,7 @@ def _correlate(
         labels.append(
             {
                 "label": best_name,
-                "label_model": FakeCueLabeller.name,
+                "label_model": label_model,
                 "label_holds_heldout": bool(held >= LABEL_HOLD_MIN_CORR),
             }
         )
@@ -1261,7 +1341,97 @@ def _wait_health(url: str) -> dict:
     raise RuntimeError(f"/api/run health check failed: {last}")
 
 
+def _concept_inputs(adapter_name: str, concepts_file) -> dict:
+    """Score-stage cache key for the labeller, so a new concept list relabels."""
+    if not adapter_name.startswith("hf:"):
+        return {}
+    from interpretableintelligence.labelers import CLIP_LABEL_MODEL, load_concepts
+
+    return {"labeller": CLIP_LABEL_MODEL, "concepts": load_concepts(concepts_file)}
+
+
+def _concept_source(adapter, concepts_file, device, log):
+    """CLIP concept maps for a real model behind ``hf``; ``None`` keeps the default labelling."""
+    if not adapter.name.startswith("hf:"):
+        return None
+    from interpretableintelligence.labelers import ClipConceptSource, load_concepts
+
+    names = load_concepts(concepts_file)
+    log(f"score: labelling with {len(names)} CLIP concepts")
+    return ClipConceptSource(adapter, names, device=device)
+
+
+class _AurocLabels:
+    """Concept labels for sparse features: how well a concept separates tokens where
+    the feature fires from tokens where it does not (ROC AUC, Mann-Whitney).
+
+    Pearson against a dense concept map is capped far below 1 when a feature fires
+    on about 1% of tokens, however cleanly the concept predicts it. Pass one keeps
+    the concept rows; ``labels`` ranks them per split and re-encodes the
+    activations, so the firing x rank sums are one matrix product per chunk.
+    """
+
+    def __init__(self, n_features: int, n_concepts: int) -> None:
+        self.n_features = n_features
+        self.n_concepts = n_concepts
+        self.concepts: list[np.ndarray] = []
+        self.splits: list[np.ndarray] = []
+
+    def add_concepts(self, rows: np.ndarray, split: np.ndarray) -> None:
+        self.concepts.append(np.asarray(rows, dtype=np.float32))
+        self.splits.append(np.asarray(split, dtype=np.uint8))
+
+    def labels(self, main_acts, model, device, chunk, names, label_model) -> list[dict]:
+        concepts = np.concatenate(self.concepts)
+        split = np.concatenate(self.splits)
+        ranks = np.zeros_like(concepts, dtype=np.float64)
+        n_split = np.zeros(2, dtype=np.int64)
+        for split_id in (0, 1):
+            mask = split == split_id
+            n_split[split_id] = int(mask.sum())
+            if n_split[split_id]:
+                ranks[mask] = np.argsort(np.argsort(concepts[mask], axis=0, kind="stable"), axis=0) + 1.0
+        rank_sum = np.zeros((2, self.n_features, self.n_concepts), dtype=np.float64)
+        n_fire = np.zeros((2, self.n_features), dtype=np.float64)
+        with RowSource(main_acts) as main:
+            for start, stop in main.chunks(chunk):
+                rows = np.array(main.rows[start:stop], dtype=np.float32, copy=True)
+                with torch.no_grad():
+                    fire = (model.encode(torch.from_numpy(rows).to(device)) > DEAD_ACT_EPS).cpu().numpy()
+                part = split[start:stop]
+                for split_id in (0, 1):
+                    mask = part == split_id
+                    if np.any(mask):
+                        chosen = fire[mask].astype(np.float64)
+                        rank_sum[split_id] += chosen.T @ ranks[start:stop][mask]
+                        n_fire[split_id] += chosen.sum(axis=0)
+        auc = np.full((2, self.n_features, self.n_concepts), 0.5)
+        for split_id in (0, 1):
+            pos = n_fire[split_id][:, None]
+            neg = n_split[split_id] - pos
+            ok = (pos > 0) & (neg > 0)
+            value = (rank_sum[split_id] - pos * (pos + 1) / 2) / np.where(ok, pos * neg, 1.0)
+            auc[split_id] = np.where(ok, value, 0.5)
+        out = []
+        for feature_id in range(self.n_features):
+            best = int(np.argmax(auc[0, feature_id]))
+            if auc[0, feature_id, best] < LABEL_ASSIGN_MIN_AUROC:
+                out.append({"label": "", "label_model": label_model, "label_holds_heldout": False})
+                continue
+            out.append(
+                {
+                    "label": names[best],
+                    "label_model": label_model,
+                    "label_holds_heldout": bool(auc[1, feature_id, best] >= LABEL_HOLD_MIN_AUROC),
+                }
+            )
+        return out
+
+
 class _CueCache:
+    names = CUE_NAMES
+    name = FakeCueLabeller.name
+
     def __init__(self) -> None:
         self.index: int | None = None
         self.volume: np.ndarray | None = None

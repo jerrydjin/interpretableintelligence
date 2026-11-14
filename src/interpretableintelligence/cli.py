@@ -48,6 +48,28 @@ def main(
     """Shared run format and scoring core."""
 
 
+@app.command("try")
+def try_cmd(
+    out: Annotated[Path, typer.Option("--out", help="Run folder for the practice run.")] = Path("runs/try"),
+    clips: Annotated[Path, typer.Option("--clips", help="Where to write the practice clips.")] = Path("clips/try"),
+    host: Annotated[str, typer.Option("--host", help="Viewer interface.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Viewer port. 0 chooses a free port.")] = 0,
+    no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show the full pipeline log.")] = False,
+) -> None:
+    """New here? Start with this. Finds features in a small practice model and opens the playground.
+
+    No download and no setup. Takes about 15 seconds the first time and a couple of seconds after.
+    """
+    from interpretableintelligence.first_run import guided_run
+
+    try:
+        guided_run(out, clips, host=host, port=port, open_browser=not no_open, verbose=verbose, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
 @app.command("generate-clips")
 def generate_clips_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write synthetic clips into.")],
@@ -61,8 +83,20 @@ def generate_clips_cmd(
     typer.echo(f"wrote {n} clips to {out}")
 
 
-def _adapter_name(adapter: str, model: str | None, blocks: str | None) -> str:
-    """``hf`` plus ``--model``/``--blocks`` becomes the self-describing ``hf:<model>[#<blocks>]`` name."""
+def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
+    """``hf`` plus ``--model``/``--blocks`` becomes the self-describing ``hf:<model>[#<blocks>]`` name.
+
+    ``groot`` becomes ``groot:<checkpoint>`` (``--model``, default the LIBERO checkpoint), or
+    ``groot:tiny`` with ``--tiny``.
+    """
+    if adapter == "groot":
+        from interpretableintelligence.adapters.groot.adapter import make_spec as groot_spec
+
+        if blocks:
+            raise ValueError("--blocks only applies to the hf adapter")
+        if model and Path(model).expanduser().is_dir():
+            model = str(Path(model).expanduser().resolve())
+        return groot_spec(model, tiny=tiny)
     if adapter == "hf":
         from interpretableintelligence.adapters.hf import make_spec
 
@@ -73,11 +107,15 @@ def _adapter_name(adapter: str, model: str | None, blocks: str | None) -> str:
             model = str(local.resolve())  # explain and the playground reload it from any cwd
         return make_spec(model, blocks)
     if model or blocks:
-        raise ValueError("--model and --blocks only apply to the hf adapter")
+        raise ValueError("--model and --blocks only apply to the hf and groot adapters")
     return adapter
 
 
 def _default_layer(adapter: str) -> int:
+    if adapter.startswith("groot:"):
+        from interpretableintelligence.adapters.groot.adapter import DEFAULT_LAYER as GROOT_LAYER
+
+        return GROOT_LAYER
     if adapter.startswith("hf:"):
         from interpretableintelligence.adapters.hf import middle_block
 
@@ -89,13 +127,17 @@ def _default_layer(adapter: str) -> int:
 def run(
     adapter: Annotated[
         str,
-        typer.Argument(help="Adapter: fake, vjepa2, or hf (any Hugging Face vision model; pass --model)."),
+        typer.Argument(help="Adapter: fake, vjepa2, hf (any Hugging Face vision model; pass --model), or groot (NVIDIA GR00T N1.7)."),
     ],
     clips: Annotated[Path, typer.Option("--clips", exists=True, file_okay=False, help="Clip directory.")],
     out: Annotated[Path, typer.Option("--out", help="Run folder, e.g. runs/demo.")],
     model: Annotated[
         str | None,
-        typer.Option("--model", help="hf only: Hugging Face model id or local directory, e.g. facebook/dinov2-small."),
+        typer.Option(
+            "--model",
+            help="hf: Hugging Face model id or local directory, e.g. facebook/dinov2-small. "
+            "groot: LeRobot GR00T checkpoint (default nvidia/gr00t17-lerobot-libero_10-640).",
+        ),
     ] = None,
     blocks: Annotated[
         str | None,
@@ -103,7 +145,7 @@ def run(
     ] = None,
     layer: Annotated[
         int | None,
-        typer.Option("--layer", min=0, help=f"Layer to instrument. Default {DEFAULT_LAYER}; for hf, the middle block."),
+        typer.Option("--layer", min=0, help=f"Layer to instrument. Default {DEFAULT_LAYER}; for hf, the middle block; for groot, DiT block 5."),
     ] = None,
     seed: Annotated[int, typer.Option("--seed", help="Split, SAE, and random-feature seed.")] = DEFAULT_SEED,
     heldout_frac: Annotated[
@@ -125,11 +167,29 @@ def run(
             help="Comma-separated clip_effects modes to add: loss, group. The cosine scoreboard stays.",
         ),
     ] = "",
+    sae_features: Annotated[
+        int | None,
+        typer.Option(
+            "--sae-features",
+            min=1,
+            help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf.",
+        ),
+    ] = None,
+    concepts: Annotated[
+        Path | None,
+        typer.Option(
+            "--concepts",
+            exists=True,
+            dir_okay=False,
+            help="hf only: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
+        ),
+    ] = None,
     tiny: Annotated[
         bool,
         typer.Option(
             "--tiny",
-            help="V-JEPA 2 CPU smoke path: tiny random config, no weight download. Pass --layer 1.",
+            help="CPU smoke path, no weight download. vjepa2: tiny random config (pass --layer 1). "
+            "groot: a GR00T-shaped random network (not GR00T).",
         ),
     ] = False,
     gpu_cost_per_hour: Annotated[
@@ -160,7 +220,9 @@ def run(
 
     modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
     try:
-        adapter = _adapter_name(adapter, model, blocks)
+        adapter = _adapter_name(adapter, model, blocks, tiny=tiny)
+        if adapter.startswith("groot:"):
+            tiny = False  # groot:tiny names the stand-in itself, so the run folder can rebuild it
         layer = _default_layer(adapter) if layer is None else layer
         execute_pipeline(
             adapter_name=adapter,
@@ -173,6 +235,8 @@ def run(
             prefilter=prefilter,
             extra_effects=modes,
             gpu_cost_per_hour=gpu_cost_per_hour,
+            sae_features=sae_features,
+            concepts_file=concepts,
             score=not no_score,
             serve=not no_serve,
             host=host,
@@ -396,6 +460,53 @@ def rollouts(
         raise typer.Exit(code=1) from exc
     typer.echo(format_report(summary))
     typer.echo(f"wrote {run_dir / 'rollouts'}")
+
+
+@app.command("export")
+def export_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder to export.")],
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the static site into.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Directory of clip files. Overrides a clip path recorded in the manifest."),
+    ] = None,
+    steer: Annotated[
+        bool,
+        typer.Option("--steer/--no-steer", help="Precompute playground edits so the static page can still steer features."),
+    ] = True,
+    steer_clips: Annotated[
+        int, typer.Option("--steer-clips", min=0, help="How many clips get a precomputed playground.")
+    ] = 12,
+    steer_features: Annotated[
+        int, typer.Option("--steer-features", min=1, help="Strongest features per clip window to precompute.")
+    ] = 6,
+    title: Annotated[str | None, typer.Option("--title", help="Page title, also used on the link preview.")] = None,
+) -> None:
+    """Export a run as a static site: host the folder anywhere and share the link. No server needed."""
+    from interpretableintelligence.explain import ExplainError
+    from interpretableintelligence.export_run import export_run
+
+    try:
+        summary = export_run(
+            run_dir,
+            out,
+            clips_dir=clips,
+            steer=steer,
+            steer_clips=steer_clips,
+            steer_features=steer_features,
+            title=title,
+            log=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ExplainError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    playground = (
+        f"playground on {len(summary.steer_clips)} clips ({summary.steer_results} edits)"
+        if summary.steer_clips
+        else "playground off"
+    )
+    typer.echo(f"wrote {summary.out_dir}: {summary.clips} clips, {summary.features} features, {playground}, {summary.bytes_total / 1e6:.1f} MB")
+    typer.echo(f"preview: python -m http.server -d {summary.out_dir} 8000, then open http://localhost:8000")
 
 
 @app.command("export-site")

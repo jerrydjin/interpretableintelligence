@@ -339,11 +339,14 @@ def _check_sae(run_dir: Path, manifest: dict, scoreboard: dict, errors: list[str
     except (OSError, ValueError) as exc:
         errors.append(f"sae/config.json: {exc}")
         return
-    _exact_keys(config, _SAE_CONFIG_KEYS, "sae/config.json", errors)
+    topk = config.get("activation") == "topk"
+    _exact_keys(config, _SAE_CONFIG_KEYS | ({"k"} if topk else set()), "sae/config.json", errors)
     if config.get("d_model") != manifest.get("d_model"):
         errors.append("sae config d_model does not match manifest")
-    if config.get("activation") != "relu":
-        errors.append("sae config activation must be relu")
+    if config.get("activation") not in ("relu", "topk"):
+        errors.append("sae config activation must be relu or topk")
+    if topk and (not _is_int(config.get("k")) or config["k"] <= 0):
+        errors.append("topk sae config k must be a positive integer")
     n_features = config.get("n_features")
     if not _is_int(n_features) or n_features <= 0:
         errors.append("sae config n_features must be a positive integer")
