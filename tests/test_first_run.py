@@ -84,3 +84,33 @@ def test_try_is_listed_first_in_help() -> None:
     out = CliRunner().invoke(app, ["--help"]).output
     assert "try" in out
     assert out.index("try") < out.index("generate-clips")
+
+
+def test_try_points_learners_at_real_clips() -> None:
+    import inspect
+
+    from interpretableintelligence import first_run
+
+    source = inspect.getsource(first_run.guided_run)
+    assert "ii get-clips" in source
+    assert "--steer" in source
+
+
+def test_run_steer_opens_the_playground(demo) -> None:
+    import json
+    import urllib.request
+
+    from interpretableintelligence.pipeline import _open_viewer
+
+    lines: list[str] = []
+    _model, httpd, thread, url = _open_viewer(
+        demo.run, demo.clips, "127.0.0.1", 0, False, lines.append, steer=True
+    )
+    try:
+        with urllib.request.urlopen(url + "api/run") as response:
+            payload = json.loads(response.read())
+        assert payload["steer"]["enabled"] is True
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)

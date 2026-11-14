@@ -223,7 +223,7 @@ def guided_run(
         say("When you are ready for a real model, try one on real robot video (no clips needed):")
         say("  ii get-clips --out clips/droid")
         say(
-            "  ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid"
+            "  ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid --no-score --steer"
         )
         say("Or point --clips at a folder of your own mp4s.")
         say("")

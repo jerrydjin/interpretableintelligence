@@ -25,8 +25,10 @@ Then try a real model on real video. You do not need clips of your own:
 
 ```bash
 uv run ii get-clips --out clips/droid          # 100 short robot clips from DROID (MIT), one 175 MB download
-uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid
+uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid --no-score --steer
 ```
+
+`--no-score --steer` gets you to the playground fastest (about 10 minutes on a laptop CPU): every feature is explorable, but none is verified yet. Run the same command without `--no-score` to add the checks; it reuses what is done. Scoring a real model is the slow part, up to an hour on a CPU, and it now prints progress with a time estimate as it goes.
 
 `ii get-clips` cuts a 4-second mp4 from the middle of each of the 100 episodes in [`lerobot/droid_100`](https://huggingface.co/datasets/lerobot/droid_100), real robot arms in real kitchens and offices, and keeps each episode's instruction in `clips/droid/clips.json`. `--n` and `--seconds` take fewer or longer clips. Any folder of your own mp4s works in its place.
 

@@ -102,8 +102,12 @@ def get_clips_cmd(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"wrote {len(entries)} clips from {DATASET} ({LICENSE} licence) to {out}")
-    typer.echo("Next, find the features a real vision model uses on them (about N minutes on a laptop):")
-    typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid")
+    typer.echo("")
+    typer.echo("Next, find the features a real vision model uses on them, and open the playground:")
+    typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
+    typer.echo("That takes about 10 minutes on a laptop CPU. Every feature is explorable but none is verified yet.")
+    typer.echo("To run the checks that mark features verified, run the same command without --no-score.")
+    typer.echo("It reuses what is done and adds the scoring, which takes longer (up to an hour on a CPU).")
 
 
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
@@ -233,6 +237,10 @@ def run(
     host: Annotated[str, typer.Option("--host", help="Viewer interface.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Viewer port. 0 chooses a free port.")] = 0,
     no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+    steer: Annotated[
+        bool,
+        typer.Option("--steer", help="Turn on the playground in the viewer: edit features and watch the prediction move."),
+    ] = False,
 ) -> None:
     """Capture, train, extract features, score what is missing, then serve the viewer.
 
@@ -265,6 +273,7 @@ def run(
             host=host,
             port=port,
             open_browser=not no_open,
+            steer=steer,
             log=typer.echo,
         )
     except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:

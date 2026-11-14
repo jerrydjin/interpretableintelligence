@@ -86,7 +86,7 @@ from interpretableintelligence.thresholds import (
     TOP_K_ABLATION_PER_CLIP,
     TOP_K_EXAMPLES,
 )
-from interpretableintelligence.view import bind_server, load_run
+from interpretableintelligence.view import bind_server, enable_steering, load_run
 
 STAGES = ("capture", "sae", "features", "score", "view")
 REPORT_BEGIN = "--- interpretableintelligence cost report ---"
@@ -206,9 +206,12 @@ def execute_pipeline(
     host: str = "127.0.0.1",
     port: int = 0,
     open_browser: bool = False,
+    steer: bool = False,
     log=print,
 ) -> dict:
-    """Run every missing stage and, unless ``serve`` is false, block on the viewer."""
+    """Run every missing stage and, unless ``serve`` is false, block on the viewer.
+
+    ``steer`` turns on the viewer's playground (it loads the model and SAE once more)."""
     if gpu_cost_per_hour is not None and (not math.isfinite(gpu_cost_per_hour) or gpu_cost_per_hour < 0):
         raise ValueError("gpu_cost_per_hour must be a non-negative finite number")
     if not 0.0 < float(heldout_frac) < 1.0:
@@ -347,11 +350,13 @@ def execute_pipeline(
     if _view_ready(out, view_inputs):
         log("skip view")
         if serve:
-            _model, httpd, thread, _url = _open_viewer(out, clips_dir, host, port, open_browser, log)
+            _model, httpd, thread, _url = _open_viewer(out, clips_dir, host, port, open_browser, log, steer=steer)
     else:
         log("run view")
         with _measure(device) as measured:
-            model, httpd, thread, _url = _open_viewer(out, clips_dir, host, port, open_browser, log, serve=serve)
+            model, httpd, thread, _url = _open_viewer(
+                out, clips_dir, host, port, open_browser, log, serve=serve, steer=steer
+            )
             measured["rows"] = len(model.run_payload["clips"])
             measured["tokens"] = 0
         _record_stage(out, "view", measured["metrics"])
@@ -1339,10 +1344,12 @@ def _mean_rows(source: RowSource, ids: np.ndarray, n_rows: int) -> np.ndarray:
     return (acc / seen).astype(np.float32)
 
 
-def _open_viewer(out, clips_dir, host, port, open_browser, log, serve: bool = True):
+def _open_viewer(out, clips_dir, host, port, open_browser, log, serve: bool = True, steer: bool = False):
     model = load_run(Path(out), Path(clips_dir))
     if not serve:
         return model, None, None, None
+    if steer:
+        enable_steering(model, Path(clips_dir))
     httpd = bind_server(model, host, int(port))
     thread = threading.Thread(target=httpd.serve_forever, name="interpretableintelligence-view", daemon=False)
     thread.start()
