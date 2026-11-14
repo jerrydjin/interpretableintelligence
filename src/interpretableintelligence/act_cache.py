@@ -33,12 +33,22 @@ An adapter without ``cache_spec`` is never cached. GR00T has none yet: its
 activations also depend on per-clip sidecars and the denoising noise, which the
 key does not cover.
 
+The key cannot see adapter code. Each ``cache_spec`` starts with a version tag
+(``"hf-v1"``, ``"vjepa2-v1"``, ``"fake-v1"``): bump it in the same change
+whenever the adapter returns different tensors for the same weights and frames,
+or old entries keep being read.
+
+Size is capped at ``$II_ACTS_CACHE_MAX_GB`` (default 20; ``0`` means no cap).
+A read refreshes an entry's modification time, and when a write takes the cache
+over the cap the least recently used entries are deleted until it is back under
+90% of it.
+
 The cache lives outside run folders and is not part of the run contract
 (``SCHEMA.md``). It holds no results, only model activations, and deleting it
 only costs time. Location: ``$II_ACTS_CACHE`` when set (``off`` disables it),
 otherwise ``$XDG_CACHE_HOME/interpretableintelligence/acts`` or
 ``~/.cache/interpretableintelligence/acts``. ``ii cache`` reports its size and
-``ii cache --clear`` empties it.
+cap, and ``ii cache --clear`` empties it.
 """
 
 from __future__ import annotations
@@ -60,6 +70,9 @@ from interpretableintelligence import __version__
 from interpretableintelligence.adapters.base import Clip, Window
 
 CACHE_ENV = "II_ACTS_CACHE"
+MAX_GB_ENV = "II_ACTS_CACHE_MAX_GB"
+DEFAULT_MAX_GB = 20.0
+PRUNE_TO = 0.9  # after an eviction the cache sits at this fraction of the cap
 CACHE_FORMAT = 1
 KINDS = ("layer", "clean")
 _OFF = {"0", "off", "false", "no", "none"}
@@ -86,6 +99,19 @@ def resolve_root(root: Path | str | None = None) -> Path | None:
     return Path(raw.strip()).expanduser()
 
 
+def resolve_max_bytes() -> int | None:
+    """The size cap in bytes from ``$II_ACTS_CACHE_MAX_GB``; ``None`` means no cap."""
+    raw = os.environ.get(MAX_GB_ENV)
+    if raw is None or not raw.strip():
+        gb = DEFAULT_MAX_GB
+    else:
+        try:
+            gb = float(raw)
+        except ValueError as exc:
+            raise ValueError(f"{MAX_GB_ENV} must be a number of gigabytes, got {raw!r}") from exc
+    return None if gb <= 0 else int(gb * 1e9)
+
+
 @dataclass(frozen=True)
 class CacheKey:
     kind: str
@@ -98,15 +124,20 @@ class ActivationCache:
     """Disk cache of per-window tensors. ``root=None`` is a cache that never hits or stores."""
 
     root: Path | None
+    max_bytes: int | None = None
     hits: int = 0
     misses: int = 0
     stored: int = 0
+    evicted: int = 0
     bytes_read: int = 0
     bytes_written: int = 0
+    _size: int | None = None  # bytes on disk, measured on the first write and tracked after
 
     @classmethod
     def open(cls, root: Path | str | None = None, *, enabled: bool = True) -> "ActivationCache":
-        return cls(resolve_root(root) if enabled else None)
+        if not enabled:
+            return cls(None)
+        return cls(resolve_root(root), max_bytes=resolve_max_bytes())
 
     @property
     def enabled(self) -> bool:
@@ -173,6 +204,10 @@ class ActivationCache:
             return None
         self.hits += 1
         self.bytes_read += path.stat().st_size
+        try:
+            os.utime(path)  # recently used: evicted last
+        except OSError:
+            pass
         return tensors
 
     def store(self, key: CacheKey | None, tensors: dict[str, torch.Tensor]) -> None:
@@ -189,8 +224,14 @@ class ActivationCache:
             # A full or read-only disk must not fail the run; the next run recomputes.
             _unlink(tmp)
             return
+        size = path.stat().st_size
         self.stored += 1
-        self.bytes_written += path.stat().st_size
+        self.bytes_written += size
+        if self.max_bytes is not None:
+            self._size = cache_usage(self.root)["bytes"] if self._size is None else self._size + size
+            if self._size > self.max_bytes:
+                removed, self._size = prune_cache(self.root, int(self.max_bytes * PRUNE_TO), keep=path)
+                self.evicted += removed
 
     def summary(self) -> str:
         if self.root is None:
@@ -198,6 +239,7 @@ class ActivationCache:
         return (
             f"activation cache {self.root}: {self.hits} hit(s), {self.misses} miss(es), "
             f"{self.stored} stored, {self.bytes_read / 1e6:.1f} MB read, {self.bytes_written / 1e6:.1f} MB written"
+            + (f", {self.evicted} evicted (cap {self.max_bytes / 1e9:g} GB)" if self.evicted else "")
         )
 
 
@@ -273,6 +315,34 @@ def cache_usage(root: Path | None) -> dict:
         usage["entries"] += entries
         usage["bytes"] += size
     return usage
+
+
+def prune_cache(root: Path | None, target_bytes: int, keep: Path | None = None) -> tuple[int, int]:
+    """Delete least recently used entries until the cache holds at most ``target_bytes``.
+
+    ``keep`` (the entry just written) is never deleted. Returns ``(removed, bytes_left)``.
+    """
+    if root is None or not root.is_dir():
+        return 0, 0
+    entries = []
+    for kind in KINDS:
+        for path in (root / kind).glob(f"*/*{_SUFFIX}"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            entries.append((stat.st_mtime_ns, stat.st_size, path))
+    total = sum(size for _mtime, size, _path in entries)
+    removed = 0
+    for _mtime, size, path in sorted(entries, key=lambda entry: entry[0]):
+        if total <= target_bytes:
+            break
+        if keep is not None and path == keep:
+            continue
+        _unlink(path)
+        total -= size
+        removed += 1
+    return removed, total
 
 
 def clear_cache(root: Path | None) -> int:

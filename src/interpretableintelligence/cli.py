@@ -266,15 +266,23 @@ def cache_cmd(
 
     Entries are keyed by model weights, layer, clip hash, window and preprocessing, so a stale
     entry is never read. Set II_ACTS_CACHE to move the cache, or II_ACTS_CACHE=off to disable it.
+    The size is capped at II_ACTS_CACHE_MAX_GB (default 20, 0 for no cap); the least recently
+    used windows are deleted first.
     """
-    from interpretableintelligence.act_cache import cache_usage, clear_cache, resolve_root
+    from interpretableintelligence.act_cache import cache_usage, clear_cache, resolve_max_bytes, resolve_root
 
     root = resolve_root()
+    try:
+        cap = resolve_max_bytes()
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     if clear:
         removed = clear_cache(root)
         typer.echo(f"removed {removed} cached window(s) from {root}" if root is not None else "activation cache off")
         return
     usage = cache_usage(root)
+    usage["max_bytes"] = cap
     if as_json:
         typer.echo(json.dumps(usage, indent=2))
         return
@@ -285,6 +293,7 @@ def cache_cmd(
     for kind, info in usage["kinds"].items():
         typer.echo(f"  {kind:<6} {info['entries']:>7} window(s)  {info['bytes'] / 1e6:10.1f} MB")
     typer.echo(f"  total  {usage['entries']:>7} window(s)  {usage['bytes'] / 1e6:10.1f} MB")
+    typer.echo(f"  cap    {'none' if cap is None else f'{cap / 1e9:g} GB'} (II_ACTS_CACHE_MAX_GB; least recently used windows go first)")
 
 
 @app.command()

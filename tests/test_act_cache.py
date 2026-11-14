@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -285,3 +287,36 @@ def test_hf_clean_state_round_trips(tmp_path, name):
     hook.remove()
     assert torch.equal(warm_pred, pred) and torch.equal(warm_target, target)
     assert forwards["n"] == 0
+
+
+def test_the_cap_evicts_least_recently_used_windows(tmp_path, monkeypatch):
+    adapter = _fake()
+    sha = adapter.model_sha()
+    probe = ActivationCache(tmp_path / "probe")
+    clip = _fake_clip(0)
+    captured_layer(adapter, clip, _window(adapter, clip), cache=probe, model_sha=sha)
+    entry = cache_usage(tmp_path / "probe")["bytes"]
+
+    monkeypatch.setenv("II_ACTS_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("II_ACTS_CACHE_MAX_GB", str(3.5 * entry / 1e9))  # room for three windows
+    cache = ActivationCache.open()
+    clips = [_fake_clip(seed, f"clip_{seed:03d}") for seed in range(5)]
+    keys = [cache.key("layer", adapter, sha, item, _window(adapter, item)) for item in clips]
+    for item in clips[:3]:
+        captured_layer(adapter, item, _window(adapter, item), cache=cache, model_sha=sha)
+    for index, key in enumerate(keys[:3]):  # distinct, ordered access times
+        stamp = time.time() - 100 + index
+        os.utime(cache.path(key), (stamp, stamp))
+    assert cache.load(keys[0]) is not None  # reading clip 0 makes clip 1 the oldest
+    captured_layer(adapter, clips[3], _window(adapter, clips[3]), cache=cache, model_sha=sha)
+    assert cache.evicted >= 1
+    assert not cache.path(keys[1]).exists()
+    assert cache.path(keys[0]).exists() and cache.path(keys[3]).exists()
+    assert cache_usage(tmp_path / "cache")["bytes"] <= 3.5 * entry
+
+    monkeypatch.setenv("II_ACTS_CACHE_MAX_GB", "0")
+    assert ActivationCache.open().max_bytes is None
+    monkeypatch.setenv("II_ACTS_CACHE_MAX_GB", "lots")
+    with pytest.raises(ValueError, match="II_ACTS_CACHE_MAX_GB"):
+        ActivationCache.open()
+    assert runner.invoke(app, ["cache"]).exit_code == 1
