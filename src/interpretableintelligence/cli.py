@@ -125,6 +125,23 @@ def run(
             help="Comma-separated clip_effects modes to add: loss, group. The cosine scoreboard stays.",
         ),
     ] = "",
+    sae_features: Annotated[
+        int | None,
+        typer.Option(
+            "--sae-features",
+            min=1,
+            help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf.",
+        ),
+    ] = None,
+    concepts: Annotated[
+        Path | None,
+        typer.Option(
+            "--concepts",
+            exists=True,
+            dir_okay=False,
+            help="hf only: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
+        ),
+    ] = None,
     tiny: Annotated[
         bool,
         typer.Option(
@@ -173,6 +190,8 @@ def run(
             prefilter=prefilter,
             extra_effects=modes,
             gpu_cost_per_hour=gpu_cost_per_hour,
+            sae_features=sae_features,
+            concepts_file=concepts,
             score=not no_score,
             serve=not no_serve,
             host=host,

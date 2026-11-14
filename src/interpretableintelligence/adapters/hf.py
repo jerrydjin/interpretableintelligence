@@ -174,8 +174,7 @@ class HFAdapter:
             raise ValueError(f"{self.model_name} config has no image_size/crop_size and patch_size; is it a ViT-style vision model?")
         if size[0] != size[1] or patch[0] != patch[1]:
             raise ValueError(f"{self.model_name} needs square images and patches, got {size} and {patch}")
-        self._size, self._patch = int(size[0]), int(patch[0])
-        self._h = self._w = self._size // self._patch
+        self._patch = int(patch[0])
         params = inspect.signature(self.model.forward).parameters
         self._input_key = "pixel_values_videos" if "pixel_values_videos" in params else "pixel_values"
         if self._input_key not in params:
@@ -191,8 +190,29 @@ class HFAdapter:
             self.n_frames = self.image_frames
             self._tubelet = 1
             self._t = self.n_frames
-        self._mean, self._std = _norm_stats(self.model_name)
-        self._probe()
+        preprocessor = _preprocessor_config(self.model_name)
+        self._mean, self._std = _norm_stats(preprocessor)
+        native = int(size[0])
+        preferred = _input_size(preprocessor)
+        # The model card's preprocessor size is what the model was trained and is
+        # meant to be fed at (DINOv2: config 518, preprocessor 224). Use it when
+        # the model accepts it; otherwise fall back to the config size.
+        candidates = [preferred] if preferred and preferred != native and preferred % self._patch == 0 else []
+        if candidates and "interpolate_pos_encoding" in params:
+            self._extra = {**self._extra, "interpolate_pos_encoding": True}
+        for size_px in [*candidates, native]:
+            self._set_size(size_px)
+            try:
+                self._probe()
+                break
+            except Exception:  # noqa: BLE001 (a model that cannot take this size falls back to its config size)
+                if size_px == native:
+                    raise
+                self._extra.pop("interpolate_pos_encoding", None)
+
+    def _set_size(self, size_px: int) -> None:
+        self._size = int(size_px)
+        self._h = self._w = self._size // self._patch
 
     def _probe(self) -> None:
         """One dummy forward to learn the token count, prefix length, and width."""
@@ -509,8 +529,27 @@ def _find_blocks(model: torch.nn.Module, config, path: str | None) -> torch.nn.M
     return ranked[0][1]
 
 
-def _norm_stats(model: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
+def _norm_stats(preprocessor: dict) -> tuple[tuple[float, ...], tuple[float, ...]]:
     """Mean and std from the model's preprocessor config, else ImageNet."""
+    mean, std = preprocessor.get("image_mean"), preprocessor.get("image_std")
+    if isinstance(mean, list) and isinstance(std, list) and len(mean) == len(std) == 3:
+        return tuple(float(x) for x in mean), tuple(float(x) for x in std)
+    return IMAGENET_MEAN, IMAGENET_STD
+
+
+def _input_size(preprocessor: dict) -> int | None:
+    """Square input side the preprocessor feeds the model: crop size, else a fixed resize."""
+    for key in ("crop_size", "size"):
+        value = preprocessor.get(key)
+        if isinstance(value, int):
+            return value if key == "crop_size" else None
+        if isinstance(value, dict) and "height" in value and "width" in value and value["height"] == value["width"]:
+            return int(value["height"])
+    return None
+
+
+def _preprocessor_config(model: str) -> dict:
+    """The model's preprocessor config (image or video), or ``{}``."""
     for name in ("preprocessor_config.json", "video_preprocessor_config.json"):
         try:
             local = Path(model) / name
@@ -523,12 +562,11 @@ def _norm_stats(model: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
 
                 path = Path(hf_hub_download(model, name))
             data = json.loads(path.read_text(encoding="utf-8"))
-            mean, std = data.get("image_mean"), data.get("image_std")
-            if isinstance(mean, list) and isinstance(std, list) and len(mean) == len(std) == 3:
-                return tuple(float(x) for x in mean), tuple(float(x) for x in std)
-        except Exception:  # noqa: BLE001 (any lookup failure falls back to ImageNet)
+            if isinstance(data, dict):
+                return data
+        except Exception:  # noqa: BLE001 (any lookup failure means no preprocessor config)
             continue
-    return IMAGENET_MEAN, IMAGENET_STD
+    return {}
 
 
 def _pair(value) -> tuple[int, int] | None:
