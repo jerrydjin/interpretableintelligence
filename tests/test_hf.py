@@ -77,6 +77,24 @@ def _adapter(path: Path, layer: int = 1, random_init: bool = False):
     return adapter
 
 
+def test_model_sha_is_stable_when_the_checkpoint_lacks_backbone_weights(tmp_path):
+    """An ImageNet classifier loaded as AutoModel has no pooler, so transformers fills it in at random.
+
+    facebook/deit-tiny-patch16-224 got a different model_sha on every load, and the playground
+    refused its own run. The real-model CI job found it.
+    """
+    from transformers import ViTConfig, ViTForImageClassification
+
+    torch.manual_seed(0)
+    path = tmp_path / "vit-classifier"
+    ViTForImageClassification(ViTConfig(image_size=32, patch_size=8, num_labels=3, **_SMALL)).save_pretrained(path)
+    first = _adapter(path)
+    state = torch.random.get_rng_state()
+    second = _adapter(path)
+    assert torch.equal(torch.random.get_rng_state(), state)  # loading does not reseed the caller
+    assert first.model_sha() == second.model_sha()
+
+
 def test_spec_round_trips_and_rejects_bad_names():
     assert parse_spec("hf:facebook/dinov2-small") == ("facebook/dinov2-small", None)
     assert parse_spec(make_spec("org/m", "encoder.layer")) == ("org/m", "encoder.layer")
@@ -296,7 +314,7 @@ def test_real_dinov2_small_end_to_end(tmp_path):
 # DeiT-tiny (5.7M parameters, real ImageNet weights) is the smallest well-known ViT on the
 # Hub. The pipeline pins torch to one thread, so on a free CPU runner the budget goes to the
 # 100 matched random-feature controls and the CLIP ViT-B/16 labeller. Hooking block 10 of 12
-# keeps the edited forwards short and a 192-feature SAE keeps training under 15 s. It still
+# keeps the edited forwards short and a 64-feature SAE keeps both SAE trainings short. It still
 # exercises every stage on real weights: Hub download, preprocessor, capture, SAE, CLIP
 # labels, scoring with its random-init control, the schema, and one playground edit.
 REAL_SMOKE_MODEL = "facebook/deit-tiny-patch16-224"
@@ -316,7 +334,7 @@ def test_real_deit_tiny_smoke(tmp_path):
         app,
         [
             "run", "hf", "--model", REAL_SMOKE_MODEL, "--clips", str(clips), "--out", str(out),
-            "--layer", "10", "--sae-features", "192", "--prefilter", "4", "--no-serve",
+            "--layer", "10", "--sae-features", "64", "--prefilter", "4", "--no-serve",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -330,9 +348,9 @@ def test_real_deit_tiny_smoke(tmp_path):
     assert numbers and all(math.isfinite(value) for value in numbers), sae
     # Real weights: the SAE splice must keep most of the model's output, unlike zeroing the layer.
     assert sae["loss_recovered"] > 0.5, sae
-    assert json.loads((out / "sae" / "config.json").read_text(encoding="utf-8"))["n_features"] == 192
+    assert json.loads((out / "sae" / "config.json").read_text(encoding="utf-8"))["n_features"] == 64
     features = [json.loads(line) for line in (out / "features" / "features.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert len(features) == 192
+    assert len(features) == 64
     assert {feature.get("label_model") for feature in features} == {CLIP_LABEL_MODEL}
 
     steerer = Steerer(out, clips)

@@ -153,9 +153,17 @@ class HFAdapter:
             torch.manual_seed(0)
             model = _with_fast_attention(lambda attn: AutoModel.from_config(config, attn_implementation=attn))
         else:
-            model = _with_fast_attention(
-                lambda attn: AutoModel.from_pretrained(self.model_name, attn_implementation=attn, dtype=torch.float32)
-            )
+            # A checkpoint can lack some of the backbone's weights: an ImageNet
+            # classifier (DeiT, ViT) loaded as AutoModel has a classifier head but
+            # no pooler. transformers initialises what is missing at random, so
+            # without a fixed seed every load gets a different model_sha and the
+            # playground and explain refuse the run. Fork the RNG so this does
+            # not reseed the caller.
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(0)
+                model = _with_fast_attention(
+                    lambda attn: AutoModel.from_pretrained(self.model_name, attn_implementation=attn, dtype=torch.float32)
+                )
         model = model.to(device=self.device, dtype=torch.float32).eval()
         model.requires_grad_(False)
         self.model = model
