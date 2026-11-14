@@ -66,7 +66,7 @@ These are estimates from list prices. Plans, free credits and region multipliers
 
 Ctrl-C stops the Modal app, which stops the container and its billing. `remote.json` then says `interrupted`.
 
-Things that save money: clips are uploaded once per content (a second run on the same clips uploads nothing), Hugging Face weights are cached on the Volume, and a rerun into the same `--out` resumes on the Volume and skips every stage that is still valid, exactly like a local rerun.
+Things that save money: clips are uploaded once per content (a second run on the same clips uploads nothing), Hugging Face weights are cached on the Volume, a rerun into the same `--out` resumes on the Volume and skips every stage that is still valid, exactly like a local rerun, and the activation cache (`ii cache`) lives on the Volume too, so a remote run with a new seed, split, SAE size or `--out` reads captured layers instead of running the model again. `--no-cache` bypasses it, as it does locally.
 
 ## Where things live
 
@@ -75,6 +75,7 @@ Things that save money: clips are uploaded once per content (a second run on the
 | Volume `clips/<key>/` | Uploaded clips, keyed by the sha256 of every file. |
 | Volume `runs/<key>/<run_id>/` | The remote run folder. `<key>` comes from the absolute path of your `--out`, stored in `remote.json`. |
 | Volume `hf-cache/` | Hugging Face downloads. |
+| Volume `acts-cache/` | The activation cache, capped like the local one (`II_ACTS_CACHE_MAX_GB`, default 20 GB). |
 | Your `--out` | A mirror of the remote run folder, plus `remote.json`. |
 
 The local folder holds every contract file (`ii validate` passes on it) but not the `acts/stream/` resume caches, which are large and rebuilt on demand. The manifest's `clips_dir` points at your local clips, so `ii view runs/<run_id>`, `ii view --steer` and `ii explain` work on the mirror like on any run. A local `ii run` into the same folder would rebuild the caches and redo the work locally; to keep resuming remotely, keep passing `--remote`.

@@ -210,6 +210,13 @@ def run(
     host: Annotated[str, typer.Option("--host", help="Viewer interface.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Viewer port. 0 chooses a free port.")] = 0,
     no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+    no_cache: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache",
+            help="Run every forward pass even when the activation cache has it (see `ii cache`). Nothing is read from or written to the cache.",
+        ),
+    ] = False,
     remote: Annotated[
         bool,
         typer.Option(
@@ -270,6 +277,7 @@ def run(
                 open_browser=not no_open,
                 gpu=gpu or DEFAULT_GPU,
                 max_cost=DEFAULT_MAX_COST if max_cost is None else max_cost,
+                use_cache=not no_cache,
                 log=typer.echo,
             )
             return
@@ -293,6 +301,7 @@ def run(
             host=host,
             port=port,
             open_browser=not no_open,
+            use_cache=not no_cache,
             log=typer.echo,
         )
     except RemoteSetupError as exc:
@@ -301,6 +310,45 @@ def run(
     except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+@app.command("cache")
+def cache_cmd(
+    clear: Annotated[bool, typer.Option("--clear", help="Delete every cached activation.")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the summary as JSON.")] = False,
+) -> None:
+    """Show (or clear) the activation cache that lets reruns and the playground skip forward passes.
+
+    Entries are keyed by model weights, layer, clip hash, window and preprocessing, so a stale
+    entry is never read. Set II_ACTS_CACHE to move the cache, or II_ACTS_CACHE=off to disable it.
+    The size is capped at II_ACTS_CACHE_MAX_GB (default 20, 0 for no cap); the least recently
+    used windows are deleted first.
+    """
+    from interpretableintelligence.act_cache import cache_usage, clear_cache, resolve_max_bytes, resolve_root
+
+    root = resolve_root()
+    try:
+        cap = resolve_max_bytes()
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if clear:
+        removed = clear_cache(root)
+        typer.echo(f"removed {removed} cached window(s) from {root}" if root is not None else "activation cache off")
+        return
+    usage = cache_usage(root)
+    usage["max_bytes"] = cap
+    if as_json:
+        typer.echo(json.dumps(usage, indent=2))
+        return
+    if root is None:
+        typer.echo("activation cache off (II_ACTS_CACHE=off)")
+        return
+    typer.echo(f"activation cache: {root}")
+    for kind, info in usage["kinds"].items():
+        typer.echo(f"  {kind:<6} {info['entries']:>7} window(s)  {info['bytes'] / 1e6:10.1f} MB")
+    typer.echo(f"  total  {usage['entries']:>7} window(s)  {usage['bytes'] / 1e6:10.1f} MB")
+    typer.echo(f"  cap    {'none' if cap is None else f'{cap / 1e9:g} GB'} (II_ACTS_CACHE_MAX_GB; least recently used windows go first)")
 
 
 @app.command()

@@ -59,7 +59,7 @@ Two optional manifest fields are not part of the contract readers must understan
 
 `remote.json` is written by `ii run --remote` next to a run it mirrored: where the run executed, the price per hour it was estimated at, the `--max-cost` cap, timings, status, and the estimated cost. No reader depends on it, and it is not part of the contract (`docs/REMOTE.md`).
 
-`acts/stream/` is a float32 row cache the pipeline uses to resume training and encoding without loading every shard. It is not part of the contract. Shards remain the activation record.
+`acts/stream/` is a float32 row cache the pipeline uses to resume training and encoding without loading every shard. It is not part of the contract. Shards remain the activation record. The shared activation cache (`interpretableintelligence cache`) lives outside run folders and is not part of the contract either.
 
 ## split.json
 

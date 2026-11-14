@@ -6,7 +6,9 @@ One Volume, ``interpretableintelligence``, holds everything the container keeps 
   clips uploads nothing,
 - ``runs/<key>/<run_id>/``: run folders. A rerun into the same local ``--out`` resumes here and
   skips the stages that are already valid, exactly like a local rerun,
-- ``hf-cache/``: Hugging Face weights, so a model is downloaded (and paid for) once.
+- ``hf-cache/``: Hugging Face weights, so a model is downloaded (and paid for) once,
+- ``acts-cache/``: the shared activation cache (``act_cache``, ``ii cache``), so a remote rerun
+  with a new seed, split or SAE size skips the GPU forward passes. Its usual size cap applies.
 
 The image installs the same dependencies as ``pyproject.toml`` (CUDA PyTorch from PyPI) and
 mounts this package's source, so local edits reach the container without a rebuild. GR00T gets
@@ -33,7 +35,7 @@ def _image(extra: tuple[str, ...] = ()) -> modal.Image:
     return (
         modal.Image.debian_slim(python_version=PYTHON_VERSION)
         .uv_pip_install(*RUNTIME_DEPENDENCIES, *extra)
-        .env({"HF_HOME": f"{VOLUME_ROOT}/hf-cache", "PYTHONUNBUFFERED": "1"})
+        .env({"HF_HOME": f"{VOLUME_ROOT}/hf-cache", "II_ACTS_CACHE": f"{VOLUME_ROOT}/acts-cache", "PYTHONUNBUFFERED": "1"})
         .add_local_python_source("interpretableintelligence")
     )
 

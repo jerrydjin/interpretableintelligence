@@ -228,6 +228,7 @@ def execute_remote(
     open_browser: bool = False,
     gpu: str = "L4",
     max_cost: float = 2.0,
+    use_cache: bool = True,
     backend=None,
     wait: bool = True,
     log=print,
@@ -283,6 +284,7 @@ def execute_remote(
         "sae_features": sae_features,
         "concepts_text": None if concepts_file is None else Path(concepts_file).read_text(encoding="utf-8"),
         "score": bool(score),
+        "use_cache": bool(use_cache),
         "local_clips_dir": str(clips_dir),
     }
     prefix = run_path(Path(""), run_key, request["run_name"]).as_posix()

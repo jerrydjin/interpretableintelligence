@@ -124,6 +124,7 @@ def run_events(request: dict, root: Path, commit: Callable[[], None] | None = No
                 sae_features=request.get("sae_features"),
                 concepts_file=concepts_file,
                 score=bool(request.get("score", True)),
+                use_cache=bool(request.get("use_cache", True)),
                 serve=False,
                 open_browser=False,
                 log=log,
