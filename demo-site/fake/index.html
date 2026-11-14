@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
-  <title>Fake demo · interpretableintelligence</title>
+  <title>Pipeline demo (synthetic) · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
-  <nav class="demo-bar" aria-label="Demo sections"><a class="demo-home" href="/">Demo</a><a href="/fake/" aria-current="page">Fake</a><a href="/picker/">Picker</a><a href="/vjepa/">V-JEPA 2</a><a href="/groot/">GR00T</a></nav>
+  <nav class="demo-bar" aria-label="Demo sections"><a class="demo-home" href="/">Home</a><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/" aria-current="page">Pipeline demo</a></nav>
   <header class="top" data-testid="run-header">
     <div class="brand-row">
       <a class="wordmark" href="#/" aria-label="interpretable intelligence">
@@ -36,6 +36,7 @@
       </button>
     </div>
   </header>
+  <p class="score-line" data-testid="synthetic-banner"><span class="badge badge-unverified">Synthetic</span> Pipeline demo on 30 generated clips with planted features. It shows the pipeline end to end; it is not a result on a real model.</p>
   <p class="score-line" data-testid="score-line">Scoreboard: stripe, pulse, corner are real. flicker, band, speckle are not.</p>
   <main id="app"></main>
   <script src="/static/guide.js"></script>
