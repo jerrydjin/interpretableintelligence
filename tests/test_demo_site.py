@@ -48,7 +48,7 @@ def test_demo_site_references_exist():
     for page in pages:
         refs = _html_refs(page) if page.suffix == ".html" else _css_refs(page.read_text(encoding="utf-8"))
         for ref in refs:
-            target = _resolve(page, ref)
+            target = _resolve(page, ref.split("#", 1)[0])
             if target is None:
                 continue
             if target.is_dir():
@@ -126,3 +126,65 @@ def test_groot_page_reads_the_ablation_summary():
     assert summary["real"] is False
     assert "real=false" in page
     assert "The test was whether switching a feature off raises success." in page
+
+
+def _repo() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _text(html: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+
+
+def test_home_puts_real_results_above_the_synthetic_demos():
+    page = (ROOT / "index.html").read_text(encoding="utf-8")
+    real = page.index('data-testid="real-sections"')
+    synthetic = page.index('data-testid="synthetic-sections"')
+    assert real < synthetic
+    main = page[page.index("<main"):]
+    assert main.index('href="/groot/"') < main.index('data-testid="synthetic-sections"')
+    assert page[synthetic:].count('href="/fake/"') == main.count('href="/fake/"') == 1
+    assert page[synthetic:].count('href="/picker/"') == main.count('href="/picker/"') == 1
+    nav = re.search(r'<nav class="nav">(.*?)</nav>', page).group(1)
+    assert nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
+    fake = (ROOT / "fake" / "index.html").read_text(encoding="utf-8")
+    assert 'data-testid="synthetic-banner"' in fake
+    assert "not a result on a real model" in fake
+
+
+def test_groot_method_checks_come_from_the_vendored_files():
+    groot = _repo() / "demo-data" / "groot"
+    recon = json.loads((groot / "recon-only-summary.json").read_text(encoding="utf-8"))["recon_check"]
+    sae = json.loads((groot / "sae-heldout-eval.json").read_text(encoding="utf-8"))
+    text = _text((ROOT / "groot" / "index.html").read_text(encoding="utf-8"))
+    assert (
+        f"Actions were identical to baseline in {recon['n_identical_actions']} of "
+        f"{recon['n_compared_with_baseline']} shared-seed episodes"
+    ) in text
+    assert recon["n_identical_actions"] == recon["n_compared_with_baseline"] == 8
+    assert f"Held-out explained variance {sae['heldout']['ev_raw']:.3f}" in text
+    assert sae["loss_recovered"] is None and "loss_recovered: not measured" in text
+    notes = (_repo() / "src/interpretableintelligence/adapters/groot/v9/V9_NOTES.md").read_text(encoding="utf-8")
+    assert "in 37 of 40 cases" in notes and "in 37 of 40 cases" in text
+    summary = json.loads((groot / "groot-1028-ablate-summary.json").read_text(encoding="utf-8"))
+    for row in summary["table"]:
+        assert f"{row['cond']} {row['successes']}/{row['n']}" in text
+    assert "cause" not in text.lower()
+
+
+def test_vjepa_random_control_and_attribution_come_from_the_vendored_files():
+    repo = _repo()
+    trained = json.loads((repo / "demo-data/vjepa-randinit/score-trained.json").read_text(encoding="utf-8"))
+    random = json.loads((repo / "demo-data/vjepa-randinit/score-randinit.json").read_text(encoding="utf-8"))
+    atp = json.loads((repo / "demo-data/vjepa-atp/summary.json").read_text(encoding="utf-8"))
+    text = _text((ROOT / "vjepa" / "index.html").read_text(encoding="utf-8"))
+    assert (
+        f"loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}" in text
+    )
+    assert random["loss_recovered"] > trained["loss_recovered"]
+    rho = atp["correlations"]["|dL1| vs |AtP_dL1|"]["per_feature_mean"]["spearman"]
+    assert f"Spearman between |attribution| and |ablation effect|, per feature: {rho:.3f}" in text
+    edit = atp["baseline_edit_size"]["spearman_feat_absdL1_vs_act_sum"]
+    assert f"edit size alone (summed activation) already gives Spearman {edit:.2f}" in text
+    assert f"{int(round(atp['timing']['speedup_if_ranking_all_8192'], -2)):,}x" in text
+    assert f"{atp['timing']['speedup_tested_features_only']:.1f}x" in text

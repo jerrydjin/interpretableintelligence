@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
-  <title>Demo · interpretableintelligence</title>
+  <title>Results · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
   <link rel="icon" href="/favicon.ico">
@@ -16,17 +16,22 @@
         <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
         <span class="wordmark-text">interpretable intelligence</span>
       </a>
-      <nav class="nav"><a href="/fake/">Fake</a><a href="/picker/">Picker</a><a href="/vjepa/">V-JEPA 2</a><a href="/groot/">GR00T</a></nav>
+      <nav class="nav"><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
     </div>
   </header>
   <main class="prose">
-    <h1>Demo</h1>
-    <p class="lede"><b>Four sections.</b> The fake run is a working viewer. The other three are the measurements on disk, or a section that has no validated run.</p>
-    <ul class="section-list">
-      <li><a href="/fake/"><span class="section-name">Fake demo</span><span class="section-text">30 synthetic clips, layer 16, seed 0, held-out fraction 0.2. The scoreboard is the source of <span class="badge badge-real">real</span>.</span></a></li>
-      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text">Synthetic rollouts. Counts from the rerun of the picker scripts.</span></a></li>
-      <li><a href="/vjepa/"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">Held-out <code>droid_ep068.mp4</code>, window 0, then feature 270.</span></a></li>
-      <li><a href="/groot/"><span class="section-name">GR00T N1.7 on LIBERO</span><span class="section-text"><span class="badge badge-unverified">Tested: no causal effect found</span></span></a></li>
+    <h1>Results</h1>
+    <p class="lede"><b>What we measured on real robot models, and the controls that decide what counts.</b> Every number on these pages is read from a result file in the repo. A feature is called real only when it passes the scoreboard rule. The synthetic demos are at the bottom and labelled.</p>
+    <ul class="section-list" data-testid="real-sections">
+      <li><a href="/groot/"><span class="section-name">GR00T N1.7 on LIBERO</span><span class="section-text">641 rollouts. Switching off the picker's two candidates lowered success, but 5 of 20 random controls did too, so the drop is not specific to them. <span class="badge badge-unverified">Tested: no causal effect found</span></span></a></li>
+      <li><a href="/groot/#checks"><span class="section-name">Method checks</span><span class="section-text">Reconstruction-only rollouts identical to baseline in 8 of 8. SAE held-out explained variance 0.998. Failure onset re-derived from pot 0.</span></a></li>
+      <li><a href="/vjepa/#random-control"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">An SAE on a random-weights V-JEPA 2 scored higher on the loss-based checks than the trained model (loss_recovered 0.9999 vs 0.9795). Those scores cannot tell trained from random, so the random-weights control is now the bar.</span></a></li>
+      <li><a href="/vjepa/#atp"><span class="section-name">Attribution vs ablation</span><span class="section-text">On 40 V-JEPA 2 features, attribution ranks features the way measured ablation does (Spearman 0.987) at about 3,900x less compute across all 8192 latents. Edit size alone gets 0.90.</span></a></li>
+    </ul>
+    <h2>Synthetic demos</h2>
+    <ul class="section-list" data-testid="synthetic-sections">
+      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer.</span></a></li>
+      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> 30 generated clips with planted features, layer 16, seed 0, held-out fraction 0.2. Shows the viewer end to end.</span></a></li>
     </ul>
     </main>
 </body>
