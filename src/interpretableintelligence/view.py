@@ -444,10 +444,29 @@ def serve_run(
     model = load_run(Path(run_dir), None if clips_dir is None else Path(clips_dir))
     if steer:
         enable_steering(model, None if clips_dir is None else Path(clips_dir))
+    serve_model(model, host=host, port=port, open_browser=open_browser)
+
+
+def serve_model(
+    model: RunModel,
+    host: str = "127.0.0.1",
+    port: int = 7860,
+    open_browser: bool = True,
+    fragment: str = "",
+    announce=None,
+) -> None:
+    """Serve an already loaded run until interrupted.
+
+    ``fragment`` is a viewer route such as ``#/clips/clip-001?frame=4&feature=2``, opened in the
+    browser so the page starts somewhere useful. ``announce(url)`` replaces the default banner.
+    """
     httpd = bind_server(model, host, port)
     bound_host, bound_port = httpd.server_address[:2]
-    url = f"http://{bound_host}:{bound_port}/"
-    print(f"interpretableintelligence view  {url}", flush=True)
+    url = f"http://{bound_host}:{bound_port}/{fragment}"
+    if announce is None:
+        print(f"interpretableintelligence view  {url}", flush=True)
+    else:
+        announce(url)
     if open_browser:
         try:
             webbrowser.open(url)

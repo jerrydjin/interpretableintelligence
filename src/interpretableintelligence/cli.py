@@ -48,6 +48,28 @@ def main(
     """Shared run format and scoring core."""
 
 
+@app.command("try")
+def try_cmd(
+    out: Annotated[Path, typer.Option("--out", help="Run folder for the practice run.")] = Path("runs/try"),
+    clips: Annotated[Path, typer.Option("--clips", help="Where to write the practice clips.")] = Path("clips/try"),
+    host: Annotated[str, typer.Option("--host", help="Viewer interface.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Viewer port. 0 chooses a free port.")] = 0,
+    no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show the full pipeline log.")] = False,
+) -> None:
+    """New here? Start with this. Finds features in a small practice model and opens the playground.
+
+    No download and no setup. Takes about 15 seconds the first time and a couple of seconds after.
+    """
+    from interpretableintelligence.first_run import guided_run
+
+    try:
+        guided_run(out, clips, host=host, port=port, open_browser=not no_open, verbose=verbose, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
 @app.command("generate-clips")
 def generate_clips_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write synthetic clips into.")],
