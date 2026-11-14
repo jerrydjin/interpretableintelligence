@@ -498,8 +498,8 @@ function isoTerrain(rows) {
   const y0 = lift + 2;
   const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
   const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
-  const base = [233, 230, 221];
-  const hot = [242, 84, 27];
+  const base = [222, 218, 205];
+  const hot = [232, 88, 42];
   const parts = [];
   for (let s = 0; s < w + h - 1; s += 1) {
     for (let r = 0; r < h; r += 1) {
