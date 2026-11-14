@@ -751,7 +751,10 @@ function placeCrop(clip) {
   const hw = clip.hw;
   const crop = clip.crop;
   const known = hw && hw[0] > 0 && hw[1] > 0 && crop && crop.width > 0 && crop.height > 0;
-  if (!known) {
+  // Action tokens (GR00T) are steps in time, not places in the frame: draw them as a strip.
+  heat.dataset.layout = clip.layout === "actions" ? "actions" : "patches";
+  heat.title = clip.layout === "actions" ? "Robot state, then each planned action step, now → later" : "";
+  if (!known || clip.layout === "actions") {
     heat.style.left = "0";
     heat.style.top = "0";
     heat.style.width = "100%";
@@ -1054,7 +1057,7 @@ function paintSteer() {
       el("strong", {}, fmtSmall(sum.loss_clean)),
       " to ",
       el("strong", {}, fmtSmall(sum.loss_edited)),
-      `. The feature fired on ${sum.tokens_where_feature_fired} of ${sum.tokens_total} patches in this window.`,
+      `. The feature fired on ${sum.tokens_where_feature_fired} of ${sum.tokens_total} ${state.clip?.layout === "actions" ? "tokens" : "patches"} in this window.`,
     ]),
   );
   if (!steerResultHere()) box.append(el("p", { class: "steer-warn" }, "This frame is in another window. Steer again to see it here."));

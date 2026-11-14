@@ -83,8 +83,20 @@ def generate_clips_cmd(
     typer.echo(f"wrote {n} clips to {out}")
 
 
-def _adapter_name(adapter: str, model: str | None, blocks: str | None) -> str:
-    """``hf`` plus ``--model``/``--blocks`` becomes the self-describing ``hf:<model>[#<blocks>]`` name."""
+def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
+    """``hf`` plus ``--model``/``--blocks`` becomes the self-describing ``hf:<model>[#<blocks>]`` name.
+
+    ``groot`` becomes ``groot:<checkpoint>`` (``--model``, default the LIBERO checkpoint), or
+    ``groot:tiny`` with ``--tiny``.
+    """
+    if adapter == "groot":
+        from interpretableintelligence.adapters.groot.adapter import make_spec as groot_spec
+
+        if blocks:
+            raise ValueError("--blocks only applies to the hf adapter")
+        if model and Path(model).expanduser().is_dir():
+            model = str(Path(model).expanduser().resolve())
+        return groot_spec(model, tiny=tiny)
     if adapter == "hf":
         from interpretableintelligence.adapters.hf import make_spec
 
@@ -95,11 +107,15 @@ def _adapter_name(adapter: str, model: str | None, blocks: str | None) -> str:
             model = str(local.resolve())  # explain and the playground reload it from any cwd
         return make_spec(model, blocks)
     if model or blocks:
-        raise ValueError("--model and --blocks only apply to the hf adapter")
+        raise ValueError("--model and --blocks only apply to the hf and groot adapters")
     return adapter
 
 
 def _default_layer(adapter: str) -> int:
+    if adapter.startswith("groot:"):
+        from interpretableintelligence.adapters.groot.adapter import DEFAULT_LAYER as GROOT_LAYER
+
+        return GROOT_LAYER
     if adapter.startswith("hf:"):
         from interpretableintelligence.adapters.hf import middle_block
 
@@ -111,13 +127,17 @@ def _default_layer(adapter: str) -> int:
 def run(
     adapter: Annotated[
         str,
-        typer.Argument(help="Adapter: fake, vjepa2, or hf (any Hugging Face vision model; pass --model)."),
+        typer.Argument(help="Adapter: fake, vjepa2, hf (any Hugging Face vision model; pass --model), or groot (NVIDIA GR00T N1.7)."),
     ],
     clips: Annotated[Path, typer.Option("--clips", exists=True, file_okay=False, help="Clip directory.")],
     out: Annotated[Path, typer.Option("--out", help="Run folder, e.g. runs/demo.")],
     model: Annotated[
         str | None,
-        typer.Option("--model", help="hf only: Hugging Face model id or local directory, e.g. facebook/dinov2-small."),
+        typer.Option(
+            "--model",
+            help="hf: Hugging Face model id or local directory, e.g. facebook/dinov2-small. "
+            "groot: LeRobot GR00T checkpoint (default nvidia/gr00t17-lerobot-libero_10-640).",
+        ),
     ] = None,
     blocks: Annotated[
         str | None,
@@ -125,7 +145,7 @@ def run(
     ] = None,
     layer: Annotated[
         int | None,
-        typer.Option("--layer", min=0, help=f"Layer to instrument. Default {DEFAULT_LAYER}; for hf, the middle block."),
+        typer.Option("--layer", min=0, help=f"Layer to instrument. Default {DEFAULT_LAYER}; for hf, the middle block; for groot, DiT block 5."),
     ] = None,
     seed: Annotated[int, typer.Option("--seed", help="Split, SAE, and random-feature seed.")] = DEFAULT_SEED,
     heldout_frac: Annotated[
@@ -168,7 +188,8 @@ def run(
         bool,
         typer.Option(
             "--tiny",
-            help="V-JEPA 2 CPU smoke path: tiny random config, no weight download. Pass --layer 1.",
+            help="CPU smoke path, no weight download. vjepa2: tiny random config (pass --layer 1). "
+            "groot: a GR00T-shaped random network (not GR00T).",
         ),
     ] = False,
     gpu_cost_per_hour: Annotated[
@@ -199,7 +220,9 @@ def run(
 
     modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
     try:
-        adapter = _adapter_name(adapter, model, blocks)
+        adapter = _adapter_name(adapter, model, blocks, tiny=tiny)
+        if adapter.startswith("groot:"):
+            tiny = False  # groot:tiny names the stand-in itself, so the run folder can rebuild it
         layer = _default_layer(adapter) if layer is None else layer
         execute_pipeline(
             adapter_name=adapter,

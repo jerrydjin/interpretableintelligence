@@ -226,6 +226,13 @@ button, input { font: inherit; color: inherit; }
   pointer-events: none;
 }
 
+.heatmap[data-layout="actions"] {
+  top: auto !important;
+  bottom: 0;
+  height: 14% !important;
+  background: rgba(12, 10, 8, 0.55);
+}
+
 .heat-cell {
   min-width: 0;
   min-height: 0;

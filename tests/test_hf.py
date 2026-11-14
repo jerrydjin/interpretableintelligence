@@ -275,7 +275,7 @@ def test_cli_rejects_hf_without_model_and_model_without_hf(tmp_path):
     missing = runner.invoke(app, ["run", "hf", "--clips", str(clips), "--out", str(tmp_path / "r"), "--no-serve"])
     assert missing.exit_code == 1 and "--model" in missing.output
     stray = runner.invoke(app, ["run", "fake", "--model", "x", "--clips", str(clips), "--out", str(tmp_path / "r"), "--no-serve"])
-    assert stray.exit_code == 1 and "only apply to the hf adapter" in stray.output
+    assert stray.exit_code == 1 and "only apply to the hf" in stray.output
 
 
 @pytest.mark.slow
