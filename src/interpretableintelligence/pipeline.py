@@ -38,7 +38,6 @@ from interpretableintelligence.artifacts import (
 )
 from interpretableintelligence.attribute import (
     PREDICTION_LOSS,
-    attribution_by_clip,
     candidates_document,
     rank_feature_ids,
     summarize_attribution,
@@ -265,7 +264,9 @@ def execute_pipeline(
         log("run capture")
         _invalidate(out, "capture")
         with _measure(device) as measured:
-            rows = _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, capture_inputs, clips_dir)
+            rows = _capture(
+                adapter, meta, out, layer, seed, heldout_frac, model_sha, capture_inputs, clips_dir, log=log
+            )
             measured["rows"] = rows
             measured["tokens"] = rows
         _record_stage(out, "capture", measured["metrics"])
@@ -398,11 +399,32 @@ def _report(manifest: dict, gpu_cost_per_hour: float | None) -> dict:
     return report
 
 
-def _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, clips_dir: Path) -> int:
+def _progress(log, stage: str, done: int, total: int, started: float) -> None:
+    """Log ``done/total`` about every tenth of the way (and at the end) with a time estimate."""
+    if log is None or total < 10:
+        return
+    step = max(total // 10, 1)
+    if done % step and done != total:
+        return
+    elapsed = time.perf_counter() - started
+    left = elapsed / done * (total - done)
+    tail = f", about {_duration(left)} left" if done < total else f" in {_duration(elapsed)}"
+    log(f"{stage}: {done}/{total} clips{tail}")
+
+
+def _duration(seconds: float) -> str:
+    seconds = max(float(seconds), 0.0)
+    if seconds < 90:
+        return f"{seconds:.0f}s"
+    return f"{seconds / 60:.0f} min"
+
+
+def _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, clips_dir: Path, log=None) -> int:
     split = assign_split([item["clip_id"] for item in meta], int(seed), float(heldout_frac))
     membership = split.membership()
     grid = adapter.grid()
     expected_windows: list[int] | None = None
+    started = time.perf_counter()
     with ActivationWriter(out / "acts", int(adapter.d_model)) as writer:
         for clip_index, item in enumerate(meta):
             clip = load_clip(item)
@@ -431,6 +453,7 @@ def _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, c
             finally:
                 _clear_cache(adapter)
                 del clip
+            _progress(log, "capture", clip_index + 1, len(meta), started)
         store_meta = writer.finish()
     if not cache_matches_layout(out / "acts", len(meta), grid.as_dict()):
         raise RuntimeError("captured rows are not a rectangular token grid")
@@ -681,26 +704,25 @@ def _score(
     )
 
     _clear_cache(adapter)
-    attribution_started = time.perf_counter()
-    # One decoded clip at a time: a long episode is hundreds of MB as float32 frames.
-    by_clip = attribution_by_clip(adapter, model, (load_clip(item) for item in meta), objective=PREDICTION_LOSS)
-    attribution_seconds = time.perf_counter() - attribution_started
-    _clear_cache(adapter)
-    attr_rows, mean_scores = summarize_attribution(by_clip)
-    ranked_ids = rank_feature_ids(mean_scores)
-    if prefilter is None:
-        selected = None
-        reported_k = min(DEFAULT_PREFILTER_K, n_features)
-    else:
-        reported_k = min(int(prefilter), n_features)
-        selected = set(ranked_ids[:reported_k])
-        log(f"prefilter K={reported_k}  candidates={ranked_ids[:reported_k]}")
-
     top_k = min(TOP_K_ABLATION_PER_CLIP, n_features)
     effects_path = out / "features" / "clip_effects.parquet"
     effect_writer = _ColumnBatch(effects_path, _EFFECT_SCHEMA)
     try:
-        rank = _estimate_rows(adapter, model, meta, effect_writer, n_features)
+        # One backward pass per window gives both the per-cell effect estimates and the
+        # prediction-loss attribution that picks which features to ablate.
+        attribution_started = time.perf_counter()
+        rank, by_clip = _estimate_rows(adapter, model, meta, effect_writer, n_features, log=log)
+        attribution_seconds = time.perf_counter() - attribution_started
+        _clear_cache(adapter)
+        attr_rows, mean_scores = summarize_attribution(by_clip)
+        ranked_ids = rank_feature_ids(mean_scores)
+        if prefilter is None:
+            selected = None
+            reported_k = min(DEFAULT_PREFILTER_K, n_features)
+        else:
+            reported_k = min(int(prefilter), n_features)
+            selected = set(ranked_ids[:reported_k])
+            log(f"prefilter K={reported_k}  candidates={ranked_ids[:reported_k]}")
         chosen = {
             clip_id: [int(index) for index in np.argsort(-np.asarray(scores), kind="stable")[:top_k]]
             for clip_id, scores in rank.items()
@@ -715,6 +737,7 @@ def _score(
             n_features,
             effect_writer,
             only=selected,
+            log=log,
         )
         ablation_seconds = time.perf_counter() - ablation_started
         if extra_effects:
@@ -743,6 +766,7 @@ def _score(
         jsonl = []
         real_labels = []
         control_seconds = 0.0
+        controls_done = 0
         for feature_id in range(n_features):
             info = stats["features"][feature_id]
             labelled = labels[feature_id]
@@ -757,6 +781,12 @@ def _score(
                 else:
                     effect = float(held_total[feature_id] / held_count[feature_id])
                 started_controls = time.perf_counter()
+                controls_done += 1
+                if selected is not None:
+                    log(
+                        f"score: {N_RANDOM_FEATURES} random controls for feature {feature_id} "
+                        f"({controls_done}/{len(selected)})"
+                    )
                 fires = _fire_values(connection, fire_source, feature_id)
                 percentile = _random_percentile(
                     adapter=adapter,
@@ -808,6 +838,8 @@ def _score(
             )
             if real:
                 real_labels.append(labelled["label"])
+            if not measured and not real:
+                continue
             pct_text = f"{float(percentile):6.1f}" if percentile is not None else "     -"
             abl_text = f"{effect:.5f}" if effect is not None else "skipped"
             log(
@@ -1035,15 +1067,26 @@ def _correlate(
     return labels, absent
 
 
-def _estimate_rows(adapter, sae, meta, writer: "_ColumnBatch", n_features: int) -> dict[str, np.ndarray]:
+def _estimate_rows(
+    adapter, sae, meta, writer: "_ColumnBatch", n_features: int, log=None
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Write per-cell effect estimates. Returns per-clip ranking scores (mean |effect|) and the
+    per-clip prediction-loss attribution (summed effect), from the same backward passes."""
     scores: dict[str, np.ndarray] = {}
-    for item in meta:
+    attribution: dict[str, np.ndarray] = {}
+    started = time.perf_counter()
+    for done, item in enumerate(meta, start=1):
 
         def visit(clip, item=item):
             acc = np.zeros(n_features, dtype=np.float64)
-            for window in adapter.windows(clip):
-                effect = estimate_effects(adapter, sae, clip, window).detach().cpu()
+            total = np.zeros(n_features, dtype=np.float64)
+            windows = adapter.windows(clip)
+            if not windows:
+                raise RuntimeError(f"{clip.clip_id} has no windows")
+            for window in windows:
+                effect = estimate_effects(adapter, sae, clip, window, objective=PREDICTION_LOSS).detach().cpu()
                 acc += effect.abs().mean(dim=(0, 1, 2)).numpy()
+                total += np.asarray(effect.numpy(), dtype=np.float64).reshape(-1, n_features).sum(axis=0)
                 frame = effect.mean(dim=(1, 2)).numpy()
                 for t_index in range(int(frame.shape[0])):
                     width = n_features
@@ -1056,9 +1099,11 @@ def _estimate_rows(adapter, sae, meta, writer: "_ColumnBatch", n_features: int) 
                         effect_kind=["estimate"] * width,
                     )
             scores[clip.clip_id] = acc
+            attribution[clip.clip_id] = total
 
         _with_clip(adapter, item, visit)
-    return scores
+        _progress(log, "score: attribution", done, len(meta), started)
+    return scores, attribution
 
 
 def _ablation_rows(
@@ -1070,10 +1115,12 @@ def _ablation_rows(
     n_features: int,
     writer: "_ColumnBatch",
     only: set[int] | None = None,
+    log=None,
 ):
     held_total = np.zeros(n_features, dtype=np.float64)
     held_count = np.zeros(n_features, dtype=np.int64)
-    for item in meta:
+    started = time.perf_counter()
+    for done, item in enumerate(meta, start=1):
         top = set(chosen[item["clip_id"]])
         heldout = membership[item["clip_id"]]["split"] == "heldout"
         if only is None:
@@ -1115,6 +1162,7 @@ def _ablation_rows(
                         )
 
         _with_clip(adapter, item, visit)
+        _progress(log, "score: ablations", done, len(meta), started)
     return held_total, held_count
 
 

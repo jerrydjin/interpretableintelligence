@@ -21,7 +21,16 @@ uv run ii try
 
 `ii try` writes 30 practice clips to `clips/try`, runs the whole pipeline on the `fake` model into `runs/try` (about 15 seconds on a laptop), and opens the viewer with the playground on. The page starts on the verified feature with the biggest effect, at the held-out moment where it fires hardest, and the terminal suggests what to try first: remove that feature, then remove a decoy and compare. The practice model has three features planted on purpose, so you can check what the tool finds against the truth before you point it at a real model. A second `ii try` reuses the run and opens in a couple of seconds. `--no-open` skips the browser and `--verbose` prints the full pipeline log.
 
-The rest of this section is the same pipeline step by step.
+Then try a real model on real video. You do not need clips of your own:
+
+```bash
+uv run ii get-clips --out clips/droid          # 100 short robot clips from DROID (MIT), one 175 MB download
+uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid
+```
+
+`ii get-clips` cuts a 4-second mp4 from the middle of each of the 100 episodes in [`lerobot/droid_100`](https://huggingface.co/datasets/lerobot/droid_100), real robot arms in real kitchens and offices, and keeps each episode's instruction in `clips/droid/clips.json`. `--n` and `--seconds` take fewer or longer clips. Any folder of your own mp4s works in its place.
+
+The rest of this section is the fake pipeline step by step.
 
 ```bash
 uv sync

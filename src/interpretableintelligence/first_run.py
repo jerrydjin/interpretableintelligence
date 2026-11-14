@@ -207,7 +207,7 @@ def guided_run(
             say("The coloured squares on the video show where it fires.")
         say("Things to try:")
         say(
-            "  1. In the playground under the video, choose Remove and press Steer. The blue"
+            "  1. In the playground under the video, Remove is already chosen: press Steer. The blue"
         )
         say(
             "     squares show where the model's prediction moved without that feature."
@@ -220,10 +220,12 @@ def guided_run(
         )
         say("  3. Open 'Features' to see every feature and the checks each one passed.")
         say("")
-        say("When you are ready for a real model, bring your own clips:")
+        say("When you are ready for a real model, try one on real robot video (no clips needed):")
+        say("  ii get-clips --out clips/droid")
         say(
-            "  ii run hf --model facebook/dinov2-small --clips <your clips folder> --out runs/mine"
+            "  ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid"
         )
+        say("Or point --clips at a folder of your own mp4s.")
         say("")
         say("Press Ctrl+C to stop.")
 

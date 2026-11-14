@@ -83,6 +83,29 @@ def generate_clips_cmd(
     typer.echo(f"wrote {n} clips to {out}")
 
 
+@app.command("get-clips")
+def get_clips_cmd(
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the clips into.")] = Path("clips/droid"),
+    n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode.")] = 100,
+    seconds: Annotated[float, typer.Option("--seconds", min=0.5, help="Length of each clip.")] = 4.0,
+) -> None:
+    """Download real robot video to try a real model on: short clips from DROID (MIT licence).
+
+    One 175 MB download, cached after the first time. Each clip is cut from the middle of a robot
+    episode in a real kitchen or office and saved as an mp4.
+    """
+    from interpretableintelligence.sample_clips import DATASET, LICENSE, fetch_droid_clips
+
+    try:
+        entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo)
+    except (ValueError, RuntimeError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {len(entries)} clips from {DATASET} ({LICENSE} licence) to {out}")
+    typer.echo("Next, find the features a real vision model uses on them (about N minutes on a laptop):")
+    typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid")
+
+
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
     """``hf`` plus ``--model``/``--blocks`` becomes the self-describing ``hf:<model>[#<blocks>]`` name.
 

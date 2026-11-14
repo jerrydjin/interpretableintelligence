@@ -10,7 +10,7 @@ const state = {
   heatToken: 0,
   heatPack: null,
   heatClip: null,
-  steer: { kind: "scale", value: 3, result: null, busy: false, show: false, error: "", token: 0 },
+  steer: { kind: "ablate", value: 0, result: null, busy: false, show: false, error: "", token: 0 },
 };
 
 const STEER_KINDS = {
