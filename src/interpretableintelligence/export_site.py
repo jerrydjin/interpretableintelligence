@@ -190,32 +190,36 @@ def _page(title: str, current: str, body: str) -> str:
 
 
 def _write_product(path: Path, summary: dict, status: str) -> None:
-    commands = _ii_commands()
-    known = {name for name, _blurb in commands}
+    commands = dict(_ii_commands())
+    known = set(commands)
     headline = escape(_control_headline(summary))
+    useful = ("try", "run", "view", "rollouts", "validate")
     command_items = "".join(
-        f"<li>{_cmd(name, known)} — {escape(blurb)}</li>" for name, blurb in commands
+        f"<li>{_cmd(name, known)} — {escape(commands[name])}</li>" for name in useful
     )
+    episodes = _episode_total(summary)
     body = f"""
     <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
     <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
     <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
     <h2>What you get today</h2>
-    <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE, and scores features on the adapters that ship: fake, vjepa2, hf, and groot. {_cmd("view", known)} opens the run. {_cmd("validate", known)} checks the run folder.</p>
-    <p data-testid="ablation-runner">{_runner_html(summary)} {_cmd("rollouts", known)} compares baseline and intervened success for the fake policy, with matched random-feature controls. That command did not run the GR00T episodes.</p>
+    <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls.</p>
+    <h2>Proof</h2>
     <p data-testid="control-headline">{headline}</p>
-    <p data-testid="proof">That result is the worked example. The label on it stays <span class="badge badge-unverified">{escape(status)}</span>, and real=false. Nothing is called real. Read the table on <a href="/groot/">GR00T</a> and the rest on <a href="/results/">the results</a>. <a href="/vjepa/">V-JEPA 2 on DROID</a> is the other measurement: loss-based scores did not separate the trained model from a random-initialised one.</p>
+    <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/results/">Results</a>.</p>
+    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
-      <li><span class="badge badge-unverified">Coming</span> {_coming_cmd("import", known)} — bring the rollout logs you already have. Not a command on main.</li>
-      <li><span class="badge badge-unverified">Coming</span> {_coming_cmd("probe", known)} and the random-weights SAE control. A candidate has to beat an SAE with untrained weights before it counts as real. Not in the tool yet.</li>
-      <li><span class="badge badge-unverified">Coming</span> Closed-loop rollouts at scale — switching features off inside live rollouts and measuring whether success actually moves.</li>
+      <li><span class="badge badge-unverified">Coming</span> {_coming_cmd("import", known)} (bring the rollout logs you already have).</li>
+      <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>
+      <li><span class="badge badge-unverified">Coming</span> Closed-loop rollouts at scale.</li>
     </ul>
     <h2 id="quickstart">Quickstart</h2>
     <pre class="quickstart"><code>uv sync
 uv run ii try</code></pre>
-    <p>These are the install and first-run commands from the README. {_cmd("try", known)} writes practice clips and runs the pipeline on the fake model. Pass <code>--no-open</code> to skip the browser.</p>
+    <p>{_cmd("try", known)} writes practice clips and runs the pipeline on the fake model.</p>
     <ul class="commands" data-testid="commands">{command_items}</ul>
+    <p><a href="{README_URL}">The rest of the commands are in the README.</a></p>
     <h2>Synthetic demos</h2>
     <ul class="section-list" data-testid="synthetic-sections">
       <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer. Not a result on a real model.</span></a></li>
@@ -497,6 +501,7 @@ def _control_headline(summary: dict) -> str:
 
 RUNNER_PATH = "src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"
 RUNNER_URL = "https://github.com/jerrydjin/interpretableintelligence/blob/main/" + RUNNER_PATH
+README_URL = "https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md"
 
 
 def _runner_html(summary: dict) -> str:

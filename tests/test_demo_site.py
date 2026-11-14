@@ -225,36 +225,43 @@ def test_product_page_is_the_front_door():
     assert not re.search(r"[\w.+-]+@[\w.-]+\.\w+", text)
     assert "contact" not in text.lower()
     assert "$" not in text and "price" not in text.lower()
-    headline = _control_headline(_ablation_summary())
-    assert headline in page
+    summary = _ablation_summary()
+    headline = _control_headline(summary)
+    assert page.count(headline) == 1
     assert page.index(headline) < page.index("Tested: no causal effect found")
-    assert "nothing is called real" in text.lower() or "Nothing is called real" in page
-    assert "real=false" in text
-    assert "the check ii is built around" in text
     assert "ablate_v9.py" in page
-    assert "not through an ii command" in text
+    assert f"{summary['episodes_logged']} rollouts." in text
+    assert (
+        "On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar."
+        in text
+    )
     assert "ii runs the" not in text
+    assert "not through an ii command" not in text
+    assert "did not run the GR00T episodes" not in text
+    assert "wired into" not in text
+    assert "nothing is called real" not in text.lower()
+    assert "not a command on main" not in text.lower()
+    assert "not in the tool yet" not in text.lower()
     assert "causes failure" not in text.lower()
     assert page.index('id="quickstart"') < page.index('data-testid="synthetic-sections"')
     assert page.index("What you get today") < page.index('data-testid="coming"')
     assert page.index('data-testid="coming"') < page.index('id="quickstart"')
     main = page[page.index("<main"):]
     synthetic = page.index('data-testid="synthetic-sections"')
-    assert main.index('href="/groot/"') < main.index('data-testid="synthetic-sections"')
+    assert main.index('href="/results/"') < main.index('data-testid="synthetic-sections"')
     assert page[synthetic:].count('href="/fake/"') == main.count('href="/fake/"') == 1
     assert page[synthetic:].count('href="/picker/"') == main.count('href="/picker/"') == 1
-    assert 'href="/results/"' in main and 'href="/vjepa/"' in main
+    assert main.count('href="/results/"') == 2
     nav = _nav(page)
     assert nav.index("/results/") < nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
     quick = re.search(r'<h2 id="quickstart">.*?</pre>', page, re.S).group(0)
     assert "uv sync" in quick and "uv run ii try" in quick
-    summary = _ablation_summary()
+    assert "README.md" in page
     single = next(row for row in summary["table"] if "-cand-" in row["cond"] and "+" not in row["cond"])
     controls = [row for row in summary["table"] if "-ctrl" in row["cond"]]
     fell = sum(row["verdict"] == "fall" for row in controls)
     baseline = next(row for row in summary["table"] if row["cond"] == "baseline")
     assert _visible_numbers(page) == [
-        str(summary["episodes_logged"]),
         str(single["cond"]).split("-")[-1],
         str(int(baseline["successes"])),
         str(int(baseline["n"])),
@@ -262,6 +269,7 @@ def test_product_page_is_the_front_door():
         str(int(single["n"])),
         str(fell),
         str(len(controls)),
+        str(summary["episodes_logged"]),
     ]
 
 
@@ -269,22 +277,25 @@ def test_product_page_commands_exist_or_are_coming():
     page = (ROOT / "index.html").read_text(encoding="utf-8")
     coming, rest = _coming_and_rest(page)
     cli = _cli_names()
+    useful = {"try", "run", "view", "rollouts", "validate"}
     named = set(re.findall(r'data-cmd="([^"]+)"', rest))
     coming_named = set(re.findall(r'data-cmd="([^"]+)"', coming))
-    assert named == cli
-    assert coming_named == {"import", "probe"}
+    assert named == useful
+    assert named <= cli
+    assert coming_named == {"import"}
     assert coming_named.isdisjoint(cli)
 
     def command_tokens(fragment: str) -> set[str]:
         tokens = set(re.findall(r"\bii\s+([a-z][a-z0-9-]*)", _text(fragment)))
         return {token for token in tokens if token in cli or token in {"import", "probe"} or "-" in token}
 
-    assert command_tokens(rest) == cli
-    assert command_tokens(coming) == {"import", "probe"}
+    assert command_tokens(rest) == useful
+    assert command_tokens(coming) == {"import"}
     assert "random-weights SAE control" in _text(coming)
+    assert "a feature has to beat an untrained SAE before it counts" in _text(coming)
     assert "Closed-loop rollouts at scale" in coming
     assert "ii import" not in _text(rest)
-    assert "ii probe" not in _text(rest)
+    assert "ii probe" not in page
 
 
 def test_groot_method_checks_come_from_the_vendored_files():
