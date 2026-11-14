@@ -57,7 +57,7 @@ Two optional manifest fields are not part of the contract readers must understan
 - `clips_dir`: absolute directory the capture read. The viewer uses it when `--clips` is omitted.
 - `stages`: one object per finished stage (`capture`, `sae`, `features`, `score`, `view`). Each object has exactly `wall_s` (seconds), `peak_ram_bytes`, `device`, `rows`, and `tokens`. These are measurements from that stage, not estimates.
 
-`acts/stream/` is a float32 row cache the pipeline uses to resume training and encoding without loading every shard. It is not part of the contract. Shards remain the activation record.
+`acts/stream/` is a float32 row cache the pipeline uses to resume training and encoding without loading every shard. It is not part of the contract. Shards remain the activation record. The shared activation cache (`interpretableintelligence cache`) lives outside run folders and is not part of the contract either.
 
 ## split.json
 
