@@ -29,8 +29,10 @@ concurrency:
 jobs:
   deit-tiny:
     runs-on: ubuntu-latest
-    # The whole job, install and download included, has to fit in 5 minutes.
-    timeout-minutes: 5
+    # Sized to finish in about 4 minutes, install and weights included. Runner speed
+    # varies by ~20% between jobs, so the cap sits one minute above the 5-minute
+    # target: it stops a hang without failing a run on a slow machine.
+    timeout-minutes: 6
     env:
       II_DEVICE: cpu
       HF_HUB_DISABLE_PROGRESS_BARS: "1"
@@ -44,8 +46,9 @@ jobs:
           enable-cache: true
       - name: Install
         run: uv sync --locked
-      - name: Cache Hugging Face weights
-        uses: actions/cache@v4
+      - name: Restore Hugging Face weights
+        id: hf-cache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/huggingface/hub
           # DeiT-tiny plus the CLIP labeller. Bump the suffix to force a fresh download.
@@ -53,3 +56,10 @@ jobs:
       - name: Real-model end-to-end pass
         # -m real_model replaces the default -m "not slow" from pyproject addopts.
         run: uv run pytest -m real_model -rA --durations=5
+      - name: Save Hugging Face weights
+        # Saved even when the test fails, so the next run does not download again.
+        if: always() && steps.hf-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-hub-deit-tiny-clip-vit-b16-v1

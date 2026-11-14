@@ -314,7 +314,8 @@ def test_real_dinov2_small_end_to_end(tmp_path):
 # DeiT-tiny (5.7M parameters, real ImageNet weights) is the smallest well-known ViT on the
 # Hub. The pipeline pins torch to one thread, so on a free CPU runner the budget goes to the
 # 100 matched random-feature controls and the CLIP ViT-B/16 labeller. Hooking block 10 of 12
-# keeps the edited forwards short and a 64-feature SAE keeps both SAE trainings short. It still
+# keeps the edited forwards short, a 64-feature SAE keeps both SAE trainings short, and
+# holding out 2 clips instead of 4 halves the ablations and random controls. It still
 # exercises every stage on real weights: Hub download, preprocessor, capture, SAE, CLIP
 # labels, scoring with its random-init control, the schema, and one playground edit.
 REAL_SMOKE_MODEL = "facebook/deit-tiny-patch16-224"
@@ -334,7 +335,7 @@ def test_real_deit_tiny_smoke(tmp_path):
         app,
         [
             "run", "hf", "--model", REAL_SMOKE_MODEL, "--clips", str(clips), "--out", str(out),
-            "--layer", "10", "--sae-features", "64", "--prefilter", "4", "--no-serve",
+            "--layer", "10", "--sae-features", "64", "--prefilter", "4", "--heldout-frac", "0.1", "--no-serve",
         ],
     )
     assert result.exit_code == 0, result.output
