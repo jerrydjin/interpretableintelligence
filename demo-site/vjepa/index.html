@@ -3,15 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f5">
   <title>V-JEPA 2 · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
-  <header class="top">
+  <header class="top demo-top">
     <div class="brand-row">
-      <a class="wordmark" href="/">interpretableintelligence</a>
+      <a class="wordmark" href="/" aria-label="interpretable intelligence">
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
+        <span class="wordmark-text">interpretable intelligence</span>
+      </a>
       <nav class="nav"><a href="/fake/">Fake</a><a href="/picker/">Picker</a><a href="/vjepa/" aria-current="page">V-JEPA 2</a><a href="/groot/">GR00T</a></nav>
     </div>
   </header>
@@ -26,11 +30,11 @@
         </div>
         <figcaption>droid_ep068.mp4 · window 0 · source frames 0–30 · Take the lid off the smaller pot</figcaption>
       </figure>
-      <article class="feature-card" data-testid="feature-270" data-status="failed: random_percentile">
+      <article class="demo-card" data-testid="feature-270" data-status="failed: random_percentile">
         <p class="kicker">Feature 270</p>
-        <div class="feature-title"><h2>robot gripper / wrist (end effector and its cable)</h2> <span class="badge badge-status" data-testid="status-270">failed: random_percentile</span></div>
+        <div class="demo-title"><h2>robot gripper / wrist (end effector and its cable)</h2> <span class="badge badge-status" data-testid="status-270">failed: random_percentile</span></div>
         <img class="viz" alt="Feature 270 activations" src="viz/feature_00270.png">
-        <dl class="score">
+        <dl class="demo-score">
           <div><dt>random_percentile</dt><dd>40</dd></div>
           <div><dt>n_random</dt><dd>10</dd></div>
           <div><dt>ablation_effect</dt><dd>2.15865343142e-05</dd></div>

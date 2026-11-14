@@ -7,6 +7,7 @@ The other sections are pages rendered from the vendored measurements.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from html import escape
 from pathlib import Path
@@ -97,37 +98,37 @@ def _fake_sentence(scoreboard_path: Path) -> str:
 
 
 def _viewer_page(sentence: str) -> str:
-    return f"""<!DOCTYPE html>
-<html lang="en" data-ii-root="/fake/data">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fake demo · interpretableintelligence</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/demo.css">
-  <link rel="icon" href="/favicon.ico">
-</head>
-<body>
-  <header class="top" data-testid="run-header">
-    <div class="brand-row">
-      <a class="wordmark" href="/">interpretableintelligence</a>
-      <span id="run-id" class="run-id" data-testid="run-id"></span>
-      <nav class="nav">{_nav("fake")}</nav>
-    </div>
-    <div class="meta">
-      <span id="run-model" data-testid="run-model"></span>
-      <span id="run-layer" data-testid="run-layer"></span>
-      <span id="split-sizes" data-testid="split-sizes"></span>
-      <span id="sae-summary" data-testid="sae-summary"></span>
-    </div>
-    <p class="score-line" data-testid="score-line">{escape(sentence)}</p>
-  </header>
-  <main id="app"></main>
-  <script src="/static/guide.js"></script>
-  <script src="/static/app.js"></script>
-</body>
-</html>
-"""
+    """The viewer's own index.html, rooted at /fake/data, with the demo bar above it."""
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    html = html.replace('<html lang="en">', '<html lang="en" data-ii-root="/fake/data">', 1)
+    html = html.replace(
+        "<title>interpretableintelligence</title>",
+        "<title>Fake demo · interpretableintelligence</title>",
+        1,
+    )
+    html = html.replace(
+        '<link rel="stylesheet" href="/static/style.css">',
+        '<link rel="stylesheet" href="/static/style.css">\n'
+        '  <link rel="stylesheet" href="/static/demo.css">\n'
+        '  <link rel="icon" href="/favicon.ico">',
+        1,
+    )
+    html = html.replace("<body>\n", f"<body>\n{_demo_bar('fake')}\n", 1)
+    score = f'  <p class="score-line" data-testid="score-line">{escape(sentence)}</p>\n'
+    return html.replace("  </header>\n", "  </header>\n" + score, 1)
+
+
+def _demo_bar(current: str) -> str:
+    return f'  <nav class="demo-bar" aria-label="Demo sections"><a class="demo-home" href="/">Demo</a>{_nav(current)}</nav>'
+
+
+def _wordmark() -> str:
+    """The viewer's logo and wordmark, pointed at the demo home."""
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    match = re.search(r'<a class="wordmark".*?</a>', html, re.S)
+    if not match:
+        return '<a class="wordmark" href="/">interpretable intelligence</a>'
+    return match.group(0).replace('href="#/"', 'href="/"', 1)
 
 
 def _nav(current: str) -> str:
@@ -147,15 +148,16 @@ def _page(title: str, current: str, body: str) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f5">
   <title>{escape(title)} · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
-  <header class="top">
+  <header class="top demo-top">
     <div class="brand-row">
-      <a class="wordmark" href="/">interpretableintelligence</a>
+      {_wordmark()}
       <nav class="nav">{_nav(current)}</nav>
     </div>
   </header>
@@ -168,12 +170,12 @@ def _page(title: str, current: str, body: str) -> str:
 def _write_home(path: Path, groot_status: str) -> None:
     body = f"""
     <h1>Demo</h1>
-    <p>Four sections. The fake run is a working viewer. The other three are the measurements on disk, or a section that has no validated run.</p>
+    <p class="lede"><b>Four sections.</b> The fake run is a working viewer. The other three are the measurements on disk, or a section that has no validated run.</p>
     <ul class="section-list">
-      <li><a href="/fake/">Fake demo</a> — 30 synthetic clips, layer 16, seed 0, held-out fraction 0.2. The scoreboard is the source of <span class="badge badge-real">real</span>.</li>
-      <li><a href="/picker/">Candidate picker</a> — synthetic rollouts. Counts from the rerun of the picker scripts.</li>
-      <li><a href="/vjepa/">V-JEPA 2 on DROID</a> — held-out <code>droid_ep068.mp4</code>, window 0, then feature 270.</li>
-      <li><a href="/groot/">GR00T N1.7 on LIBERO</a> — <span class="badge badge-unverified">{escape(groot_status)}</span></li>
+      <li><a href="/fake/"><span class="section-name">Fake demo</span><span class="section-text">30 synthetic clips, layer 16, seed 0, held-out fraction 0.2. The scoreboard is the source of <span class="badge badge-real">real</span>.</span></a></li>
+      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text">Synthetic rollouts. Counts from the rerun of the picker scripts.</span></a></li>
+      <li><a href="/vjepa/"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">Held-out <code>droid_ep068.mp4</code>, window 0, then feature 270.</span></a></li>
+      <li><a href="/groot/"><span class="section-name">GR00T N1.7 on LIBERO</span><span class="section-text"><span class="badge badge-unverified">{escape(groot_status)}</span></span></a></li>
     </ul>
     """
     path.write_text(_page("Demo", "", body), encoding="utf-8")
@@ -281,11 +283,11 @@ def _write_vjepa(dest: Path, vjepa: Path) -> None:
         </div>
         <figcaption>droid_ep068.mp4 · window {int(window['window'])} · source frames {int(window['frame_start'])}–{int(window['frame_end'])} · {escape(str(window.get('task_text') or ''))}</figcaption>
       </figure>
-      <article class="feature-card" data-testid="feature-270" data-status="{escape(str(status))}">
+      <article class="demo-card" data-testid="feature-270" data-status="{escape(str(status))}">
         <p class="kicker">Feature 270</p>
-        <div class="feature-title"><h2>{escape(str(feature.get('label') or 'feature 270'))}</h2> <span class="badge badge-status" data-testid="status-270">{escape(str(status))}</span></div>
+        <div class="demo-title"><h2>{escape(str(feature.get('label') or 'feature 270'))}</h2> <span class="badge badge-status" data-testid="status-270">{escape(str(status))}</span></div>
         <img class="viz" alt="Feature 270 activations" src="viz/feature_00270.png">
-        <dl class="score">
+        <dl class="demo-score">
           <div><dt>random_percentile</dt><dd>{escape(_fmt_num(feature.get('random_percentile')))}</dd></div>
           <div><dt>n_random</dt><dd>{escape(str(feature.get('n_random')))}</dd></div>
           <div><dt>ablation_effect</dt><dd>{escape(_fmt_num(feature.get('ablation_effect')))}</dd></div>

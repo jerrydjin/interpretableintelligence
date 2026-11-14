@@ -105,7 +105,40 @@ function badge(feature) {
   return el("span", { class: `badge badge-${kind}`, "data-testid": "badge", "data-kind": kind }, shown || "unverified");
 }
 
+// The "Numbers" switch in the header: the plain-language view by default, raw
+// measurements (class "num") on request. Remembered per browser, never required.
+const NUMBERS_KEY = "ii.numbers";
+
+function initNumbers() {
+  let on = false;
+  try {
+    on = window.localStorage.getItem(NUMBERS_KEY) === "on";
+  } catch (_error) {
+    on = false;
+  }
+  setNumbers(on, false);
+  const toggle = document.querySelector("[data-testid=numbers-toggle]");
+  if (toggle) toggle.addEventListener("click", () => setNumbers(!numbersOn(), true));
+}
+
+function numbersOn() {
+  return document.documentElement.dataset.numbers === "on";
+}
+
+function setNumbers(on, remember) {
+  document.documentElement.dataset.numbers = on ? "on" : "off";
+  const toggle = document.querySelector("[data-testid=numbers-toggle]");
+  if (toggle) toggle.setAttribute("aria-pressed", on ? "true" : "false");
+  if (!remember) return;
+  try {
+    window.localStorage.setItem(NUMBERS_KEY, on ? "on" : "off");
+  } catch (_error) {
+    // storage can be blocked; the switch still works for this page
+  }
+}
+
 async function boot() {
+  initNumbers();
   try {
     const response = await fetch(apiUrl("/api/run"), { cache: "no-store" });
     if (!response.ok) throw new Error(`run request failed (${response.status})`);
@@ -196,7 +229,19 @@ function renderHeader() {
     saeEl.dataset.usable = usable ? "true" : "false";
     saeEl.textContent = `${usable ? "usable" : "not usable"} · ev_heldout ${fmtUnit(sae.ev_heldout)} · loss_recovered ${fmtUnit(sae.loss_recovered)}`;
   }
-  if (guide()) saeEl.title = guide().sae(run.scoreboard === false ? null : run.sae).result;
+  const explain = guide() ? guide().sae(run.scoreboard === false ? null : run.sae).result : "";
+  if (explain) saeEl.title = explain;
+  const status = document.getElementById("run-status");
+  if (status) {
+    const scored = run.scoreboard !== false && Boolean(run.sae);
+    const usable = scored && run.sae.usable === true;
+    status.dataset.state = !scored ? "none" : usable ? "ok" : "warn";
+    status.title = explain || "";
+    status.replaceChildren(
+      el("span", { class: "run-dot", "aria-hidden": "true" }),
+      `${name} · ${!scored ? "not scored yet" : usable ? "dictionary usable" : "dictionary not usable"}`,
+    );
+  }
   document.title = `${run.run_id} · interpretableintelligence`;
 }
 
@@ -247,41 +292,110 @@ function renderError(message) {
 
 function renderIndex() {
   const features = state.run.features;
-  const real = features.filter((feature) => feature.badge === "real").length;
+  const verified = features.filter((feature) => feature.badge === "real");
+  const exploring = features.filter((feature) => feature.badge !== "real");
+  const real = verified.length;
   const moments = renderMoments();
-  const list = el("ul", { class: "index-list" });
-  for (const feature of features) {
-    const link = el(
-      "a",
-      {
-        href: `#/features/${feature.id}`,
-        "data-testid": "feature-index-link",
-        "data-feature-id": feature.id,
-        "data-label": feature.label || "",
-        "data-candidate": feature.candidate ? "true" : "false",
-      },
-      [
-        el("span", {}, [el("span", { class: "index-id" }, String(feature.id).padStart(2, "0")), displayLabel(feature)]),
-        badge(feature),
-      ],
-    );
-    list.append(el("li", {}, link));
-  }
+  const passed = real === 0
+    ? "None has passed every check yet, and all of them are open to explore."
+    : `${real === 1 ? "One has" : `${real} have`} passed every check. Open any feature to see where it fires and steer it.`;
   const page = [
     moments,
     el("section", { class: "feature-index", "data-testid": "feature-index" }, [
       el("h1", {}, "Features"),
-      el("p", { class: "lede" }, [
-        el("b", {}, real === 1 ? "One verified feature." : `${real === 0 ? "No" : real} verified features.`),
-        ` ${features.length - real} more to explore. Every one can be opened and steered; the checks only decide the badge.`,
-      ]),
-      el("p", { class: "kicker", "data-testid": "real-count" }, `${real} real · ${features.length - real} unverified`),
+      el("p", { class: "lede" }, [el("b", {}, "Patterns the model learned to look for."), ` ${passed}`]),
+      el("p", { class: "kicker num", "data-testid": "real-count" }, `${real} real · ${exploring.length} unverified`),
       indexGuide(features),
-      list,
+      featureGroup("verified", "Verified", "Passed all five checks. These are the ones to trust.", verified),
+      featureGroup(
+        "exploring",
+        "Still exploring",
+        "Each missed at least one check. Open one to see which, and what experiment to try next.",
+        exploring,
+      ),
     ]),
   ].filter(Boolean);
   app.replaceChildren(...page);
   document.title = `features · ${state.run.run_id} · interpretableintelligence`;
+}
+
+function featureGroup(key, title, note, features) {
+  if (!features.length) return null;
+  const list = el("ul", { class: "index-list", "data-group": key });
+  for (const feature of features) list.append(el("li", {}, featureCard(feature)));
+  return el("section", { class: "index-group", "data-testid": `index-group-${key}` }, [
+    el("h2", { class: "section-title" }, [title, " ", el("span", { class: "count" }, String(features.length))]),
+    el("p", { class: "group-note" }, note),
+    list,
+  ]);
+}
+
+// One card per feature: the frame where it fires hardest beside its activation blocks,
+// loaded only when the card scrolls into view.
+function featureCard(feature) {
+  const art = el("span", { class: "card-art", "aria-hidden": "true", "data-feature-id": feature.id });
+  const link = el("a", {
+    class: "feature-card",
+    href: `#/features/${feature.id}`,
+    "data-testid": "feature-index-link",
+    "data-feature-id": feature.id,
+    "data-label": feature.label || "",
+    "data-candidate": feature.candidate ? "true" : "false",
+  }, [
+    art,
+    el("span", { class: "card-body" }, [
+      el("span", { class: "card-name" }, displayLabel(feature)),
+      el("span", { class: "card-meta" }, [el("span", { class: "index-id" }, `#${feature.id}`), badge(feature)]),
+    ]),
+  ]);
+  observeArt(art);
+  return link;
+}
+
+let artObserver = null;
+
+function observeArt(node) {
+  if (typeof IntersectionObserver === "undefined") {
+    loadArt(node);
+    return;
+  }
+  if (!artObserver) {
+    artObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        artObserver.unobserve(entry.target);
+        loadArt(entry.target);
+      }
+    }, { rootMargin: "240px" });
+  }
+  artObserver.observe(node);
+}
+
+async function loadArt(node) {
+  const id = Number(node.dataset.featureId);
+  let feature = null;
+  try {
+    const response = await fetch(apiUrl(`/api/features/${id}`), { cache: "no-store" });
+    feature = response.ok ? await response.json() : null;
+  } catch (_error) {
+    feature = null;
+  }
+  const top = feature && feature.top_clips && feature.top_clips[0];
+  if (!top || !node.isConnected) {
+    node.classList.add("is-empty");
+    node.textContent = feature ? "Silent on every clip" : "";
+    return;
+  }
+  const image = el("img", {
+    alt: "",
+    loading: "lazy",
+    src: apiUrl(`/api/clips/${encodeURIComponent(top.clip_id)}/frames/${top.frame}.png`),
+  });
+  image.addEventListener("error", () => image.remove());
+  const terrain = el("span", { class: "card-terrain" });
+  node.replaceChildren(el("span", { class: "card-shot" }, image), terrain);
+  const rows = await fetchHeat(top.clip_id, top.frame, id).catch(() => null);
+  if (rows && rows.length && node.isConnected) terrain.innerHTML = isoTerrain(rows);
 }
 
 function renderMoments() {
@@ -336,7 +450,8 @@ function renderFeature(feature) {
       )
     : [el("tr", {}, el("td", { colspan: "5" }, "This feature does not fire on any clip."))];
   const strip = el("div", { class: "thumb-strip", "data-testid": "top-thumbs" });
-  for (const clip of feature.top_clips) {
+  // Pictures for the strongest few; the table below lists every top clip.
+  for (const clip of feature.top_clips.slice(0, 6)) {
     const image = el("img", {
       alt: `${clip.clip_id} frame ${clip.frame}`,
       src: apiUrl(`/api/clips/${encodeURIComponent(clip.clip_id)}/frames/${clip.frame}.png`),
@@ -364,28 +479,38 @@ function renderFeature(feature) {
       el("p", { class: "kicker" }, `Feature ${feature.id}${feature.label_model ? ` · named by ${feature.label_model}` : ""}`),
       el("div", { class: "feature-title" }, [el("h1", {}, displayLabel(feature)), badge(feature)]),
       featureLede(feature),
+      featureActions(feature),
       featureHero(feature),
       feature.viz
         ? el("img", { class: "viz", alt: "", src: apiUrl(`/api/features/${feature.id}/viz`), "data-testid": "feature-viz" })
         : null,
-      el("h2", { class: "section-title" }, "What the checks say"),
-      feature.scored === false
-        ? el("p", { class: "kicker", "data-testid": "scoreboard-missing" }, "No scoreboard record. Shown as unverified.")
-        : null,
-      featureGuide(feature),
-      el("h2", { class: "panel-title" }, "The numbers"),
-      el("dl", { class: "score", "data-testid": "scoreboard" }, [
-        scoreItem("distinct_clips_top20", fmtMaybe(feature.distinct_clips_top20, String), feature.distinct_clips_top20),
-        scoreItem("label_holds_heldout", fmtFlag(feature.label_holds_heldout), feature.label_holds_heldout),
-        scoreItem("ablation_effect", fmtEffect(feature.ablation_effect), feature.ablation_effect),
-        scoreVersus(feature),
-        scoreItem("absent_in_random_init", fmtFlag(feature.absent_in_random_init), feature.absent_in_random_init),
+      el("section", { class: "page-section" }, [
+        el("h2", { class: "section-title" }, "What the checks say"),
+        el("p", { class: "section-note" }, "Five questions decide the verified badge. Each answer is in plain words; open one to see exactly what it asks."),
+        feature.scored === false
+          ? el("p", { class: "kicker", "data-testid": "scoreboard-missing" }, "No scoreboard record. Shown as unverified.")
+          : null,
+        featureGuide(feature),
       ]),
-      el("h2", { class: "section-title" }, "Where it fires hardest"),
-      feature.top_clips.length ? strip : null,
-      el("table", { class: "top-table" }, [
-        el("thead", {}, el("tr", {}, ["clip", "split", "frame", "window / t", "activation"].map((label) => el("th", {}, label)))),
-        el("tbody", {}, rows),
+      el("section", { class: "page-section" }, [
+        el("h2", { class: "section-title" }, "Where it fires hardest"),
+        el("p", { class: "section-note" }, "The frames where this feature is strongest. Open one to watch it in the clip."),
+        feature.top_clips.length ? strip : el("p", { class: "empty" }, "This feature does not fire on any clip."),
+      ]),
+      el("section", { class: "page-section numbers-section" }, [
+        el("h2", { class: "section-title" }, "The numbers"),
+        el("p", { class: "section-note" }, "The raw measurements behind the checks, and every top clip."),
+        el("dl", { class: "score", "data-testid": "scoreboard" }, [
+          scoreItem("distinct_clips_top20", fmtMaybe(feature.distinct_clips_top20, String), feature.distinct_clips_top20),
+          scoreItem("label_holds_heldout", fmtFlag(feature.label_holds_heldout), feature.label_holds_heldout),
+          scoreItem("ablation_effect", fmtEffect(feature.ablation_effect), feature.ablation_effect),
+          scoreVersus(feature),
+          scoreItem("absent_in_random_init", fmtFlag(feature.absent_in_random_init), feature.absent_in_random_init),
+        ]),
+        el("div", { class: "table-wrap" }, el("table", { class: "top-table" }, [
+          el("thead", {}, el("tr", {}, ["clip", "split", "frame", "window / t", "activation"].map((label) => el("th", {}, label)))),
+          el("tbody", {}, rows),
+        ])),
       ]),
     ]),
   );
@@ -504,6 +629,17 @@ function featureLede(feature) {
   ]);
 }
 
+// The one obvious next step: watch the feature on the clip where it fires hardest.
+function featureActions(feature) {
+  const top = feature.top_clips && feature.top_clips[0];
+  if (!top) return null;
+  const href = `#/clips/${encodeURIComponent(top.clip_id)}?frame=${top.frame}&feature=${feature.id}`;
+  return el("div", { class: "feature-actions" }, [
+    el("a", { class: "button", href, "data-testid": "feature-watch" }, steerEnabled() ? "Watch and steer it" : "Watch it fire"),
+    el("span", { class: "feature-actions-note" }, `Opens ${top.clip_id} at frame ${top.frame}, where it is strongest.`),
+  ]);
+}
+
 // Hero: the frame where the feature fires hardest, next to its activation as isometric blocks.
 function featureHero(feature) {
   const top = feature.top_clips && feature.top_clips[0];
@@ -553,8 +689,8 @@ function isoTerrain(rows) {
   const y0 = lift + 2;
   const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
   const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
-  const base = [233, 230, 221];
-  const hot = [242, 84, 27];
+  const base = [222, 218, 205];
+  const hot = [232, 88, 42];
   const parts = [];
   for (let s = 0; s < w + h - 1; s += 1) {
     for (let r = 0; r < h; r += 1) {
@@ -654,14 +790,30 @@ function clampFrame(frame) {
 function renderClip() {
   const clip = state.clip;
   const links = state.run.clips.map((entry) => {
+    const thumb = el("span", { class: "clip-thumb", "aria-hidden": "true" });
+    if (entry.pixels === undefined || entry.pixels === "ok") {
+      const image = el("img", {
+        alt: "",
+        loading: "lazy",
+        src: apiUrl(`/api/clips/${encodeURIComponent(entry.clip_id)}/frames/0.png`),
+      });
+      image.addEventListener("error", () => image.remove());
+      thumb.append(image);
+    }
+    const heldout = entry.split === "heldout";
     const anchor = el(
       "a",
       {
         href: `#/clips/${encodeURIComponent(entry.clip_id)}`,
         "data-testid": "clip-link",
         "data-clip-id": entry.clip_id,
+        "data-split": entry.split || "",
       },
-      [entry.clip_id, el("span", { class: "split-tag" }, entry.split || "")],
+      [
+        thumb,
+        el("span", { class: "clip-name" }, entry.clip_id),
+        heldout ? el("span", { class: "split-tag", title: "Held out: never used to train the dictionary" }, "unseen") : null,
+      ],
     );
     if (entry.clip_id === clip.clip_id) anchor.setAttribute("aria-current", "page");
     return el("li", {}, anchor);
@@ -711,36 +863,47 @@ function renderClip() {
     stop();
     setFrame(Number(scrubber.value));
   });
+  const splitNote = clip.split === "heldout"
+    ? "Unseen clip: never used to train the dictionary"
+    : clip.split === "train"
+      ? "Training clip"
+      : "Clip";
   app.replaceChildren(
     el("div", { class: "clip-page" }, [
-      el("aside", {}, [
-        el("h2", { class: "panel-title" }, "Clips"),
+      el("aside", { class: "rail" }, [
+        el("h2", { class: "panel-title" }, ["Clips ", el("span", { class: "count" }, String(state.run.clips.length))]),
         el("ul", { class: "clip-list" }, links),
       ]),
       el("section", { class: "player" }, [
         el("div", { class: "clip-kicker" }, [
           el("h2", { "data-testid": "clip-title" }, clip.clip_id),
-          el("span", { class: "split-tag" }, clip.split === "heldout" ? "held-out clip" : clip.split ? `${clip.split} clip` : "clip"),
+          el("span", { class: "split-tag" }, splitNote),
           el("p", { class: "clip-task", "data-testid": "clip-task", hidden: "" }),
         ]),
         el("div", { class: "stage-frame" }, stage),
         el("div", { class: "transport" }, [
           play,
           scrubberWrap,
-          el("p", { class: "frame-readout", "data-testid": "frame-readout" }),
+          el("p", { class: "frame-line" }, [
+            el("span", { class: "frame-count", "data-testid": "frame-count" }),
+            el("span", { class: "frame-readout num", "data-testid": "frame-readout" }),
+          ]),
         ]),
         el("p", { class: "heat-caption", "data-testid": "heatmap-label" }),
-        steerPanel(),
       ]),
       el("section", { class: "notices" }, [
         el("h2", {}, "What the model notices"),
-        el("p", { class: "lead" }, "Features firing on this frame, strongest first. Pick one to see where it fires."),
+        el("p", { class: "lead" }, [
+          "Each feature is a pattern the model learned. ",
+          el("span", { class: "lead-quiet" }, "These fire on this frame, strongest first. Pick one and the frame glows where it fires."),
+        ]),
         el("ol", { class: "feature-list", "data-testid": "frame-features" }),
+        steerPanel(),
       ]),
     ]),
   );
   renderFrame();
-  document.querySelector(".clip-list a[aria-current='page']")?.scrollIntoView({ block: "nearest" });
+  document.querySelector(".clip-list a[aria-current='page']")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 function clipMoments(clip) {
@@ -805,6 +968,8 @@ function renderFrame(options) {
   const tubelet = frame.t === null || frame.t === undefined ? "—" : String(frame.t);
   scrubber.value = String(state.frame);
   readout.textContent = `frame ${state.frame} · t ${tubelet} · window ${frame.window}`;
+  const count = document.querySelector("[data-testid=frame-count]");
+  if (count) count.textContent = `Frame ${state.frame + 1} of ${clip.n_frames}`;
   readout.dataset.frame = String(state.frame);
   readout.dataset.t = tubelet;
   readout.dataset.window = String(frame.window);
@@ -867,7 +1032,8 @@ function renderFrame(options) {
   if (requested !== null && !listed) {
     active = { id: requested, label: "", badge: "unverified", activation: 0, effects: [], inactive: true };
   } else if (requested === null) {
-    active = frame.features[0] || null;
+    // Start a newcomer on something verified when the frame has one.
+    active = frame.features.find((feature) => feature.badge === "real") || frame.features[0] || null;
   }
   list.dataset.feature = active ? String(active.id) : "";
   const peak = frame.features.reduce((best, feature) => Math.max(best, Number(feature.activation) || 0), 0);
@@ -943,14 +1109,21 @@ function barWidth(value, peak) {
   return Math.max(4, Math.min(100, (value / peak) * 100)).toFixed(1);
 }
 
+const EFFECT_HELP = {
+  ablation: "Switch this feature off and measure how far the model's prediction moves.",
+  estimate: "A cheap estimate of the same thing, from gradients. Not evidence on its own.",
+};
+
 function renderEffect(effect) {
   const kind = effect.effect_kind === "ablation" || effect.effect_kind === "estimate" ? effect.effect_kind : "other";
-  const className = kind === "other" ? "effect effect-other" : `effect effect-${kind}`;
+  // The ablation effect stays in view; estimates and other effects are raw numbers.
+  const className = kind === "ablation" ? "effect effect-ablation" : `effect effect-${kind} num`;
   return el("span", {
     class: className,
     "data-testid": "effect",
     "data-kind": effect.effect_kind,
     "data-effect": String(effect.effect),
+    title: EFFECT_HELP[kind] || "",
   }, [
     el("span", { class: "kind" }, effect.effect_kind),
     el("span", { class: "value" }, fmtEffect(effect.effect)),
@@ -1241,8 +1414,8 @@ function paintSteer() {
   panel.querySelector("[data-testid=steer-help]").textContent = spec.help;
   const target = panel.querySelector("[data-testid=steer-target]");
   const feature = state.activeFeature;
-  target.replaceChildren(feature ? "Feature: " : "Pick a feature from the list to steer it.");
-  if (feature) target.append(el("strong", {}, displayLabel(feature)));
+  target.replaceChildren(feature ? "Steer " : "Pick a feature above to steer it.");
+  if (feature) target.append(el("strong", {}, displayLabel(feature)), " and see where the prediction moves.");
   const run = panel.querySelector("[data-testid=steer-run]");
   run.disabled = !feature || state.steer.busy;
   run.textContent = state.steer.busy ? "Steering…" : "Steer";
