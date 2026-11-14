@@ -1,7 +1,8 @@
 """Generic Hugging Face adapter on tiny random configs saved to disk. No network.
 
 ``test_real_dinov2_small_end_to_end`` downloads facebook/dinov2-small and is
-marked ``slow``.
+marked ``slow``. ``test_real_deit_tiny_smoke`` is the real-model check CI runs on
+every PR (``-m real_model``).
 """
 
 from __future__ import annotations
@@ -289,6 +290,57 @@ def test_real_dinov2_small_end_to_end(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert validate_run(out) == []
+
+
+# The real-model smoke check CI runs on every PR (.github/workflows/real-model.yml).
+# DeiT-tiny (5.7M parameters, real ImageNet weights) is the smallest well-known ViT on the
+# Hub. The pipeline pins torch to one thread, so on a free CPU runner the budget goes to the
+# 100 matched random-feature controls and the CLIP ViT-B/16 labeller. Hooking block 10 of 12
+# keeps the edited forwards short and a 192-feature SAE keeps training under 15 s. It still
+# exercises every stage on real weights: Hub download, preprocessor, capture, SAE, CLIP
+# labels, scoring with its random-init control, the schema, and one playground edit.
+REAL_SMOKE_MODEL = "facebook/deit-tiny-patch16-224"
+
+
+@pytest.mark.slow
+@pytest.mark.real_model
+def test_real_deit_tiny_smoke(tmp_path):
+    import math
+
+    from interpretableintelligence.labelers import CLIP_LABEL_MODEL
+
+    clips = tmp_path / "clips"
+    generate_tiny_clips(clips, 20)
+    out = tmp_path / "runs" / "deit-tiny"
+    result = CliRunner().invoke(
+        app,
+        [
+            "run", "hf", "--model", REAL_SMOKE_MODEL, "--clips", str(clips), "--out", str(out),
+            "--layer", "10", "--sae-features", "192", "--prefilter", "4", "--no-serve",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert validate_run(out) == []
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["model"]["adapter"] == make_spec(REAL_SMOKE_MODEL)
+    assert manifest["layer"] == 10
+    sae = json.loads((out / "scoreboard.json").read_text(encoding="utf-8"))["sae"]
+    numbers = [value for value in sae.values() if isinstance(value, float)]
+    assert numbers and all(math.isfinite(value) for value in numbers), sae
+    # Real weights: the SAE splice must keep most of the model's output, unlike zeroing the layer.
+    assert sae["loss_recovered"] > 0.5, sae
+    assert json.loads((out / "sae" / "config.json").read_text(encoding="utf-8"))["n_features"] == 192
+    features = [json.loads(line) for line in (out / "features" / "features.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(features) == 192
+    assert {feature.get("label_model") for feature in features} == {CLIP_LABEL_MODEL}
+
+    steerer = Steerer(out, clips)
+    clip_id = manifest["clips"][0]["clip_id"]
+    same = steerer.steer({"clip_id": clip_id, "features": [0], "kind": "scale", "value": 1.0})
+    moved = steerer.steer({"clip_id": clip_id, "features": [0], "kind": "clamp", "value": 5.0})
+    assert same["summary"]["mean_shift"] < 1e-4
+    assert moved["summary"]["mean_shift"] > same["summary"]["mean_shift"]
 
 
 def test_auroc_labels_a_sparse_feature_that_pearson_would_miss(monkeypatch):

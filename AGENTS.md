@@ -94,7 +94,7 @@ These override intuition, offline plots, and demo-site copy.
 
 - **Never push to `main`.** Branch from latest `main`, one topic per branch (for example `claude/<topic>`).
 - Open a PR against `main`; the repo owner (**@jerrydjin**) reviews and merges.
-- Keep PRs small; **`uv run pytest` must stay green** before you push. CI (`.github/workflows/ci.yml`) runs the same suite on every PR.
+- Keep PRs small; **`uv run pytest` must stay green** before you push. CI (`.github/workflows/ci.yml`) runs the same suite on every PR. `.github/workflows/real-model.yml` also runs one real Hugging Face model (DeiT-tiny) through `ii run hf` end to end on every PR (`uv run pytest -m real_model`; downloads weights, so it is not in the default suite).
 
 Docs-only PRs are fine; do not touch `scoreboard.json`, `split.json`, held-out labels, or committed run artifacts.
 
