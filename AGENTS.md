@@ -47,6 +47,12 @@ World-model path: `ii run fake --clips … --out runs/…` or `vjepa2`. Policy p
 
 **Known gap:** GR00T is on `ii` for the offline lane (`ii run groot`: capture at DiT block 5 on the final denoise step, SAE, scoring, `ii view --steer`), but **closed-loop LIBERO-plus rollouts are not**. They still run through `src/interpretableintelligence/adapters/groot/v9/` (Colab, `ablate_v9.py`, ablation plans), the current pre-CLI route, not a violation of the long-term CLI rule. Steering GR00T in the playground is exploration, never evidence; the research rules below still decide findings.
 
+## Language: Rust for engineering and infra
+
+New technical engineering and infrastructure (servers, storage, file formats and readers, tooling that does not run a model) is written in **Rust**, in the Cargo workspace (`server/` is the example).
+
+The exception is code that runs inside the model process and touches model tensors: adapters, the pipeline stages, scoring, steering, and the glue that hands tensors to and from PyTorch (for example the activation cache in `act_cache.py`, whose file I/O already goes through the Rust-backed `safetensors` package). That stays Python, so the package still installs with `uv sync` and no Rust toolchain. When a change is unclear, prefer Rust for anything that reads or serves run folders or caches without loading a model, and say which side of the line it is on in the PR.
+
 ## Run folder layout
 
 Runs write under a directory you choose (convention: `runs/<run_id>/`). **Never commit run outputs** (`runs/` and `/clips/` are gitignored).
