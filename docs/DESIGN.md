@@ -43,6 +43,31 @@ The heatmap reads `--signal-rgb` and `--steer-rgb` from the stylesheet. `isoTerr
 - Ledes are two-tone: the claim in ink, the context in grey.
 - The signature graphic is **isometric activation blocks**: a feature's activation on its top frame, drawn as a little terrain beside the frame.
 - The logo is two isometric columns, the two i's drawn as activations: a short ember one and a tall ink one.
+- There is one button shape, an ink pill (`.button`). The playground's Steer button uses it too.
+
+## Plain words first, numbers on request
+
+The viewer shows a plain-language reading by default. Raw measurements stay in the page but carry the class `num`, and only show when the reader turns on the **Numbers** switch in the header. The switch sets `data-numbers="on"` on `<html>` and is remembered in `localStorage` (`ii.numbers`). The page works the same if storage is blocked.
+
+Behind the switch:
+
+- The header's model sha, layer, split sizes and `ev_heldout` / `loss_recovered`. By default the header shows only "model · dictionary usable" with a coloured dot, and the full explanation is in its tooltip.
+- The frame readout (`frame · t · window`). By default the player shows "Frame 3 of 16".
+- Estimate effects on feature rows. The ablation chip always stays visible, with a tooltip that says what it measures.
+- The "3 real · 9 unverified" count on the features page.
+
+The feature page's "The numbers" section (the score tiles and the full top-clip table) stays visible, but sits last, after the plain-language checks. When you add a raw value anywhere, give it the `num` class or a plain-language companion.
+
+## Page layouts
+
+- **Explore** (a clip): clips | player | what the model notices. Each clip in the rail has a thumbnail of its first frame, and held-out clips are tagged "unseen". The playground sits under the feature list, so the order reads: watch, pick, steer. With no feature in the URL, the first **verified** feature on the frame is selected, so a newcomer starts on something real.
+- **Features**: the hardest moments (when the run has them), then a dictionary callout, then two card grids, **Verified** and **Still exploring**. Each card shows the frame where the feature fires hardest beside its isometric blocks. Cards load their art when they scroll into view, so a run with thousands of features stays fast.
+- **A feature**: the title and verdict, one "Watch it fire" button (or "Watch and steer it"), the hero, then three sections in order: what the checks say, where it fires hardest (six frames), and the numbers.
+- **Below 1180px** the clip rail becomes a strip that scrolls sideways inside itself. **Below 860px** everything is one column and the header drops the status. **Below 560px** the wordmark shows only the logo. No page may scroll sideways at 390px; a test checks this.
+
+## The demo site
+
+`ii export-site` builds `demo-site/`. Its fake viewer page is the viewer's own `index.html` with a slim demo bar above it, so the viewer and the demo never drift apart. `static/demo.css` styles only the demo prose pages (`.prose`, `.demo-bar`, `.score-line`) on the same tokens, and must never restyle viewer classes. Regenerate the site with `make demo-site` whenever `static/` changes.
 
 ## References Jerry chose
 
@@ -59,6 +84,7 @@ He picked these on 13 Nov 2026, from screenshots of about 28 homepages:
 2. **Light "highlighter" cards**: rejected as "the most generic presentation". Jerry wants a real brand identity, with no shadcn-style components.
 3. **Risograph halftone** (fluoro inks, Bricolage Grotesque): rejected as horrendous.
 4. **The first version of the current direction** (PR #18): its direction was accepted, but it had too many type variations (3 families and 19 sizes). PR #19 cut it down to the system above.
+5. **Jargon up front** (the first pass of PR #19): the type was right, but every row and the header led with `ablation 1.49e-8`, `ev_heldout`, `t · window`, and the feature list was names and badges only. The learner pass moved raw numbers behind the Numbers switch, added clip thumbnails and feature cards, put verified features first, and fixed sideways scrolling on phones.
 
 The lessons:
 
@@ -77,5 +103,8 @@ The Playwright tests in `tests/test_view.py`, `test_steer.py` and `test_guide.py
 - A `guide-verdict` element containing "Verified".
 - `data-real` on `[data-testid=guide]`.
 - A visible top-clip table.
+- The exact `frame-readout` text (`frame 6 · t 1 · window 0`) and `sae-summary` text. Both may be hidden behind the Numbers switch, but their text must not change.
+- A feature selected from the URL (`?feature=`) stays selected, even if it is not verified.
+- No sideways scroll at 390px wide on the clip, features and feature pages.
 
 The Rust server embeds `static/` at compile time. After a CSS change, rebuild it with `cargo build -p interpretableintelligence-server`, or `tests/test_contract.py::test_static_asset_bytes_match` will fail against a stale local binary.
