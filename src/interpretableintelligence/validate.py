@@ -688,7 +688,9 @@ def _check_rollouts(run_dir: Path, schema_version: int, errors: list[str]) -> No
         return
     try:
         config = config_from_summary(summary)
-        rebuilt = summarize(rows, config)
+        from interpretableintelligence.rollout_groot import summarize_rollout_rows
+
+        rebuilt = summarize_rollout_rows(rows, config)
     except (TypeError, ValueError, RuntimeError) as exc:
         errors.append(f"rollouts summary does not match the episode schedule: {exc}")
         return
