@@ -3,27 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f5">
   <title>Fake demo · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
+  <nav class="demo-bar" aria-label="Demo sections"><a class="demo-home" href="/">Demo</a><a href="/fake/" aria-current="page">Fake</a><a href="/picker/">Picker</a><a href="/vjepa/">V-JEPA 2</a><a href="/groot/">GR00T</a></nav>
   <header class="top" data-testid="run-header">
     <div class="brand-row">
-      <a class="wordmark" href="/">interpretableintelligence</a>
+      <a class="wordmark" href="#/" aria-label="interpretable intelligence">
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
+        <span class="wordmark-text">interpretable intelligence</span>
+      </a>
       <span id="run-id" class="run-id" data-testid="run-id"></span>
-      <nav class="nav"><a href="/fake/" aria-current="page">Fake</a><a href="/picker/">Picker</a><a href="/vjepa/">V-JEPA 2</a><a href="/groot/">GR00T</a></nav>
+      <nav class="nav">
+        <a href="#/" data-nav="explore">Explore</a>
+        <a href="#/features" data-testid="nav-features" data-nav="features">Features</a>
+        <a href="#/steering" data-testid="nav-steering" data-nav="steering" hidden>Steering</a>
+      </nav>
     </div>
     <div class="meta">
-      <span id="run-model" data-testid="run-model"></span>
-      <span id="run-layer" data-testid="run-layer"></span>
-      <span id="split-sizes" data-testid="split-sizes"></span>
-      <span id="sae-summary" data-testid="sae-summary"></span>
+      <span id="run-status" class="run-status" data-testid="run-status"></span>
+      <span class="meta-numbers num">
+        <span id="run-model" data-testid="run-model"></span>
+        <span id="run-layer" data-testid="run-layer"></span>
+        <span id="split-sizes" data-testid="split-sizes"></span>
+        <span id="sae-summary" data-testid="sae-summary"></span>
+      </span>
+      <button type="button" class="numbers-toggle" data-testid="numbers-toggle" aria-pressed="false" title="Show the raw measurements next to the plain-language view">
+        <span class="switch" aria-hidden="true"></span>Numbers
+      </button>
     </div>
-    <p class="score-line" data-testid="score-line">Scoreboard: stripe, pulse, corner are real. flicker, band, speckle are not.</p>
   </header>
+  <p class="score-line" data-testid="score-line">Scoreboard: stripe, pulse, corner are real. flicker, band, speckle are not.</p>
   <main id="app"></main>
+  <script src="/static/guide.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

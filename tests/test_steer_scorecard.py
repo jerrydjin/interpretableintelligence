@@ -188,9 +188,20 @@ def test_playwright_scorecard_page_and_feature_section(demo, tmp_path):
         rows = page.locator("[data-testid=steering-row]")
         sync_api.expect(rows).to_have_count(len(card["rows"]))
         sync_api.expect(rows.first.locator("[data-testid=badge]")).to_have_text("real")
-        sync_api.expect(rows.first.locator("[data-testid=steering-verdict]")).to_have_text("beats controls")
+        sync_api.expect(rows.first.locator("[data-testid=steering-verdict]")).to_have_text("Beats random edits")
         sync_api.expect(rows.first.locator("svg.steer-strip circle")).to_have_count(1)
         sync_api.expect(page.locator("[data-testid=steering-note]")).to_contain_text("does not change any badge")
+        # The viewer's type rules: no monospace, no uppercase labels; raw numbers wait for the switch.
+        styles = page.evaluate(
+            """() => [...document.querySelectorAll('[data-testid=steering-page] *')].map((node) => {
+                const style = getComputedStyle(node);
+                return [style.fontFamily, style.textTransform];
+            })"""
+        )
+        assert not any("mono" in family.lower() or transform == "uppercase" for family, transform in styles)
+        sync_api.expect(page.locator("[data-testid=steering-table] td.num").first).to_be_hidden()
+        page.locator("[data-testid=numbers-toggle]").click()
+        sync_api.expect(page.locator("[data-testid=steering-table] td.num").first).to_be_visible()
 
         page.goto(url + f"#/features/{first}", wait_until="domcontentloaded")
         section = page.locator("[data-testid=steering-feature]")

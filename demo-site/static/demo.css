@@ -1,112 +1,130 @@
-.prose {
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 28px 22px 72px;
-}
+/* Static demo site (ii export-site). Loaded after style.css and uses its tokens:
+   the same two fonts, five sizes and colours. Everything here is scoped to the
+   demo pages (.prose, .demo-bar, .score-line) so it never restyles the viewer. */
 
-.prose h1 {
-  font-size: 28px;
-  margin: 0 0 12px;
+/* Demo sections above the viewer: a quiet bar, not a second header. */
+.demo-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 18px;
+  padding: 10px var(--gutter);
+  background: var(--well);
+  font-size: var(--t-small);
 }
+.demo-bar a { color: var(--ink-2); text-decoration: none; }
+.demo-bar a:hover { color: var(--ink); }
+.demo-bar a[aria-current="page"] { color: var(--ink); font-weight: 500; }
+.demo-bar .demo-home { color: var(--ink); font-weight: 500; margin-right: 6px; }
 
-.prose h2 {
-  font-size: 18px;
-  margin: 28px 0 8px;
-}
-
-.prose p,
-.prose li {
-  line-height: 1.5;
-}
-
-.prose code {
-  font-size: 0.92em;
-}
-
-.section-list {
-  padding-left: 18px;
-}
-
-.section-list li {
-  margin: 10px 0;
-}
-
+/* The fake demo's one-line scoreboard summary, under the viewer header. */
 .score-line {
-  margin: 8px 0 0;
-  color: var(--ink);
+  margin: 0;
+  padding: 0 var(--gutter);
+  max-width: 70ch;
+  color: var(--ink-2);
 }
+
+/* Demo pages: one readable column. */
+.demo-top { grid-template-columns: 1fr auto; }
+.prose {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 40px var(--gutter) 120px;
+}
+.prose h1 {
+  margin: 0 0 16px;
+  font-family: var(--serif);
+  font-size: var(--t-display);
+  font-weight: 400;
+  letter-spacing: var(--serif-track);
+  line-height: 1.05;
+}
+.prose h2 {
+  margin: 56px 0 12px;
+  font-family: var(--serif);
+  font-size: var(--t-head);
+  font-weight: 400;
+  letter-spacing: var(--serif-track);
+  line-height: 1.15;
+}
+.prose p, .prose li { color: var(--ink-2); }
+.prose p { margin: 0 0 16px; max-width: 68ch; }
+.prose .lede { color: var(--ink-3); margin-bottom: 32px; }
+.prose a { text-underline-offset: 3px; text-decoration-color: var(--line-2); }
+.prose .badge { vertical-align: 1px; }
+
+/* Home: the four sections as cards. */
+.section-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.section-list a {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  padding: 20px 22px;
+  border-radius: var(--radius);
+  background: var(--sheet);
+  box-shadow: 0 0 0 1px var(--line);
+  text-decoration: none;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.section-list a:hover { box-shadow: 0 0 0 1px var(--line-2), 0 6px 20px rgba(20, 20, 19, 0.06); transform: translateY(-1px); }
+.section-name { font-family: var(--serif); font-size: var(--t-lead); letter-spacing: var(--serif-track); color: var(--ink); }
+.section-text { color: var(--ink-2); }
+
+.meta-line { font-size: var(--t-small); color: var(--ink-3) !important; }
 
 .score-table {
   width: 100%;
+  margin: 0 0 24px;
   border-collapse: collapse;
-  background: var(--paper);
 }
-
-.score-table th,
-.score-table td {
+.score-table th, .score-table td {
   text-align: left;
-  padding: 7px 8px;
+  padding: 10px 12px 10px 0;
   border-bottom: 1px solid var(--line);
   vertical-align: top;
+  font-size: var(--t-small);
+  font-weight: 400;
 }
+.score-table th { color: var(--ink-3); }
+.score-table td { color: var(--ink-2); }
 
 .clip-row {
   display: grid;
-  grid-template-columns: minmax(240px, 520px) minmax(240px, 1fr);
-  gap: 22px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 24px;
   align-items: start;
+  margin: 0 0 24px;
 }
+.prose .stage { margin: 0 0 16px; }
+.prose .stage video { object-fit: contain; }
 
-.feature-card .viz {
-  width: 100%;
-  margin: 12px 0;
-  background: var(--plate);
+.demo-card {
+  padding: 20px 22px;
+  border-radius: var(--radius);
+  background: var(--sheet);
+  box-shadow: 0 0 0 1px var(--line);
 }
+.demo-card .viz { width: 100%; margin: 12px 0; }
+.demo-title { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 6px 0 0; }
+.demo-title h2 { margin: 0; font-size: var(--t-head); }
+.demo-score { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; }
+.demo-score div { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--well); }
+.demo-score dt { font-size: var(--t-small); color: var(--ink-2); }
+.demo-score dd { margin: 4px 0 0; font-family: var(--serif); font-size: var(--t-lead); letter-spacing: var(--serif-track); }
 
-.feature-title {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
+figure { margin: 0; }
+figcaption { font-size: var(--t-small); color: var(--ink-3); }
 
-.feature-title h2 {
-  margin: 0;
-}
-
-.score {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 16px;
-  margin: 0;
-}
-
-.score div {
-  margin: 0;
-}
-
-.score dt {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.score dd {
-  margin: 0;
-}
-
-.meta-line {
-  color: var(--muted);
-}
-
-figure {
-  margin: 0;
-}
-
-figcaption {
-  margin-top: 8px;
-  color: var(--muted);
-}
-
-@media (max-width: 800px) {
+@media (max-width: 860px) {
   .clip-row { grid-template-columns: 1fr; }
+  .prose { padding-top: 24px; }
 }
