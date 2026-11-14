@@ -1,6 +1,7 @@
 {
  "source": "lerobot/droid_100 (HF dataset, codebase v3.0), camera observation.images.exterior_image_1_left, 15 fps 320x180",
- "license": "MIT (per HF dataset card)",
+ "attribution": "Clips are derived from the DROID dataset (Khazatsky et al.; DROID authors), licensed upstream under CC BY 4.0.",
+ "license": "Upstream DROID: CC BY 4.0 (DROID authors). The lerobot/droid_100 Hugging Face dataset card lists MIT.",
  "url": "https://huggingface.co/datasets/lerobot/droid_100",
  "clips": [
   {
