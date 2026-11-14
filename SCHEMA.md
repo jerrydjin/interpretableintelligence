@@ -57,6 +57,8 @@ Two optional manifest fields are not part of the contract readers must understan
 - `clips_dir`: absolute directory the capture read. The viewer uses it when `--clips` is omitted.
 - `stages`: one object per finished stage (`capture`, `sae`, `features`, `score`, `view`). Each object has exactly `wall_s` (seconds), `peak_ram_bytes`, `device`, `rows`, and `tokens`. These are measurements from that stage, not estimates.
 
+`remote.json` is written by `ii run --remote` next to a run it mirrored: where the run executed, the price per hour it was estimated at, the `--max-cost` cap, timings, status, and the estimated cost. No reader depends on it, and it is not part of the contract (`docs/REMOTE.md`).
+
 `acts/stream/` is a float32 row cache the pipeline uses to resume training and encoding without loading every shard. It is not part of the contract. Shards remain the activation record.
 
 ## split.json

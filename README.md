@@ -116,6 +116,15 @@ uv run pytest
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
 
+### No GPU? Run on a hosted one
+
+```bash
+uv sync --extra remote && uv run modal setup     # once
+uv run ii run hf --model facebook/dinov2-small --clips clips/mine --out runs/dinov2 --remote
+```
+
+`--remote` runs the same pipeline on a [Modal](https://modal.com) GPU on your own account (default `--gpu L4`, about $1.12/h with its CPU and memory) and mirrors each finished stage into `--out`. The local viewer opens once features exist and refreshes itself when scores land, with a status pill showing the GPU, the stage, and the spend so far. `--max-cost` (default $2.00) becomes the container's timeout, so the cap holds on Modal's side even if this machine disconnects. The estimate and the run's details are written to `runs/<run_id>/remote.json`. Clips upload once, weights are cached, and a rerun resumes remotely. Setup, prices, and limits: [docs/REMOTE.md](docs/REMOTE.md).
+
 ### Share a run as a static page
 
 ```bash

@@ -27,6 +27,8 @@ dependencies = [
 # install and this extra both stay free of simulators and GPU packages.
 # The adapters are stubs until that lane lands.
 robots = []
+# `ii run --remote`: the Modal client. Runs bill to your own Modal account (docs/REMOTE.md).
+remote = ["modal>=1.0"]
 
 [project.scripts]
 interpretableintelligence = "interpretableintelligence.cli:app"

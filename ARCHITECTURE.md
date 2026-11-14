@@ -18,6 +18,8 @@ This lane is the contract, the scoring core, the V-JEPA 2 adapter, and a local c
 
 Each stage records wall time, peak RSS, device, and row/token counts on `manifest.stages` and is skipped when its outputs still match the clips, seed, and upstream weights. `interpretableintelligence validate` checks the folder in `SCHEMA.md`, including that `real` follows the four gates. The printed cost per hour of footage is `stage_seconds * gpu_cost_per_hour / video_seconds`.
 
+`--remote` runs these stages unchanged on a hosted GPU (`remote/`, `docs/REMOTE.md`). `execute_pipeline`'s `on_stage` callback fires once each stage's outputs are on disk; the container-side worker turns it into an event listing the run folder's files and hashes, and the client downloads what changed into the local `--out`. The local viewer serves the folder as a `LiveRun`, which reloads on each new stage. The cap is the container's timeout: `--max-cost` divided by the container's price per hour.
+
 Thresholds are constants in `src/interpretableintelligence/thresholds.py`. Changing them changes the meaning of `real`.
 
 ## Adapter protocol

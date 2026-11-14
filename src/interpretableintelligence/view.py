@@ -498,6 +498,52 @@ def enable_steering(model: RunModel, clips_dir: Path | None = None) -> None:
     model.run_payload = {**model.run_payload, "steer": {"enabled": True, "sae_usable": model.steerer.sae_usable}}
 
 
+def viewer_ready(run_dir: Path) -> bool:
+    """True once ``run_dir`` has the files ``load_run`` needs."""
+    return all((Path(run_dir) / rel).is_file() for rel in _REQUIRED)
+
+
+class LiveRun:
+    """A run folder that is still filling in, served as if it were a finished one.
+
+    ``ii run --remote`` writes stages into the folder while the viewer is up. ``reload`` loads the
+    folder again and swaps it in; every other attribute is the current ``RunModel``'s. ``/api/run``
+    gains a ``live`` object (remote status plus a ``generation`` that goes up on each reload) so the
+    page can show progress and refresh itself when new results land.
+    """
+
+    def __init__(self, run_dir: Path, clips_dir: Path | None, live: dict) -> None:
+        self._lock = threading.Lock()
+        self._run_dir = Path(run_dir)
+        self._clips_dir = None if clips_dir is None else Path(clips_dir)
+        self._live = dict(live)
+        self._generation = 0
+        self._current = load_run(self._run_dir, self._clips_dir)
+
+    def __getattr__(self, name: str):
+        return getattr(object.__getattribute__(self, "_current"), name)
+
+    @property
+    def run_payload(self) -> dict:
+        with self._lock:
+            current, live, generation = self._current, dict(self._live), self._generation
+        return {**current.run_payload, "live": {**live, "generation": generation}}
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def reload(self) -> None:
+        fresh = load_run(self._run_dir, self._clips_dir)
+        with self._lock:
+            self._current = fresh
+            self._generation += 1
+
+    def update(self, **fields) -> None:
+        with self._lock:
+            self._live.update(fields)
+
+
 def bind_server(model: RunModel, host: str, port: int) -> ThreadingHTTPServer:
     httpd = _Server((host, port), _handler(model))
     return httpd

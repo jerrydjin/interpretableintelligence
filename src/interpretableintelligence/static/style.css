@@ -129,6 +129,46 @@ button, input, select { font: inherit; color: inherit; }
 #sae-summary[data-usable="false"] { color: var(--warn); }
 #sae-summary[data-usable="true"] { color: var(--ink-2); }
 
+/* Remote run status (ii run --remote): where it runs, the latest stage, and the cost so far. */
+.live-status {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  max-width: calc(100vw - 32px);
+  padding: 7px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--sheet);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 8px rgba(27, 26, 23, 0.08);
+}
+.live-status[hidden] { display: none; }
+.live-status::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--signal);
+  vertical-align: 1px;
+}
+.live-status[data-state="running"]::before { animation: live-pulse 1.4s ease-in-out infinite; }
+.live-status[data-state="done"]::before { background: var(--real); }
+.live-status[data-state="done"] { color: var(--real); }
+.live-status:not([data-state="running"]):not([data-state="done"]) { color: var(--warn); }
+@keyframes live-pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .live-status[data-state="running"]::before { animation: none; } }
+@media (max-width: 520px) {
+  .live-status { left: 16px; white-space: normal; border-radius: 12px; }
+}
+
 #app { padding: 36px 32px 96px; }
 
 .panel-title { display: block; margin: 0 0 14px; }
