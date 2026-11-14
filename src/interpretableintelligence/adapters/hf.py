@@ -364,6 +364,46 @@ class HFAdapter:
             self._cache[key] = cached
         return cached
 
+    # ------------------------------------------------------ activation cache
+
+    def cache_spec(self, clip: Clip) -> dict:
+        """What besides weights, layer and frames decides this adapter's tensors (``act_cache``)."""
+        del clip
+        self._ensure()
+        return {
+            "adapter": "hf-v1",
+            "input_key": self._input_key,
+            "size": int(self._size),
+            "patch": int(self._patch),
+            "prefix": int(self._prefix),
+            "frames": int(self.n_frames),
+            "tubelet": int(self._tubelet),
+            "video": bool(self.is_video),
+            "mean": [float(x) for x in self._mean],
+            "std": [float(x) for x in self._std],
+            "extra": sorted(str(key) for key in self._extra),
+        }
+
+    def clean_state(self, clip: Clip, window: Window) -> dict[str, torch.Tensor]:
+        """Unedited block output (prefix included) and final tokens for one window."""
+        self.raw_activations(clip, window)
+        target = self._clean_output(clip, window)
+        return {"full": self._cache[("full", clip.clip_id, window.index)], "target": target}
+
+    def load_clean_state(self, clip: Clip, window: Window, state: dict[str, torch.Tensor]) -> None:
+        """Put :meth:`clean_state` back, so encode and the clean prediction skip their forwards."""
+        self._ensure()
+        full = state["full"].to(device=self.device, dtype=torch.float32)
+        target = state["target"].to(device=self.device, dtype=torch.float32)
+        tokens = self._t * self._h * self._w
+        if full.dim() != 3 or full.shape[0] * (full.shape[1] - self._prefix) != tokens or full.shape[-1] != self._d_model:
+            raise ValueError(f"cached block output {tuple(full.shape)} does not fit this model")
+        if target.dim() != 2 or target.shape[0] != tokens:
+            raise ValueError(f"cached final tokens {tuple(target.shape)} do not fit this model")
+        self._cache[("full", clip.clip_id, window.index)] = full
+        self._cache[("raw", clip.clip_id, window.index)] = self._to_grid(full)
+        self._cache[("target", clip.clip_id, window.index)] = target
+
     # -------------------------------------------------------------- internals
 
     def _clean_output(self, clip: Clip, window: Window) -> torch.Tensor:

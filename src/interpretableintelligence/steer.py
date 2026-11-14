@@ -26,6 +26,7 @@ from pathlib import Path
 
 import torch
 
+from interpretableintelligence.act_cache import ActivationCache, prime_clean
 from interpretableintelligence.adapters import get_adapter
 from interpretableintelligence.adapters.base import Clip, Window
 from interpretableintelligence.clips import load_clip
@@ -37,6 +38,8 @@ from interpretableintelligence.thresholds import DEAD_ACT_EPS
 
 KINDS = ("ablate", "scale", "clamp", "add")
 MAX_FEATURES = 8
+# Unedited passes kept in memory, so moving a slider on the same window runs only the edited pass.
+CLEAN_WINDOWS = 4
 MAX_ABS_VALUE = 1e4
 
 
@@ -113,7 +116,7 @@ def steer_edit(sae: SAE, feature_ids: tuple[int, ...] | list[int], kind: str, va
 class Steerer:
     """Loads a run's adapter and SAE once and answers steering requests for its clips."""
 
-    def __init__(self, run_dir: Path, clips_dir: Path | None = None) -> None:
+    def __init__(self, run_dir: Path, clips_dir: Path | None = None, cache: ActivationCache | None = None) -> None:
         from interpretableintelligence.view import _resolve_pixels  # noqa: PLC0415 (view stays adapter-free)
 
         self.ctx = load_run(Path(run_dir))
@@ -140,6 +143,8 @@ class Steerer:
         self._meta = {str(clip["clip_id"]): clip for clip in ctx.manifest.get("clips") or [] if isinstance(clip, dict)}
         self._pixels = _resolve_pixels(ctx.manifest, ctx.run_dir, None if clips_dir is None else Path(clips_dir))
         self._clips: dict[str, Clip] = {}
+        self._cleans: dict[tuple[str, int], _Clean] = {}
+        self.cache = cache if cache is not None else ActivationCache.open()
         self._lock = threading.Lock()
 
     def steer(self, payload: object) -> dict:
@@ -188,6 +193,18 @@ class Steerer:
         return self._edited(request, clip, window, self._clean(clip, window))
 
     def _clean(self, clip: Clip, window: Window) -> "_Clean":
+        """The unedited pass for one window: memoised in memory, primed from the activation cache."""
+        key = (clip.clip_id, int(window.index))
+        cached = self._cleans.pop(key, None)
+        if cached is None:
+            prime_clean(self.adapter, clip, window, cache=self.cache, model_sha=self.ctx.model_sha)
+            cached = self._compute_clean(clip, window)
+        self._cleans[key] = cached  # most recent last
+        while len(self._cleans) > CLEAN_WINDOWS:
+            self._cleans.pop(next(iter(self._cleans)))
+        return cached
+
+    def _compute_clean(self, clip: Clip, window: Window) -> "_Clean":
         adapter, sae = self.adapter, self.sae
         grid = adapter.grid()
         with torch.no_grad():

@@ -326,6 +326,13 @@ class FakeAdapter:
             digest.update(np.ascontiguousarray(array).tobytes())
         return digest.hexdigest()
 
+    def cache_spec(self, clip: Clip) -> dict:
+        """What besides weights, layer and frames decides this adapter's tensors (``act_cache``).
+
+        The activation noise is seeded by the clip id, so the id is part of the key.
+        """
+        return {"adapter": "fake-v1", "plant": self.plant, "policy_case": bool(self._policy_case), "clip_id": clip.clip_id}
+
     def windows(self, clip: Clip) -> list[Window]:
         self._check_frames(clip.frames)
         if self.plant != "group":

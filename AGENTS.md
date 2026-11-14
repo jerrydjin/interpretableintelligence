@@ -22,7 +22,7 @@ uv run pytest
 
 `interpretableintelligence` is the long command name; **`ii` is the same CLI**. PyTorch is pinned to CPU wheels in `pyproject.toml` for CI and local dev; GR00T/LIBERO jobs use separate GPU environments (Colab), not this default install.
 
-On a fresh clone of `main`, expect **147 passed, 13 skipped** (`pytest` excludes `slow` and two deselected tests by default). Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
+On a fresh clone of `main`, expect **218 passed, 13 skipped** (`pytest` excludes `slow` and two deselected tests by default). Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
 
 ## `ii` CLI (public surface)
 
@@ -40,11 +40,18 @@ All experiments that belong in this repo should be reachable through these comma
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
 | `validate` | Check a run folder against `SCHEMA.md`. |
+| `cache` | Show or clear the shared activation cache (keyed by model, layer, clip hash, window, preprocessing) that lets reruns and the playground skip forward passes. Not part of the run contract. |
 | `view` | Local browser viewer for a finished run. `--steer` adds the playground (steer SAE features, see the prediction move; exploration only, never evidence). |
 
 World-model path: `ii run fake --clips … --out runs/…` or `vjepa2`. Policy path on main: `ii rollouts runs/… --policy fake`.
 
 **Known gap:** GR00T is on `ii` for the offline lane (`ii run groot`: capture at DiT block 5 on the final denoise step, SAE, scoring, `ii view --steer`), but **closed-loop LIBERO-plus rollouts are not**. They still run through `src/interpretableintelligence/adapters/groot/v9/` (Colab, `ablate_v9.py`, ablation plans), the current pre-CLI route, not a violation of the long-term CLI rule. Steering GR00T in the playground is exploration, never evidence; the research rules below still decide findings.
+
+## Language: Rust for engineering and infra
+
+New technical engineering and infrastructure (servers, storage, file formats and readers, tooling that does not run a model) is written in **Rust**, in the Cargo workspace (`server/` is the example).
+
+The exception is code that runs inside the model process and touches model tensors: adapters, the pipeline stages, scoring, steering, and the glue that hands tensors to and from PyTorch (for example the activation cache in `act_cache.py`, whose file I/O already goes through the Rust-backed `safetensors` package). That stays Python, so the package still installs with `uv sync` and no Rust toolchain. When a change is unclear, prefer Rust for anything that reads or serves run folders or caches without loading a model, and say which side of the line it is on in the PR.
 
 ## Run folder layout
 
