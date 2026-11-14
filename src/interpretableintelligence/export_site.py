@@ -203,7 +203,7 @@ def _write_product(path: Path, summary: dict, status: str) -> None:
     <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
     <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
     <h2>What you get today</h2>
-    <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls.</p>
+    <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls, on the synthetic reacher today; GR00T joins once it lands.</p>
     <h2>Proof</h2>
     <p data-testid="control-headline">{headline}</p>
     <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/results/">Results</a>.</p>
@@ -527,6 +527,9 @@ def _ii_commands() -> list[tuple[str, str]]:
         if name == "validate":
             # The docstring's first line cites exit code 0. Keep result numbers out of this list.
             blurb = "Validate a run folder against the schema."
+        if name == "rollouts":
+            # The command only ships the fake reacher. Don't let the list read as a GR00T run.
+            blurb = "Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written."
         if any(character.isdigit() for character in blurb):
             raise ValueError(f"ii {name} blurb contains a digit: {blurb}")
         lines.append((name, blurb))

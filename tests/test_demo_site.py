@@ -235,6 +235,11 @@ def test_product_page_is_the_front_door():
         "On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar."
         in text
     )
+    assert (
+        "ii rollouts compares baseline and intervened task success with matched random-feature controls, "
+        "on the synthetic reacher today; GR00T joins once it lands."
+    ) in text
+    assert "on the synthetic reacher. Resume skips episodes already written." in text
     assert "ii runs the" not in text
     assert "not through an ii command" not in text
     assert "did not run the GR00T episodes" not in text
