@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
-  <title>Results · interpretableintelligence</title>
+  <title>ii · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
   <link rel="icon" href="/favicon.ico">
@@ -16,22 +16,33 @@
         <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
         <span class="wordmark-text">interpretable intelligence</span>
       </a>
-      <nav class="nav"><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
+      <nav class="nav"><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
     </div>
   </header>
   <main class="prose">
-    <h1>Results</h1>
-    <p class="lede"><b>What we measured on real robot models, and the controls that decide what counts.</b> Every number on these pages is read from a result file in the repo. A feature is called real only when it passes the scoreboard rule. The synthetic demos are at the bottom and labelled.</p>
-    <ul class="section-list" data-testid="real-sections">
-      <li><a href="/groot/"><span class="section-name">GR00T N1.7 on LIBERO</span><span class="section-text">641 rollouts. Switching off the picker's two candidates lowered success, but 5 of 20 random controls did too, so the drop is not specific to them. <span class="badge badge-unverified">Tested: no causal effect found</span></span></a></li>
-      <li><a href="/groot/#checks"><span class="section-name">Method checks</span><span class="section-text">Reconstruction-only rollouts identical to baseline in 8 of 8. SAE held-out explained variance 0.998. Failure onset re-derived from pot 0.</span></a></li>
-      <li><a href="/vjepa/#random-control"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">An SAE on a random-weights V-JEPA 2 scored higher on the loss-based checks than the trained model (loss_recovered 0.9999 vs 0.9795). Those scores cannot tell trained from random, so the random-weights control is now the bar.</span></a></li>
-      <li><a href="/vjepa/#atp"><span class="section-name">Attribution vs ablation</span><span class="section-text">On 40 V-JEPA 2 features, attribution ranks features the way measured ablation does (Spearman 0.987) at about 3,900x less compute across all 8192 latents. Edit size alone gets 0.90.</span></a></li>
+    <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
+    <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
+    <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
+    <h2>What you get today</h2>
+    <p><code>ii</code> is free and local. <code data-cmd="run">ii run</code> captures a layer, trains an SAE, and scores features on the adapters that ship: fake, vjepa2, hf, and groot. <code data-cmd="view">ii view</code> opens the run. <code data-cmd="validate">ii validate</code> checks the run folder.</p>
+    <p data-testid="ablation-runner">641 rollouts. The matched random-feature controls that caught this result live in the repo's ablation runner, <a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>src/interpretableintelligence/adapters/groot/v9/ablate_v9.py</code></a>, not through an <code>ii</code> command. That is the check <code>ii</code> is built around, until GR00T ablation is wired into <code>ii</code>. <code data-cmd="rollouts">ii rollouts</code> compares baseline and intervened success for the fake policy, with matched random-feature controls. That command did not run the GR00T episodes.</p>
+    <p data-testid="control-headline">Feature 720 tracked failures, and turning it off dropped success from 39/75 to 1/9. Turning off random features caused falls too in 5 of 20 runs. `ii` makes you run that control before calling a feature real.</p>
+    <p data-testid="proof">That result is the worked example. The label on it stays <span class="badge badge-unverified">Tested: no causal effect found</span>, and real=false. Nothing is called real. Read the table on <a href="/groot/">GR00T</a> and the rest on <a href="/results/">the results</a>. <a href="/vjepa/">V-JEPA 2 on DROID</a> is the other measurement: loss-based scores did not separate the trained model from a random-initialised one.</p>
+    <h2>What's coming</h2>
+    <ul class="coming" data-testid="coming">
+      <li><span class="badge badge-unverified">Coming</span> <code data-cmd="import">ii import</code> — bring the rollout logs you already have. Not a command on main.</li>
+      <li><span class="badge badge-unverified">Coming</span> <code data-cmd="probe">ii probe</code> and the random-weights SAE control. A candidate has to beat an SAE with untrained weights before it counts as real. Not in the tool yet.</li>
+      <li><span class="badge badge-unverified">Coming</span> Closed-loop rollouts at scale — switching features off inside live rollouts and measuring whether success actually moves.</li>
     </ul>
+    <h2 id="quickstart">Quickstart</h2>
+    <pre class="quickstart"><code>uv sync
+uv run ii try</code></pre>
+    <p>These are the install and first-run commands from the README. <code data-cmd="try">ii try</code> writes practice clips and runs the pipeline on the fake model. Pass <code>--no-open</code> to skip the browser.</p>
+    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code> — New here? Start with this. Finds features in a small practice model and opens the playground.</li><li><code data-cmd="generate-clips">ii generate-clips</code> — Write deterministic synthetic clips for the fake adapter.</li><li><code data-cmd="run">ii run</code> — Capture, train, extract features, score what is missing, then serve the viewer.</li><li><code data-cmd="rank">ii rank</code> — Rank SAE features. Does not ablate; every pick still needs a real ablation.</li><li><code data-cmd="explain">ii explain</code> — Ablate the features active in a clip and cite only real ablation effects.</li><li><code data-cmd="serve">ii serve</code> — Serve the read API and POST /explain. Reads stay available for contract tests; the Rust server is the one to run.</li><li><code data-cmd="rollouts">ii rollouts</code> — Compare baseline and intervened task success. Resume skips episodes already written.</li><li><code data-cmd="export">ii export</code> — Export a run as a static site: host the folder anywhere and share the link. No server needed.</li><li><code data-cmd="export-site">ii export-site</code> — Regenerate the static demo site from a fresh fake run and the vendored measurements.</li><li><code data-cmd="validate">ii validate</code> — Validate a run folder against the schema.</li><li><code data-cmd="view">ii view</code> — Start a local viewer for a run folder and open it in a browser.</li></ul>
     <h2>Synthetic demos</h2>
     <ul class="section-list" data-testid="synthetic-sections">
-      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer.</span></a></li>
-      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> 30 generated clips with planted features, layer 16, seed 0, held-out fraction 0.2. Shows the viewer end to end.</span></a></li>
+      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer. Not a result on a real model.</span></a></li>
+      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> Generated clips with planted features. Shows the viewer end to end. Not a result on a real model.</span></a></li>
     </ul>
     </main>
 </body>

@@ -68,7 +68,8 @@ def export_site(
     checks = _groot_checks(groot)
     random_control = _random_control(randinit)
     atp_result = _atp(atp)
-    _write_home(out / "index.html", groot_summary, groot_status, checks, random_control, atp_result)
+    _write_product(out / "index.html", groot_summary, groot_status)
+    _write_results(out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result)
     _write_picker(out / "picker", picker)
     _write_vjepa(out / "vjepa", vjepa, random_control, atp_result)
     _write_groot(out / "groot", groot / "groot-1028-ablate-summary.json", groot_summary, groot_status, checks)
@@ -131,7 +132,10 @@ def _viewer_page(sentence: str) -> str:
 
 
 def _demo_bar(current: str) -> str:
-    return f'  <nav class="demo-bar" aria-label="Demo sections"><a class="demo-home" href="/">Results</a>{_nav(current)}</nav>'
+    return (
+        '  <nav class="demo-bar" aria-label="Demo sections">'
+        f'<a class="demo-home" href="/">Home</a>{_nav(current)}</nav>'
+    )
 
 
 def _wordmark() -> str:
@@ -145,6 +149,7 @@ def _wordmark() -> str:
 
 def _nav(current: str) -> str:
     items = (
+        ("results", "/results/", "Results"),
         ("groot", "/groot/", "GR00T"),
         ("vjepa", "/vjepa/", "V-JEPA 2"),
         ("picker", "/picker/", "Picker"),
@@ -184,14 +189,50 @@ def _page(title: str, current: str, body: str) -> str:
 """
 
 
-def _write_home(path: Path, summary: dict, groot_status: str, checks: dict, control: dict, atp: dict) -> None:
-    controls = _control_rows(summary)
-    fell = sum(1 for row in controls if row.get("verdict") == "fall")
+def _write_product(path: Path, summary: dict, status: str) -> None:
+    commands = _ii_commands()
+    known = {name for name, _blurb in commands}
+    headline = escape(_control_headline(summary))
+    command_items = "".join(
+        f"<li>{_cmd(name, known)} — {escape(blurb)}</li>" for name, blurb in commands
+    )
+    body = f"""
+    <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
+    <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
+    <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
+    <h2>What you get today</h2>
+    <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE, and scores features on the adapters that ship: fake, vjepa2, hf, and groot. {_cmd("view", known)} opens the run. {_cmd("validate", known)} checks the run folder.</p>
+    <p data-testid="ablation-runner">{_runner_html(summary)} {_cmd("rollouts", known)} compares baseline and intervened success for the fake policy, with matched random-feature controls. That command did not run the GR00T episodes.</p>
+    <p data-testid="control-headline">{headline}</p>
+    <p data-testid="proof">That result is the worked example. The label on it stays <span class="badge badge-unverified">{escape(status)}</span>, and real=false. Nothing is called real. Read the table on <a href="/groot/">GR00T</a> and the rest on <a href="/results/">the results</a>. <a href="/vjepa/">V-JEPA 2 on DROID</a> is the other measurement: loss-based scores did not separate the trained model from a random-initialised one.</p>
+    <h2>What's coming</h2>
+    <ul class="coming" data-testid="coming">
+      <li><span class="badge badge-unverified">Coming</span> {_coming_cmd("import", known)} — bring the rollout logs you already have. Not a command on main.</li>
+      <li><span class="badge badge-unverified">Coming</span> {_coming_cmd("probe", known)} and the random-weights SAE control. A candidate has to beat an SAE with untrained weights before it counts as real. Not in the tool yet.</li>
+      <li><span class="badge badge-unverified">Coming</span> Closed-loop rollouts at scale — switching features off inside live rollouts and measuring whether success actually moves.</li>
+    </ul>
+    <h2 id="quickstart">Quickstart</h2>
+    <pre class="quickstart"><code>uv sync
+uv run ii try</code></pre>
+    <p>These are the install and first-run commands from the README. {_cmd("try", known)} writes practice clips and runs the pipeline on the fake model. Pass <code>--no-open</code> to skip the browser.</p>
+    <ul class="commands" data-testid="commands">{command_items}</ul>
+    <h2>Synthetic demos</h2>
+    <ul class="section-list" data-testid="synthetic-sections">
+      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer. Not a result on a real model.</span></a></li>
+      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> Generated clips with planted features. Shows the viewer end to end. Not a result on a real model.</span></a></li>
+    </ul>
+    """
+    path.write_text(_page("ii", "", body), encoding="utf-8")
+
+
+def _write_results(path: Path, summary: dict, groot_status: str, checks: dict, control: dict, atp: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    headline = escape(_control_headline(summary))
     body = f"""
     <h1>Results</h1>
     <p class="lede"><b>What we measured on real robot models, and the controls that decide what counts.</b> Every number on these pages is read from a result file in the repo. A feature is called real only when it passes the scoreboard rule. The synthetic demos are at the bottom and labelled.</p>
     <ul class="section-list" data-testid="real-sections">
-      <li><a href="/groot/"><span class="section-name">GR00T N1.7 on LIBERO</span><span class="section-text">{summary['episodes_logged']} rollouts. Switching off the picker's two candidates lowered success, but {fell} of {len(controls)} random controls did too, so the drop is not specific to them. <span class="badge badge-unverified">{escape(groot_status)}</span></span></a></li>
+      <li><a href="/groot/"><span class="section-name">GR00T N1.7 on LIBERO</span><span class="section-text">{headline} <span class="badge badge-unverified">{escape(groot_status)}</span></span></a></li>
       <li><a href="/groot/#checks"><span class="section-name">Method checks</span><span class="section-text">{escape(_checks_summary(checks))}</span></a></li>
       <li><a href="/vjepa/#random-control"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">{escape(_control_summary(control))}</span></a></li>
       <li><a href="/vjepa/#atp"><span class="section-name">Attribution vs ablation</span><span class="section-text">{escape(_atp_summary(atp))}</span></a></li>
@@ -202,7 +243,7 @@ def _write_home(path: Path, summary: dict, groot_status: str, checks: dict, cont
       <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> 30 generated clips with planted features, layer 16, seed 0, held-out fraction 0.2. Shows the viewer end to end.</span></a></li>
     </ul>
     """
-    path.write_text(_page("Results", "", body), encoding="utf-8")
+    path.write_text(_page("Results", "results", body), encoding="utf-8")
 
 
 def _write_picker(dest: Path, picker: Path) -> None:
@@ -348,7 +389,8 @@ def _write_groot(dest: Path, summary_path: Path, summary: dict, status: str, che
     )
     body = f"""
     <h1>GR00T N1.7 on LIBERO</h1>
-    <p data-testid="groot-lead">{escape(_lead_line(summary))}</p>
+    <p data-testid="control-headline">{escape(_control_headline(summary))}</p>
+    <p data-testid="ablation-runner">{_runner_html(summary)}</p>
     <p><span class="badge badge-unverified" data-testid="groot-status">{escape(status)}</span></p>
     <p data-testid="groot-result">{escape(_groot_result_sentence(summary))}</p>
     <p data-testid="groot-baseline">{escape(_baseline_line(baseline))}</p>
@@ -419,12 +461,85 @@ def _candidate_text(row: dict) -> str:
     return f"Feature {ident}: {successes}/{n}, verdict {verdict}."
 
 
-def _lead_line(summary: dict) -> str:
+def _episode_total(summary: dict) -> int:
     rollouts = summary.get("episodes_logged")
     if isinstance(rollouts, bool) or not isinstance(rollouts, int):
         raise ValueError("ablation summary has no episode total")
+    return rollouts
+
+
+def _single_feature_candidate(summary: dict) -> dict:
+    rows = [
+        row
+        for row in summary["table"]
+        if "-cand-" in str(row["cond"]) and "+" not in str(row["cond"])
+    ]
+    if len(rows) != 1:
+        raise ValueError(f"expected one single-feature candidate, found {len(rows)}")
+    return rows[0]
+
+
+def _control_headline(summary: dict) -> str:
+    """The GR00T worked example. Every count is read from the ablation summary."""
+    baseline = _one_row(summary, lambda cond: cond == "baseline")
+    single = _single_feature_candidate(summary)
+    feature = str(single["cond"]).split("-")[-1]
     controls = _control_rows(summary)
-    return f"{rollouts} rollouts, {len(controls)} random controls, and an offline lead rejected"
+    fell = sum(1 for row in controls if row.get("verdict") == "fall")
+    return (
+        f"Feature {feature} tracked failures, and turning it off dropped success "
+        f"from {int(baseline['successes'])}/{int(baseline['n'])} "
+        f"to {int(single['successes'])}/{int(single['n'])}. "
+        f"Turning off random features caused falls too in {fell} of {len(controls)} runs. "
+        "`ii` makes you run that control before calling a feature real."
+    )
+
+
+RUNNER_PATH = "src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"
+RUNNER_URL = "https://github.com/jerrydjin/interpretableintelligence/blob/main/" + RUNNER_PATH
+
+
+def _runner_html(summary: dict) -> str:
+    episodes = _episode_total(summary)
+    return (
+        f"{episodes} rollouts. The matched random-feature controls that caught this result "
+        "live in the repo's ablation runner, "
+        f'<a href="{RUNNER_URL}"><code>{escape(RUNNER_PATH)}</code></a>, '
+        "not through an <code>ii</code> command. "
+        "That is the check <code>ii</code> is built around, until GR00T ablation is wired into <code>ii</code>."
+    )
+
+
+def _ii_commands() -> list[tuple[str, str]]:
+    """Subcommands `ii --help` actually registers, with a number-free first line."""
+    from typer.main import get_command
+
+    from interpretableintelligence.cli import app
+
+    lines = []
+    for name, command in get_command(app).commands.items():
+        blurb = (command.help or "").strip().splitlines()[0].strip()
+        if name == "validate":
+            # The docstring's first line cites exit code 0. Keep result numbers out of this list.
+            blurb = "Validate a run folder against the schema."
+        if any(character.isdigit() for character in blurb):
+            raise ValueError(f"ii {name} blurb contains a digit: {blurb}")
+        lines.append((name, blurb))
+    if not lines:
+        raise ValueError("ii has no commands")
+    return lines
+
+
+def _cmd(name: str, known: set[str]) -> str:
+    if name not in known:
+        raise ValueError(f"ii {name} is not a command on main")
+    return f'<code data-cmd="{escape(name)}">ii {escape(name)}</code>'
+
+
+def _coming_cmd(name: str, known: set[str]) -> str:
+    if name in known:
+        raise ValueError(f"ii {name} is already a command; do not mark it coming")
+    return f'<code data-cmd="{escape(name)}">ii {escape(name)}</code>'
 
 
 def _controls_line(summary: dict) -> str:
@@ -533,7 +648,7 @@ def _control_summary(control: dict) -> str:
     return (
         f"An SAE on a random-weights V-JEPA 2 scored higher on the loss-based checks than the trained model "
         f"(loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}). "
-        "Those scores cannot tell trained from random, so the random-weights control is now the bar."
+        "Those scores cannot tell trained from random. The random-weights SAE control is not in the tool yet."
     )
 
 
@@ -548,7 +663,7 @@ def _control_html(control: dict) -> str:
     ]
     body = "".join(f"<tr><td>{escape(a)}</td><td>{escape(b)}</td><td>{escape(c)}</td></tr>" for a, b, c in rows)
     return f"""    <h2 id="random-control">Random-weights control</h2>
-    <p data-testid="random-control">The same SAE recipe, trained on a randomly initialised V-JEPA 2 (same DROID clips, layer 16), reconstructs its activations better than the trained model's SAE does: explained variance {random['ev_heldout']:.3f} vs {trained['ev_heldout']:.3f}, loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}. On the random model, zeroing layer 16 lowers the loss (L_zero {random['L_zero']:.3f} vs L_clean {random['L_clean']:.3f}), so its loss_recovered measures nothing, yet it still reads near 1. Only the context-mean floor check told the two apart. Explained variance and loss_recovered cannot separate a trained dictionary from a random one, so we closed this track, and a feature now has to beat the random-weights SAE before it counts.</p>
+    <p data-testid="random-control">The same SAE recipe, trained on a randomly initialised V-JEPA 2 (same DROID clips, layer 16), reconstructs its activations better than the trained model's SAE does: explained variance {random['ev_heldout']:.3f} vs {trained['ev_heldout']:.3f}, loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}. On the random model, zeroing layer 16 lowers the loss (L_zero {random['L_zero']:.3f} vs L_clean {random['L_clean']:.3f}), so its loss_recovered measures nothing, yet it still reads near 1. Only the context-mean floor check told the two apart. Explained variance and loss_recovered cannot separate a trained dictionary from a random one, so we closed this track. The random-weights SAE control is not in the tool yet.</p>
     <table class="score-table" data-testid="random-control-table">
       <thead><tr><th></th><th>Trained V-JEPA 2</th><th>Random weights</th></tr></thead>
       <tbody>{body}</tbody>

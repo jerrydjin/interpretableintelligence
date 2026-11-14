@@ -95,15 +95,17 @@ def test_groot_page_reads_the_ablation_summary():
     built = ROOT / "groot" / "groot-1028-ablate-summary.json"
     assert built.read_bytes() == summary_path.read_bytes()
     controls = [row for row in summary["table"] if "-ctrl" in row["cond"]]
-    lead = (
-        f"{summary['episodes_logged']} rollouts, {len(controls)} random controls, "
-        "and an offline lead rejected"
-    )
-    assert lead in page
-    assert page.index(lead) < page.index("Tested: no causal effect found")
+    headline = _control_headline(summary)
+    assert headline in page
+    assert page.index(headline) < page.index("Tested: no causal effect found")
+    assert f"{summary['episodes_logged']} rollouts." in page
+    assert "ablate_v9.py" in page
+    assert "not through an ii command" in _text(page)
+    assert "the check ii is built around" in _text(page)
     assert 'data-testid="groot-status">Tested: no causal effect found<' in page
     assert "Not yet validated" not in page
     assert "Not yet validated" not in (ROOT / "index.html").read_text(encoding="utf-8")
+    assert "Not yet validated" not in (ROOT / "results" / "index.html").read_text(encoding="utf-8")
     baseline = next(row for row in summary["table"] if row["cond"] == "baseline")
     low, high = baseline["wilson95"]
     assert (
@@ -136,8 +138,12 @@ def _text(html: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
 
 
-def test_home_puts_real_results_above_the_synthetic_demos():
-    page = (ROOT / "index.html").read_text(encoding="utf-8")
+def _nav(page: str) -> str:
+    return re.search(r'<nav class="nav">(.*?)</nav>', page).group(1)
+
+
+def test_results_put_real_results_above_the_synthetic_demos():
+    page = (ROOT / "results" / "index.html").read_text(encoding="utf-8")
     real = page.index('data-testid="real-sections"')
     synthetic = page.index('data-testid="synthetic-sections"')
     assert real < synthetic
@@ -145,11 +151,140 @@ def test_home_puts_real_results_above_the_synthetic_demos():
     assert main.index('href="/groot/"') < main.index('data-testid="synthetic-sections"')
     assert page[synthetic:].count('href="/fake/"') == main.count('href="/fake/"') == 1
     assert page[synthetic:].count('href="/picker/"') == main.count('href="/picker/"') == 1
-    nav = re.search(r'<nav class="nav">(.*?)</nav>', page).group(1)
-    assert nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
+    nav = _nav(page)
+    assert nav.index("/results/") < nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
+    assert 'aria-current="page"' in nav and "/results/" in nav
+    headline = _control_headline(_ablation_summary())
+    assert headline in page
+    assert page.index(headline) < page.index("Tested: no causal effect found")
     fake = (ROOT / "fake" / "index.html").read_text(encoding="utf-8")
     assert 'data-testid="synthetic-banner"' in fake
     assert "not a result on a real model" in fake
+    assert 'href="/">Home</a>' in fake
+    assert 'href="/results/"' in fake
+
+
+def _ablation_summary() -> dict:
+    path = _repo() / "demo-data" / "groot" / "groot-1028-ablate-summary.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _control_headline(summary: dict) -> str:
+    baseline = next(row for row in summary["table"] if row["cond"] == "baseline")
+    single = next(row for row in summary["table"] if row["cond"] == "A-cand-720")
+    feature = str(single["cond"]).split("-")[-1]
+    controls = [row for row in summary["table"] if "-ctrl" in row["cond"]]
+    fell = sum(row["verdict"] == "fall" for row in controls)
+    return (
+        f"Feature {feature} tracked failures, and turning it off dropped success "
+        f"from {int(baseline['successes'])}/{int(baseline['n'])} "
+        f"to {int(single['successes'])}/{int(single['n'])}. "
+        f"Turning off random features caused falls too in {fell} of {len(controls)} runs. "
+        "`ii` makes you run that control before calling a feature real."
+    )
+
+
+def _coming_and_rest(html: str) -> tuple[str, str]:
+    match = re.search(r'(<ul\b[^>]*data-testid="coming"[^>]*>.*?</ul>)', html, re.S)
+    assert match, "product page has no coming block"
+    coming = match.group(1)
+    return coming, html.replace(coming, "", 1)
+
+
+def _cli_names() -> set[str]:
+    from typer.main import get_command
+
+    from interpretableintelligence.cli import app
+
+    return set(get_command(app).commands)
+
+
+def _visible_numbers(html: str) -> list[str]:
+    """Measurement digits in the product copy. Model names are not measurements."""
+    main = html[html.index("<main"):html.index("</main>")]
+    without_code = re.sub(r"<code\b[^>]*>.*?</code>", "", main, flags=re.S)
+    text = _text(without_code)
+    for name in ("V-JEPA 2", "GR00T", "vjepa2"):
+        text = text.replace(name, " ")
+    return re.findall(r"\d+(?:\.\d+)?", text)
+
+
+def test_product_page_is_the_front_door():
+    page = (ROOT / "index.html").read_text(encoding="utf-8")
+    text = _text(page)
+    assert "Find out why your robot policy failed, and whether you're fooling yourself." in text
+    assert (
+        "For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did."
+        in text
+    )
+    assert "Run `ii` on your policy." in text
+    assert 'href="#quickstart"' in page
+    assert "free and local" in text
+    assert "open source" not in text.lower()
+    assert "mailto:" not in page
+    assert not re.search(r"[\w.+-]+@[\w.-]+\.\w+", text)
+    assert "contact" not in text.lower()
+    assert "$" not in text and "price" not in text.lower()
+    headline = _control_headline(_ablation_summary())
+    assert headline in page
+    assert page.index(headline) < page.index("Tested: no causal effect found")
+    assert "nothing is called real" in text.lower() or "Nothing is called real" in page
+    assert "real=false" in text
+    assert "the check ii is built around" in text
+    assert "ablate_v9.py" in page
+    assert "not through an ii command" in text
+    assert "ii runs the" not in text
+    assert "causes failure" not in text.lower()
+    assert page.index('id="quickstart"') < page.index('data-testid="synthetic-sections"')
+    assert page.index("What you get today") < page.index('data-testid="coming"')
+    assert page.index('data-testid="coming"') < page.index('id="quickstart"')
+    main = page[page.index("<main"):]
+    synthetic = page.index('data-testid="synthetic-sections"')
+    assert main.index('href="/groot/"') < main.index('data-testid="synthetic-sections"')
+    assert page[synthetic:].count('href="/fake/"') == main.count('href="/fake/"') == 1
+    assert page[synthetic:].count('href="/picker/"') == main.count('href="/picker/"') == 1
+    assert 'href="/results/"' in main and 'href="/vjepa/"' in main
+    nav = _nav(page)
+    assert nav.index("/results/") < nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
+    quick = re.search(r'<h2 id="quickstart">.*?</pre>', page, re.S).group(0)
+    assert "uv sync" in quick and "uv run ii try" in quick
+    summary = _ablation_summary()
+    single = next(row for row in summary["table"] if "-cand-" in row["cond"] and "+" not in row["cond"])
+    controls = [row for row in summary["table"] if "-ctrl" in row["cond"]]
+    fell = sum(row["verdict"] == "fall" for row in controls)
+    baseline = next(row for row in summary["table"] if row["cond"] == "baseline")
+    assert _visible_numbers(page) == [
+        str(summary["episodes_logged"]),
+        str(single["cond"]).split("-")[-1],
+        str(int(baseline["successes"])),
+        str(int(baseline["n"])),
+        str(int(single["successes"])),
+        str(int(single["n"])),
+        str(fell),
+        str(len(controls)),
+    ]
+
+
+def test_product_page_commands_exist_or_are_coming():
+    page = (ROOT / "index.html").read_text(encoding="utf-8")
+    coming, rest = _coming_and_rest(page)
+    cli = _cli_names()
+    named = set(re.findall(r'data-cmd="([^"]+)"', rest))
+    coming_named = set(re.findall(r'data-cmd="([^"]+)"', coming))
+    assert named == cli
+    assert coming_named == {"import", "probe"}
+    assert coming_named.isdisjoint(cli)
+
+    def command_tokens(fragment: str) -> set[str]:
+        tokens = set(re.findall(r"\bii\s+([a-z][a-z0-9-]*)", _text(fragment)))
+        return {token for token in tokens if token in cli or token in {"import", "probe"} or "-" in token}
+
+    assert command_tokens(rest) == cli
+    assert command_tokens(coming) == {"import", "probe"}
+    assert "random-weights SAE control" in _text(coming)
+    assert "Closed-loop rollouts at scale" in coming
+    assert "ii import" not in _text(rest)
+    assert "ii probe" not in _text(rest)
 
 
 def test_groot_method_checks_come_from_the_vendored_files():
@@ -169,7 +304,12 @@ def test_groot_method_checks_come_from_the_vendored_files():
     summary = json.loads((groot / "groot-1028-ablate-summary.json").read_text(encoding="utf-8"))
     for row in summary["table"]:
         assert f"{row['cond']} {row['successes']}/{row['n']}" in text
-    assert "cause" not in text.lower()
+    lower = text.lower()
+    assert "no causal effect found" in lower
+    assert "failure cause" not in lower
+    assert "causes failure" not in lower
+    assert "the cause" not in lower
+    assert "caused the failure" not in lower
 
 
 def test_vjepa_random_control_and_attribution_come_from_the_vendored_files():

@@ -16,14 +16,14 @@
         <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
         <span class="wordmark-text">interpretable intelligence</span>
       </a>
-      <nav class="nav"><a href="/groot/">GR00T</a><a href="/vjepa/" aria-current="page">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
+      <nav class="nav"><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/" aria-current="page">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
     </div>
   </header>
   <main class="prose">
     <h1>V-JEPA 2 on DROID</h1>
     <p class="meta-line">facebook/vjepa2-vitl-fpc64-256 · layer 16 · run droid100-L16 · SAE usable True · loss_recovered 0.970131560648</p>
     <h2 id="random-control">Random-weights control</h2>
-    <p data-testid="random-control">The same SAE recipe, trained on a randomly initialised V-JEPA 2 (same DROID clips, layer 16), reconstructs its activations better than the trained model's SAE does: explained variance 0.945 vs 0.824, loss_recovered 0.9999 vs 0.9795. On the random model, zeroing layer 16 lowers the loss (L_zero 0.799 vs L_clean 0.859), so its loss_recovered measures nothing, yet it still reads near 1. Only the context-mean floor check told the two apart. Explained variance and loss_recovered cannot separate a trained dictionary from a random one, so we closed this track, and a feature now has to beat the random-weights SAE before it counts.</p>
+    <p data-testid="random-control">The same SAE recipe, trained on a randomly initialised V-JEPA 2 (same DROID clips, layer 16), reconstructs its activations better than the trained model's SAE does: explained variance 0.945 vs 0.824, loss_recovered 0.9999 vs 0.9795. On the random model, zeroing layer 16 lowers the loss (L_zero 0.799 vs L_clean 0.859), so its loss_recovered measures nothing, yet it still reads near 1. Only the context-mean floor check told the two apart. Explained variance and loss_recovered cannot separate a trained dictionary from a random one, so we closed this track. The random-weights SAE control is not in the tool yet.</p>
     <table class="score-table" data-testid="random-control-table">
       <thead><tr><th></th><th>Trained V-JEPA 2</th><th>Random weights</th></tr></thead>
       <tbody><tr><td>Held-out explained variance</td><td>0.824</td><td>0.945</td></tr><tr><td>loss_recovered</td><td>0.9795</td><td>0.9999</td></tr><tr><td>L0 (held-out)</td><td>32.7</td><td>38.4</td></tr><tr><td>Beats the context-mean floor</td><td>True</td><td>False</td></tr><tr><td>Held-out windows scored</td><td>24</td><td>12</td></tr></tbody>
