@@ -12,12 +12,16 @@ Runs on CPU and Apple Silicon (MPS). PyTorch is the only tensor library; nothing
 
 ## Quickstart
 
-New here? One command, no download and no setup:
+New here? Clone the repo, then one command. No model download, no GPU, no setup:
 
 ```bash
+git clone https://github.com/jerrydjin/interpretableintelligence.git
+cd interpretableintelligence
 uv sync
 uv run ii try
 ```
+
+You need git and [uv](https://docs.astral.sh/uv/getting-started/installation/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`). uv downloads Python 3.11+ itself if your machine has an older one. It works on Linux (x86_64 and arm64) and on macOS 14 or later on Apple Silicon; PyTorch no longer publishes wheels for Intel Macs. Nothing else is needed: no ffmpeg (video goes through PyAV, which ships its own), no Rust toolchain, no Hugging Face account. The first `uv sync` fills about 1.5 GB of uv's package cache, mostly PyTorch's CPU build. CI runs exactly these commands on fresh Ubuntu and macOS runners with empty caches (`scripts/quickstart_smoke.sh`, which you can also run yourself).
 
 `ii try` writes 30 practice clips to `clips/try`, runs the whole pipeline on the `fake` model into `runs/try` (about 15 seconds on a laptop), and opens the viewer with the playground on. The page starts on the verified feature with the biggest effect, at the held-out moment where it fires hardest, and the terminal suggests what to try first: remove that feature, then remove a decoy and compare. The practice model has three features planted on purpose, so you can check what the tool finds against the truth before you point it at a real model. A second `ii try` reuses the run and opens in a couple of seconds. `--no-open` skips the browser and `--verbose` prints the full pipeline log.
 
@@ -132,6 +136,8 @@ uv run pytest
 ```
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
+
+`uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust read-API parity tests need `cargo` (https://rustup.rs); and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
 
 ### Share a run as a static page
 

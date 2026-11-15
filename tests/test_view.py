@@ -930,28 +930,28 @@ def _encode_video(
     fps: int = 8,
     codec: str = "libx264",
 ) -> None:
+    """Write a solid-colour test video with PyAV (a core dependency), so no ffmpeg CLI is needed."""
+    import av
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        "ffmpeg",
-        "-y",
-        "-v",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        f"color=c={color}:s={size}:r={fps}:d={frames / fps + 1}",
-        "-frames:v",
-        str(frames),
-        "-an",
-        "-c:v",
-        codec,
-        "-pix_fmt",
-        "yuv420p",
-    ]
-    if path.suffix.lower() in {".mp4", ".m4v", ".mov"}:
-        command.extend(["-movflags", "+faststart"])
-    command.append(str(path))
-    subprocess.run(command, check=True, timeout=60)
+    width, height = (int(part) for part in size.split("x"))
+    image = np.empty((height, width, 3), dtype=np.uint8)
+    image[...] = _rgb(color)
+    options = {"movflags": "+faststart"} if path.suffix.lower() in {".mp4", ".m4v", ".mov"} else {}
+    with av.open(str(path), mode="w", options=options) as container:
+        stream = container.add_stream(codec, rate=fps)
+        stream.width, stream.height, stream.pix_fmt = width, height, "yuv420p"
+        for _ in range(frames):
+            for packet in stream.encode(av.VideoFrame.from_ndarray(image, format="rgb24")):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    named = {"red": "ff0000", "green": "008000", "blue": "0000ff", "white": "ffffff", "black": "000000"}
+    value = named.get(color.lower(), color.lower().removeprefix("0x").removeprefix("#"))
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
 
 
 def _run_for_media(run: Path, clips: list[tuple[str, str]]) -> Path:
@@ -1092,10 +1092,12 @@ def _wait_http(url: str) -> None:
 
 
 def _chrome() -> str:
-    for candidate in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/local/bin/google-chrome", "/usr/bin/google-chrome", "/usr/bin/chromium"):
-        if Path(candidate).is_file():
-            return candidate
-    raise FileNotFoundError("Chrome is not installed; the viewer browser test cannot run")
+    from test_steer import _chrome as find_chrome
+
+    found = find_chrome()
+    if found is None:
+        pytest.skip("no Chrome or Chromium found (set II_CHROME, or run `uv run playwright install chromium`)")
+    return found
 
 
 def _moment(run_dir: Path) -> dict:
