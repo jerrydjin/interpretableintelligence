@@ -159,6 +159,19 @@ Feature `3` is the planted reacher feature. The command prints the success delta
 
 `uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust read-API parity tests need `cargo` (https://rustup.rs); and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
 
+### Compare models on the same clips
+
+```bash
+uv run python scripts/make_libero_clips.py --out clips/libero-moments   # 148 LIBERO moments with GR00T sidecars
+uv run ii run hf --model facebook/dinov2-small --clips clips/libero-moments --out runs/cmp-dinov2 --no-serve
+uv run ii run groot --clips clips/libero-moments --out runs/cmp-groot --sae-features 512 --no-serve
+uv run ii compare runs/cmp-dinov2 runs/cmp-groot --out site/compare
+```
+
+Each LIBERO clip is 16 frames, so a vision model and GR00T read it as exactly one window and see the same moment. `ii compare` takes each feature's largest activation in each shared clip (clips are matched by file hash), pairs features across models that are each other's best partner by Pearson r, and keeps a pair only if r beats the 99th percentile of the best r after shuffling clip order. It writes `compare.json` and a static `index.html`. A match is correlational. Only scoreboard-`real` features are marked verified; a run that has not been scored can still be compared, and all its features show as exploratory. When clips carry GR00T sidecars, each shared concept is described by the instruction most of its top moments come from; otherwise by a CLIP hint, which is a reading aid and never a label.
+
+`vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. `II_THREADS=N` lets a CPU-only run use N threads at the cost of bit-reproducibility.
+
 ### Share a run as a static page
 
 ```bash
