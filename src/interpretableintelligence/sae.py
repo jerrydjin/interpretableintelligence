@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -130,6 +130,25 @@ def untrained_sae(config: SAEConfig, mean: torch.Tensor, device: torch.device) -
         model.W_enc.copy_(decoder.T)
         model.b_enc.zero_()
         model.b_dec.copy_(mean.detach().to(device=device, dtype=torch.float32))
+    return model
+
+
+def random_weights_sae(config: SAEConfig, mean: torch.Tensor, seed: int, device: torch.device) -> SAE:
+    """Untrained control SAE: the trained SAE's architecture, width and ``k``, zero optimiser steps.
+
+    Deterministic in ``seed``: the same ``(config, mean, seed)`` gives bit-identical
+    weights. Weights come from :func:`untrained_sae` with ``seed`` in place of
+    ``config.seed``, so ``seed == config.seed`` is the trained SAE before its first step.
+    ``mean`` is the float32 mean of the train rows (``b_dec``'s initial value), the only
+    thing the control takes from the data. Nothing here is optimised, and the caller's
+    torch RNG is left untouched.
+    """
+    devices = [device] if device.type == "cuda" else []
+    with torch.random.fork_rng(devices=devices):
+        model = untrained_sae(replace(config, seed=int(seed)), mean, device)
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
     return model
 
 

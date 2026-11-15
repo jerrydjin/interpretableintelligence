@@ -74,6 +74,10 @@ The schedule is paired on seed. Baseline and candidate features run all `N` epis
 
 `interpretableintelligence steer-scorecard` asks how much, and how reliably, editing a feature moves the model's output, compared with matched random directions. It reuses the playground's edit (`steer.steer_edit`) and the run's held-out clips. For GR00T the output is the planned action chunk. Results go to `steering/` (see `SCHEMA.md`); `validate` rebuilds the scorecard from the effects parquet. Nothing here reads or writes the scoreboard gates, and it is not a closed-loop rollout.
 
+## Failure probe
+
+`interpretableintelligence probe` asks whether the trained SAE's latents predict episode failure ahead of time better than a random-weights SAE of the same shape (`sae.random_weights_sae`: the trainer's initial weights, zero steps) and better than the raw activations. It reads only the run folder (shards, `sae/`, `split.json`) plus a labels file, fits one logistic probe per input on the train clips, and gates on held-out AUROC with a paired episode bootstrap at a lead of at least 1 s. Results go to `probe/` (see `SCHEMA.md`); `validate` rebuilds `probe.json` from the scores parquet. It never touches the scoreboard gates or sets `real`. It is Python because it encodes activations through the SAE in torch.
+
 ## Next lanes
 
 1. **pi0.5.** V-JEPA 2 is `src/interpretableintelligence/adapters/vjepa2`. The remaining world-model adapter is pi0.5, and the policy stubs for LIBERO / OpenVLA / pi0.5 still need real simulators. They must run on MPS and CPU. They do not change the run folder or the gates.
