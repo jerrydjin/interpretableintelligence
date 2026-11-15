@@ -505,6 +505,14 @@ class VJEPA2Adapter:
                 edited = handle.fn(edited)
         return edited
 
+    def view_frames(self, frames: np.ndarray) -> np.ndarray:
+        """Frames as the model sees them (the centre crop), in [0, 1], for the concept labeller."""
+        video = torch.from_numpy(np.ascontiguousarray(frames)).float()
+        if float(video.max()) > 1.5:
+            video = video / 255.0
+        video = _resize_center_crop(video.permute(0, 3, 1, 2).contiguous(), self.crop)
+        return video.permute(0, 2, 3, 1).contiguous().numpy()
+
     def _preprocess(self, frames: np.ndarray) -> torch.Tensor:
         video = torch.from_numpy(np.ascontiguousarray(frames))
         if video.dtype != torch.float32:

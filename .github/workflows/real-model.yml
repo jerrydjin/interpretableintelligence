@@ -1,0 +1,65 @@
+name: Real model
+
+# One real Hugging Face model through `ii run hf` end to end, so a real-model run
+# cannot break silently behind the tiny random configs in the main suite:
+# tests/test_hf.py::test_real_deit_tiny_smoke (pytest -m real_model).
+#
+# facebook/deit-tiny-patch16-224 (5.7M parameters, real weights) on 20 tiny clips,
+# with the real CLIP ViT-B/16 concept labeller, every pipeline stage, the run-folder
+# schema, and one playground edit.
+#
+# It runs on the free ubuntu-latest CPU runner on purpose: AGENTS.md rules out paid
+# compute, and GitHub GPU runners and Modal are both billed. Moving it to a GPU later
+# means a self-hosted `runs-on`, a CUDA torch wheel (uv.lock pins CPU wheels) and
+# II_DEVICE=cuda; the test itself does not change.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, to catch upstream drift (the model repos, the Hub) between PRs.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: real-model-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deit-tiny:
+    runs-on: ubuntu-latest
+    # Sized to finish in about 4 minutes, install and weights included. Runner speed
+    # varies by ~20% between jobs, so the cap sits one minute above the 5-minute
+    # target: it stops a hang without failing a run on a slow machine.
+    timeout-minutes: 6
+    env:
+      II_DEVICE: cpu
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      # Optional. Raises the anonymous Hub rate limit when the repo has this secret;
+      # empty (and ignored) otherwise, including on fork PRs.
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked
+      - name: Restore Hugging Face weights
+        id: hf-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          # DeiT-tiny plus the CLIP labeller. Bump the suffix to force a fresh download.
+          key: hf-hub-deit-tiny-clip-vit-b16-v1
+      - name: Real-model end-to-end pass
+        # -m real_model replaces the default -m "not slow" from pyproject addopts.
+        run: uv run pytest -m real_model -rA --durations=5
+      - name: Save Hugging Face weights
+        # Saved even when the test fails, so the next run does not download again.
+        if: always() && steps.hf-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-hub-deit-tiny-clip-vit-b16-v1

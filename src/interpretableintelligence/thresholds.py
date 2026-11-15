@@ -108,6 +108,15 @@ DEFAULT_ROLLOUT_WORKERS = 1
 SPRT_LAMBDA = 0.5
 SPRT_FAMILY_POWER = 0.8
 
+# Random-weights SAE control (AGENTS.md research rule 4, `ii rollouts --pick --random-sae`).
+# The default picker screens every feature on this many discovery episodes. Their seeds
+# start PICK_SEED_OFFSET above the run seed, so no rollout arm reuses them.
+PICK_DISCOVERY_EPISODES = 16
+PICK_SEED_OFFSET = 1_000_000
+# Untrained dictionaries drawn when --pick is given and --random-sae is not. Without --pick
+# there is no picker to send them through, so the default is 0 and nothing is a finding.
+DEFAULT_RANDOM_SAE = 5
+
 # Steering scorecard (`ii steer-scorecard`, steering/). Independent of `real` and of
 # the rollout causal gate: it never rewrites scoreboard.json and is not a rollout
 # finding. Each top feature is removed (scale 0) and boosted (scale

@@ -2,9 +2,10 @@
 
   python tests/run_v9_parallel.py [equiv|capture|probe|batched|speed|all]
 """
+from box_paths import COLAB  # noqa: E402 (box roots; see box_paths.py)
 import os, sys, json, time, shutil
 os.environ.setdefault("MUJOCO_GL", "egl")
-sys.path.insert(0, "/workspace/groot-colab/tests")
+sys.path.insert(0, f"{COLAB}/tests")
 from pathlib import Path
 import numpy as np
 
@@ -16,7 +17,7 @@ def _setup(run):
     pol = StandIn()
     run = Path(run); shutil.rmtree(run, ignore_errors=True)
     ctx = v9.Ctx(run=run, run_id="box-v9-test", policy=pol, ckpt=CK, layer=5,
-                 plus_dir=Path("/workspace/groot-colab/LIBERO-plus"), snapshot_tar=run.parent / (run.name + ".tar"))
+                 plus_dir=Path(f"{COLAB}/LIBERO-plus"), snapshot_tar=run.parent / (run.name + ".tar"))
     v8.setup(ctx, device="cpu")
     v9.install_noise_router()
     return v8, v9, pol, ctx
@@ -272,7 +273,7 @@ if __name__ == "__main__":
     results = {}
     for t in todo:
         globals()["test_" + t](results)
-    out = Path("/workspace/groot-colab/v9/box_test_results.json")
+    out = Path(f"{COLAB}/v9/box_test_results.json")
     prev = json.loads(out.read_text()) if out.exists() else {}
     prev.update(results)
     out.write_text(json.dumps(prev, indent=2, default=str))

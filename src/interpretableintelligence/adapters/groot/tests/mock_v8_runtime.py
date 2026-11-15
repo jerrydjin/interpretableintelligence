@@ -1,3 +1,4 @@
+from box_paths import COLAB  # noqa: E402 (box roots; see box_paths.py)
 def _skip_if_unavailable():
     """Sim script: skip unless LIBERO and the groot-colab checkout are present."""
     import importlib.util
@@ -8,7 +9,7 @@ def _skip_if_unavailable():
         reasons.append("LIBERO")
     if importlib.util.find_spec("lerobot") is None:
         reasons.append("lerobot")
-    if not Path("/workspace/groot-colab/LIBERO-plus").exists():
+    if not Path(f"{COLAB}/LIBERO-plus").exists():
         reasons.append("LIBERO-plus checkout")
     if not reasons:
         return
@@ -22,13 +23,13 @@ _skip_if_unavailable()
 """Box test: v8 setup -> smoke -> capture(1 ep) with a MOCK policy, GROOT_MAX_STEPS=40."""
 import os, sys, json, shutil
 os.environ.setdefault("MUJOCO_GL", "egl"); os.environ["GROOT_MAX_STEPS"] = "40"
-sys.path.insert(0, "/tmp/wandstub"); sys.path.insert(0, "/workspace/groot-colab/tests")
+sys.path.insert(0, "/tmp/wandstub"); sys.path.insert(0, f"{COLAB}/tests")
 from pathlib import Path
-exec(open("/workspace/groot-colab/tests/mock_diag_run.py").read().split("g = {")[0])  # reuse Mock + v8 import
+exec(open(f"{COLAB}/tests/mock_diag_run.py").read().split("g = {")[0])  # reuse Mock + v8 import
 pol = Mock()
 run = Path("/tmp/mock_v8_run"); shutil.rmtree(run, ignore_errors=True)
 ctx = v8.Ctx(run=run, run_id="colab-t4-libero-plus-v8", policy=pol, ckpt=CK, layer=5,
-             plus_dir=Path("/workspace/groot-colab/LIBERO-plus"), snapshot_tar=Path("/tmp/mock_v8_snapshot.tar"), capture_n=1)
+             plus_dir=Path(f"{COLAB}/LIBERO-plus"), snapshot_tar=Path("/tmp/mock_v8_snapshot.tar"), capture_n=1)
 rep = v8.setup(ctx, device="cpu")
 assert rep["rope"][0]["repaired"] and rep["rope"][0]["max_abs_diff_before"] > 0.1
 assert v8.repair_rope(pol)[0]["repaired"] is False  # idempotent

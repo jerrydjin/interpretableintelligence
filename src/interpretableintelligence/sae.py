@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -109,13 +109,19 @@ def _loss(mse: torch.Tensor, features: torch.Tensor, model: SAE, config: SAEConf
     return loss
 
 
-def _initial_sae(config: SAEConfig, mean: torch.Tensor, device: torch.device) -> SAE:
-    """The trainer's starting point, drawn from the global torch RNG the caller seeded.
+def untrained_sae(config: SAEConfig, mean: torch.Tensor, device: torch.device) -> SAE:
+    """The SAE that training starts from, seeded by ``config.seed``, with no optimiser step.
 
-    Unit-norm Gaussian decoder columns, a tied encoder, zero encoder bias, and the
-    decoder bias at the train-row mean. Training starts here; the random-weights
-    control stops here.
+    A unit-norm Gaussian decoder, the encoder tied to its transpose, a zero encoder bias, and
+    ``b_dec`` at ``mean`` (the train-row mean). :func:`train_sae` and
+    :func:`train_sae_fetched` start here, so an untrained SAE is the trained one's own
+    initialisation, not a lookalike. The rollout lane's random-weights SAE control
+    (``ii rollouts --random-sae``) edits with these weights. It leaves torch's global RNG
+    at the same point the training loop then continues from.
     """
+    if int(mean.shape[0]) != config.d_model:
+        raise ValueError(f"d_model {config.d_model} != mean {tuple(mean.shape)}")
+    torch.manual_seed(config.seed)
     model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
     with torch.no_grad():
         decoder = torch.randn(config.d_model, config.n_features, device=device)
@@ -131,17 +137,15 @@ def random_weights_sae(config: SAEConfig, mean: torch.Tensor, seed: int, device:
     """Untrained control SAE: the trained SAE's architecture, width and ``k``, zero optimiser steps.
 
     Deterministic in ``seed``: the same ``(config, mean, seed)`` gives bit-identical
-    weights. Weights are drawn exactly as :func:`train_sae` draws its starting point,
-    so ``seed == config.seed`` is the trained SAE before its first step. ``mean`` is
-    the float32 mean of the train rows (``b_dec``'s initial value), the only thing
-    the control takes from the data. Nothing here is optimised.
+    weights. Weights come from :func:`untrained_sae` with ``seed`` in place of
+    ``config.seed``, so ``seed == config.seed`` is the trained SAE before its first step.
+    ``mean`` is the float32 mean of the train rows (``b_dec``'s initial value), the only
+    thing the control takes from the data. Nothing here is optimised, and the caller's
+    torch RNG is left untouched.
     """
-    if int(mean.shape[0]) != config.d_model:
-        raise ValueError(f"d_model {config.d_model} != mean {tuple(mean.shape)}")
     devices = [device] if device.type == "cuda" else []
     with torch.random.fork_rng(devices=devices):
-        torch.manual_seed(int(seed))
-        model = _initial_sae(config, mean, device)
+        model = untrained_sae(replace(config, seed=int(seed)), mean, device)
     model.eval()
     for param in model.parameters():
         param.requires_grad_(False)
@@ -162,9 +166,8 @@ def train_sae(
     if activations.shape[0] < 2:
         raise ValueError("need at least 2 activation rows to train an SAE")
 
-    torch.manual_seed(config.seed)
     data = activations.detach().to(device=device, dtype=torch.float32)
-    model = _initial_sae(config, data.mean(dim=0), device)
+    model = untrained_sae(config, data.mean(dim=0), device)
 
     opt = torch.optim.Adam(model.parameters(), lr=config.lr)
     n = data.shape[0]
@@ -214,8 +217,7 @@ def train_sae_fetched(
     if int(mean.shape[0]) != config.d_model:
         raise ValueError(f"d_model {config.d_model} != mean {tuple(mean.shape)}")
 
-    torch.manual_seed(config.seed)
-    model = _initial_sae(config, mean, device)
+    model = untrained_sae(config, mean, device)
 
     opt = torch.optim.Adam(model.parameters(), lr=config.lr)
     batch = min(config.batch_size, n_rows)

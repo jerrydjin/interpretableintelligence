@@ -4,9 +4,10 @@ Like tests/mock_diag_run.Mock, but predict_action_chunk is batch-aware, depends 
 pixels (so wrong collation order would show up), and draws its flow-matching noise through
 lerobot.policies.groot.groot_n1_7.sample_noise exactly like the real GR00T action head.
 """
+from box_paths import COLAB, groot_snapshot  # noqa: E402 (box roots; see box_paths.py)
 import os, sys, glob, collections, types
 os.environ.setdefault("MUJOCO_GL", "egl")
-for p in ("/tmp/wandstub", "/workspace/groot-colab/v8", "/workspace/groot-colab/v9"):
+for p in ("/tmp/wandstub", f"{COLAB}/v8", f"{COLAB}/v9"):
     if p not in sys.path:
         sys.path.insert(0, p)
 import torch
@@ -16,7 +17,7 @@ from transformers import AutoConfig
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 
 CK = "nvidia/gr00t17-lerobot-libero_10-640"
-cfg = GrootConfig.from_pretrained(glob.glob("/home/box/.cache/huggingface/hub/models--nvidia--gr00t17-lerobot-libero_10-640/snapshots/*")[0])
+cfg = GrootConfig.from_pretrained(groot_snapshot())
 cfg.device = "cpu"
 tcfg = AutoConfig.from_pretrained("Qwen/Qwen3-VL-2B-Instruct").text_config
 

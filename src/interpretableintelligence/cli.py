@@ -19,10 +19,12 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_EPISODES,
     DEFAULT_ROLLOUT_MIN_EPISODES,
     DEFAULT_ROLLOUT_WORKERS,
+    DEFAULT_RANDOM_SAE,
     DEFAULT_SEED,
     PROBE_BOOTSTRAP,
     PROBE_L2,
     PROBE_MIN_LEAD_S,
+    PICK_DISCOVERY_EPISODES,
     STEER_BOOST_FACTOR,
     STEER_BOOTSTRAP,
     STEER_CONTROLS,
@@ -106,6 +108,33 @@ def generate_clips_cmd(
         write_json(Path(out) / FAILURE_LABELS_FILE, labels)
         failed = sum(1 for episode in labels["episodes"] if episode["failure"])
         typer.echo(f"wrote {failure_labels} failure labels ({failed}/{n} fail) to {Path(out) / FAILURE_LABELS_FILE}")
+
+
+@app.command("get-clips")
+def get_clips_cmd(
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the clips into.")] = Path("clips/droid"),
+    n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode.")] = 100,
+    seconds: Annotated[float, typer.Option("--seconds", min=0.5, help="Length of each clip.")] = 4.0,
+) -> None:
+    """Download real robot video to try a real model on: short clips from DROID (MIT licence).
+
+    One 175 MB download, cached after the first time. Each clip is cut from the middle of a robot
+    episode in a real kitchen or office and saved as an mp4.
+    """
+    from interpretableintelligence.sample_clips import DATASET, LICENSE, fetch_droid_clips
+
+    try:
+        entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo)
+    except (ValueError, RuntimeError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {len(entries)} clips from {DATASET} ({LICENSE} licence) to {out}")
+    typer.echo("")
+    typer.echo("Next, find the features a real vision model uses on them, and open the playground:")
+    typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
+    typer.echo("That takes about 10 minutes on a laptop CPU. Every feature is explorable but none is verified yet.")
+    typer.echo("To run the checks that mark features verified, run the same command without --no-score.")
+    typer.echo("It reuses what is done and adds the scoring, which takes longer (up to an hour on a CPU).")
 
 
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
@@ -197,7 +226,7 @@ def run(
         typer.Option(
             "--sae-features",
             min=1,
-            help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf.",
+            help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf. Above 64, a TopK SAE.",
         ),
     ] = None,
     concepts: Annotated[
@@ -206,7 +235,7 @@ def run(
             "--concepts",
             exists=True,
             dir_okay=False,
-            help="hf only: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
+            help="hf, vjepa2, groot: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
         ),
     ] = None,
     tiny: Annotated[
@@ -235,6 +264,10 @@ def run(
     host: Annotated[str, typer.Option("--host", help="Viewer interface.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Viewer port. 0 chooses a free port.")] = 0,
     no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+    steer: Annotated[
+        bool,
+        typer.Option("--steer", help="Turn on the playground in the viewer: edit features and watch the prediction move."),
+    ] = False,
     no_cache: Annotated[
         bool,
         typer.Option(
@@ -242,20 +275,72 @@ def run(
             help="Run every forward pass even when the activation cache has it (see `ii cache`). Nothing is read from or written to the cache.",
         ),
     ] = False,
+    remote: Annotated[
+        bool,
+        typer.Option(
+            "--remote",
+            help="Run on a hosted GPU (Modal, your account) and stream results into the local folder and viewer. "
+            "Needs `uv sync --extra remote` and `modal setup` once. See docs/REMOTE.md.",
+        ),
+    ] = False,
+    gpu: Annotated[
+        str | None,
+        typer.Option("--gpu", help="--remote only: GPU type, e.g. T4, L4, A10, L40S, A100-80GB, H100. Default L4."),
+    ] = None,
+    max_cost: Annotated[
+        float | None,
+        typer.Option(
+            "--max-cost",
+            help="--remote only: spending cap in USD. Becomes the container's timeout at the GPU's price. Default 2.00.",
+        ),
+    ] = None,
 ) -> None:
     """Capture, train, extract features, score what is missing, then serve the viewer.
 
     A stage whose outputs are already valid is skipped. The run prints a cost report
     from measured stage time. Pass --gpu-cost-per-hour to price an hour of footage.
+    With --remote the same stages run on a hosted GPU and the folder fills in as each finishes.
     """
-    from interpretableintelligence.pipeline import execute_pipeline
+    from interpretableintelligence.remote.backends import RemoteSetupError
 
     modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
     try:
+        if not remote and (gpu is not None or max_cost is not None):
+            raise ValueError("--gpu and --max-cost only apply with --remote")
         adapter = _adapter_name(adapter, model, blocks, tiny=tiny)
         if adapter.startswith("groot:"):
             tiny = False  # groot:tiny names the stand-in itself, so the run folder can rebuild it
         layer = _default_layer(adapter) if layer is None else layer
+        if remote:
+            from interpretableintelligence.remote.client import execute_remote
+            from interpretableintelligence.remote.pricing import DEFAULT_GPU, DEFAULT_MAX_COST
+
+            execute_remote(
+                adapter_name=adapter,
+                clips_dir=clips,
+                out_dir=out,
+                layer=layer,
+                seed=seed,
+                heldout_frac=heldout_frac,
+                tiny=tiny,
+                prefilter=prefilter,
+                extra_effects=modes,
+                gpu_cost_per_hour=gpu_cost_per_hour,
+                sae_features=sae_features,
+                concepts_file=concepts,
+                score=not no_score,
+                serve=not no_serve,
+                host=host,
+                port=port,
+                open_browser=not no_open,
+                gpu=gpu or DEFAULT_GPU,
+                max_cost=DEFAULT_MAX_COST if max_cost is None else max_cost,
+                use_cache=not no_cache,
+                log=typer.echo,
+            )
+            return
+        from interpretableintelligence.pipeline import execute_pipeline
+
         execute_pipeline(
             adapter_name=adapter,
             clips_dir=clips,
@@ -274,9 +359,13 @@ def run(
             host=host,
             port=port,
             open_browser=not no_open,
+            steer=steer,
             use_cache=not no_cache,
             log=typer.echo,
         )
+    except RemoteSetupError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
     except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -350,12 +439,16 @@ def rank(
         ),
     ] = None,
     objective: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--objective",
-            help="prediction_loss, action_loglik, or activation (magnitude baseline). The result is a shortlist.",
+            help=(
+                "prediction_loss, output_sensitivity, action_loglik, or activation (magnitude baseline). "
+                "Default: the adapter's own (output_sensitivity for hf and groot, else prediction_loss). "
+                "The result is a shortlist."
+            ),
         ),
-    ] = "prediction_loss",
+    ] = None,
 ) -> None:
     """Rank SAE features. Does not ablate; every pick still needs a real ablation."""
     from interpretableintelligence.run import execute_rank
@@ -503,12 +596,34 @@ def rollouts(
         int,
         typer.Option("--batch-size", min=1, help="New episodes per active arm between early-stop checks."),
     ] = DEFAULT_ROLLOUT_BATCH,
+    pick: Annotated[
+        int | None,
+        typer.Option(
+            "--pick",
+            min=1,
+            help="Pick this many candidates with the policy's picker on the trained SAE, instead of --features.",
+        ),
+    ] = None,
+    random_sae: Annotated[
+        int | None,
+        typer.Option(
+            "--random-sae",
+            min=0,
+            help="Random-weights SAE control: untrained SAEs sent through the same picker, one arm per pick. "
+            "Needs --pick. A candidate is a finding only if it beats every one of these arms. "
+            f"Default: {DEFAULT_RANDOM_SAE} with --pick, 0 without; 0 turns it off.",
+        ),
+    ] = None,
+    pick_episodes: Annotated[
+        int,
+        typer.Option("--pick-episodes", min=1, help="Discovery episodes the default picker screens each feature on."),
+    ] = PICK_DISCOVERY_EPISODES,
 ) -> None:
     """Compare baseline and intervened task success. Resume skips episodes already written."""
     from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
 
     try:
-        feature_ids = parse_feature_ids(features)
+        feature_ids = parse_feature_ids(features) if features.strip() or pick is None else []
         summary = execute_rollouts(
             run_dir,
             policy=policy,
@@ -524,6 +639,9 @@ def rollouts(
             alpha=alpha,
             min_episodes=min_episodes,
             batch_size=batch_size,
+            pick=pick,
+            random_sae=random_sae,
+            pick_episodes=pick_episodes,
         )
     except (ValueError, RuntimeError, FileNotFoundError, NotImplementedError) as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -706,6 +824,33 @@ def export_site_cmd(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"wrote {dest}")
+
+
+@app.command("compare")
+def compare_cmd(
+    runs: Annotated[list[Path], typer.Argument(help="Two or more finished run folders that captured the same clips.")],
+    out: Annotated[Path, typer.Option("--out", help="Folder for compare.json and index.html.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Clip directory for thumbnails. Defaults to the first run's recorded clips_dir."),
+    ] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Shuffle-null seed.")] = 0,
+) -> None:
+    """Match SAE features across models on the same clips: which concepts they share and which are unique."""
+    from interpretableintelligence.compare import compare_runs, describe_groups, write_compare
+
+    report = compare_runs(list(runs), seed=seed, log=typer.echo)
+    clips_dir = clips
+    if clips_dir is None and report["_profiles"][0].clips_dir:
+        clips_dir = Path(report["_profiles"][0].clips_dir)
+    describe_groups(report, clips_dir)
+    write_compare(report, out, clips_dir)
+    shared = report["shared"]
+    every = sum(1 for group in shared if group["n_models"] == len(runs))
+    typer.echo(
+        f"{len(shared)} shared concepts ({every} in all {len(runs)} models), "
+        f"{len(report['unmatched_verified'])} verified features with no counterpart. Wrote {out / 'index.html'}"
+    )
 
 
 @app.command()
