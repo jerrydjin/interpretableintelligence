@@ -429,7 +429,7 @@ def _write_explore(path: Path, summary: dict) -> None:
             f'<button type="button" data-arm-button="{escape(cond)}" aria-pressed="{"true" if selected else "false"}">'
             f"{escape(_arm_button(row))}</button>"
         )
-        panels.append(_arm_panel(summary, row, headline, selected))
+        panels.append(_arm_panel(summary, row, selected))
     body = f"""
     <h1>GR00T task {escape(identity["task"])}</h1>
     <p><span class="badge badge-unverified" data-testid="explore-verdict">{escape(status)}</span></p>
@@ -441,6 +441,7 @@ def _write_explore(path: Path, summary: dict) -> None:
     <p data-testid="stop-rule" data-stop-rule="{escape(spec["stop_rule"])}">{escape(_stop_rule_text(spec))}</p>
     <h2>Arms</h2>
     <div class="arm-switch" role="group" aria-label="Arms" data-testid="arm-switch">{''.join(buttons)}</div>
+    <p data-testid="interval-note">Intervals are unadjusted for early stopping; read them as descriptive.</p>
     {''.join(panels)}
     <p>Every condition is listed on the <a href="/groot/#conditions">GR00T page</a>.</p>
     <h2>Now run it on yours</h2>
@@ -480,22 +481,20 @@ def _arm_button(row: dict) -> str:
     return f"{_latent_name(cond)} off {fraction}"
 
 
-def _arm_panel(summary: dict, row: dict, headline: str, selected: bool) -> str:
+def _arm_panel(summary: dict, row: dict, selected: bool) -> str:
     cond = str(row["cond"])
     hidden = "" if selected else " hidden"
     if cond == "baseline":
-        context = headline
+        context = ""
         controls = ""
-    elif cond.startswith("A-"):
-        context = headline
-        controls = _control_table([item for item in _control_rows(summary) if str(item["cond"]).startswith("A-ctrl")])
     else:
-        context = f"{headline} {_pair_line(summary)}"
-        controls = _control_table([item for item in _control_rows(summary) if str(item["cond"]).startswith("B-ctrl")])
+        matched = _matched_controls(summary, cond)
+        context = f'<p data-testid="arm-context">{escape(_arm_line(row, matched))}</p>'
+        controls = _control_table(matched)
     return (
         f'<section class="arm-panel" data-arm-panel="{escape(cond)}" data-testid="arm-panel-{escape(cond)}"{hidden}>'
         f'<div class="compare">{_arm_compare(summary, row)}</div>'
-        f"<p>{escape(context)}</p>"
+        f"{context}"
         f'<p data-testid="arm-detail">{escape(_arm_detail(row))}</p>'
         f"{controls}"
         "</section>"
@@ -512,7 +511,7 @@ def _arm_compare(summary: dict, row: dict) -> str:
 def _compare_card(row: dict) -> str:
     name = "Baseline" if str(row["cond"]) == "baseline" else f"{_latent_name(str(row['cond']))} off"
     verdict = row.get("verdict")
-    verdict_html = f"<dt>Verdict</dt><dd>{escape(str(verdict))}</dd>" if verdict else ""
+    verdict_html = f"<dt>Stop-rule verdict</dt><dd>{escape(str(verdict))}</dd>" if verdict else ""
     return (
         "<dl>"
         f"<dt>{escape(name)}</dt>"
@@ -539,7 +538,7 @@ def _control_table(rows: list) -> str:
         )
     return (
         '<table class="score-table" data-testid="arm-controls">'
-        "<thead><tr><th>Control</th><th>Success</th><th>Wilson 95%</th><th>Paired change</th><th>Verdict</th></tr></thead>"
+        "<thead><tr><th>Control</th><th>Success</th><th>Wilson 95%</th><th>Paired change</th><th>Stop-rule verdict</th></tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table>"
     )
 
@@ -553,7 +552,7 @@ def _arm_detail(row: dict) -> str:
         parts.append(f"Paired change {float(delta):+.3f} on {int(shared)} shared seeds.")
     verdict = row.get("verdict")
     if verdict:
-        parts.append(f"Verdict: {verdict}.")
+        parts.append(f"Stop-rule verdict: {verdict}.")
     else:
         parts.append("The stop rule does not run on baseline.")
     return " ".join(parts)
@@ -580,15 +579,18 @@ def _explore_headline(summary: dict) -> str:
     )
 
 
-def _pair_line(summary: dict) -> str:
-    baseline = _one_row(summary, lambda cond: cond == "baseline")
-    pair = _one_row(summary, lambda cond: cond == "B-cand-7081+5852")
-    controls = _control_rows(summary)
-    fell = sum(1 for row in controls if row.get("verdict") == "fall")
+def _matched_controls(summary: dict, cond: str) -> list:
+    """Controls paired with this candidate. A-cand matches A-ctrl; B-cand matches B-ctrl."""
+    prefix = str(cond).split("-", 1)[0] + "-ctrl"
+    return [row for row in _control_rows(summary) if str(row["cond"]).startswith(prefix)]
+
+
+def _arm_line(row: dict, controls: list) -> str:
+    """This arm against its own matched controls. Counts come from the summary rows."""
+    fell = sum(1 for item in controls if item.get("verdict") == "fall")
     return (
-        f"{_latent_name(str(pair['cond']))} off: {_fraction(pair)}. "
-        f"{fell} of {len(controls)} random controls also fell. "
-        f"Baseline: {_fraction(baseline)}."
+        f"{_latent_name(str(row['cond']))} off: {_fraction(row)}. "
+        f"{fell} of {len(controls)} matched controls also fell."
     )
 
 

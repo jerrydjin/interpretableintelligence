@@ -345,6 +345,10 @@ def test_explore_page_numbers_match_the_repo():
     controls = [row for row in summary["table"] if "-ctrl" in row["cond"]]
     fell = sum(row["verdict"] == "fall" for row in controls)
     _allow(allowed, f"{fell} of {len(controls)}")
+    for prefix in ("A-ctrl", "B-ctrl"):
+        matched = [row for row in controls if str(row["cond"]).startswith(prefix)]
+        matched_fell = sum(row["verdict"] == "fall" for row in matched)
+        _allow(allowed, f"{matched_fell} of {len(matched)}")
 
     runner = (_repo() / "src/interpretableintelligence/adapters/groot/v9/ablate_v9.py").read_text(encoding="utf-8")
     sprt = re.search(
@@ -392,12 +396,49 @@ def test_explore_page_numbers_match_the_repo():
     assert text.index(f"{fell} of {len(controls)} random controls also fell") < text.index(
         f"Baseline: {int(baseline['successes'])}/{int(baseline['n'])}."
     )
-    pair_line = (
-        f"{str(pair['cond']).split('-')[-1]} off: {int(pair['successes'])}/{int(pair['n'])}. "
-        f"{fell} of {len(controls)} random controls also fell. "
-        f"Baseline: {int(baseline['successes'])}/{int(baseline['n'])}."
-    )
-    assert pair_line in text
+    assert text.count(f"{fell} of {len(controls)} random controls also fell") == 1
+    headline_html = page.split('data-testid="explore-headline"', 1)[1].split("</p>", 1)[0]
+    assert f"{fell} of {len(controls)} random controls also fell" in headline_html
+
+    def _matched(prefix: str) -> tuple[list, list]:
+        rows = [row for row in controls if str(row["cond"]).startswith(prefix)]
+        fallen = [row for row in rows if row["verdict"] == "fall"]
+        return rows, fallen
+
+    def _names(rows: list) -> list[str]:
+        return [str(row["cond"]).split("-", 2)[-1] for row in rows]
+
+    arm_lines = {
+        "A-ctrl": single,
+        "B-ctrl": pair,
+    }
+    for prefix, candidate in arm_lines.items():
+        matched, fallen = _matched(prefix)
+        line = (
+            f"{str(candidate['cond']).split('-')[-1]} off: "
+            f"{int(candidate['successes'])}/{int(candidate['n'])}. "
+            f"{len(fallen)} of {len(matched)} matched controls also fell."
+        )
+        panel = re.search(
+            rf'data-testid="arm-panel-{re.escape(str(candidate["cond"]))}".*?</section>',
+            page,
+            re.S,
+        ).group(0)
+        panel_text = _text(panel)
+        assert line in panel_text
+        assert "random controls also fell" not in panel_text
+        fall_cells = []
+        for row_html in re.findall(r"<tr>(.*?)</tr>", panel, re.S):
+            cells = re.findall(r"<td>(.*?)</td>", row_html)
+            if cells and cells[-1] == "fall":
+                fall_cells.append(cells[0].removesuffix(" off"))
+        assert fall_cells == _names(fallen)
+    base_panel = re.search(r'data-testid="arm-panel-baseline".*?</section>', page, re.S).group(0)
+    assert "matched controls" not in _text(base_panel)
+    assert "random controls" not in _text(base_panel)
+    assert text.count("Intervals are unadjusted for early stopping; read them as descriptive.") == 1
+    assert "Verdict:" not in text
+    assert "Stop-rule verdict:" in text
     for row in summary["table"]:
         fraction = f"{int(row['successes'])}/{int(row['n'])}"
         if row["cond"] == "recon-only":
