@@ -73,6 +73,7 @@ def export_site(
     _write_picker(out / "picker", picker)
     _write_vjepa(out / "vjepa", vjepa, random_control, atp_result)
     _write_groot(out / "groot", groot / "groot-1028-ablate-summary.json", groot_summary, groot_status, checks)
+    _write_explore(out / "explore" / "index.html", groot_summary)
     shutil.rmtree(work, ignore_errors=True)
     return out
 
@@ -149,6 +150,7 @@ def _wordmark() -> str:
 
 def _nav(current: str) -> str:
     items = (
+        ("explore", "/explore/", "Explore"),
         ("results", "/results/", "Results"),
         ("groot", "/groot/", "GR00T"),
         ("vjepa", "/vjepa/", "V-JEPA 2"),
@@ -206,7 +208,7 @@ def _write_product(path: Path, summary: dict, status: str) -> None:
     <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. {_cmd("import", known)} brings rollout logs you already have into a run folder that validate accepts.</p>
     <h2>Proof</h2>
     <p data-testid="control-headline">{headline}</p>
-    <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/results/">Results</a>.</p>
+    <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
     <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
@@ -393,6 +395,7 @@ def _write_groot(dest: Path, summary_path: Path, summary: dict, status: str, che
     )
     body = f"""
     <h1>GR00T N1.7 on LIBERO</h1>
+    <p><a href="/explore/">Explore this result</a>.</p>
     <p data-testid="control-headline">{escape(_control_headline(summary))}</p>
     <p data-testid="ablation-runner">{_runner_html(summary)}</p>
     <p><span class="badge badge-unverified" data-testid="groot-status">{escape(status)}</span></p>
@@ -404,6 +407,239 @@ def _write_groot(dest: Path, summary_path: Path, summary: dict, status: str, che
 {_conditions_html(summary)}
     """
     (dest / "index.html").write_text(_page("GR00T N1.7", "groot", body), encoding="utf-8")
+
+
+def _write_explore(path: Path, summary: dict) -> None:
+    """Static walkthrough of the task-1028 ablation. Every figure is read from the summary or the runner."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    status = _groot_status(summary)
+    spec = _sprt_spec()
+    identity = _groot_identity()
+    headline = _explore_headline(summary)
+    episodes = _episode_total(summary)
+    baseline = _one_row(summary, lambda cond: cond == "baseline")
+    order = ("baseline", "A-cand-720", "B-cand-7081+5852")
+    buttons = []
+    panels = []
+    for cond in order:
+        row = _one_row(summary, lambda name, cond=cond: name == cond)
+        selected = cond == "A-cand-720"
+        buttons.append(
+            f'<button type="button" data-arm-button="{escape(cond)}" aria-pressed="{"true" if selected else "false"}">'
+            f"{escape(_arm_button(row))}</button>"
+        )
+        panels.append(_arm_panel(summary, row, selected))
+    body = f"""
+    <h1>GR00T task {escape(identity["task"])}</h1>
+    <p><span class="badge badge-unverified" data-testid="explore-verdict">{escape(status)}</span></p>
+    <p data-testid="explore-headline">{escape(headline)}</p>
+    <p data-testid="explore-real">Every feature on this run is real=false.</p>
+    <p data-testid="explore-runner">{episodes} rollouts. This ablation ran through <a href="{RUNNER_URL}"><code>{escape(RUNNER_PATH)}</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts --policy groot-1028</code> can now import or replay these v9 logs as a standard run folder.</p>
+    <p data-testid="explore-model">{escape(identity["name"])}, checkpoint <code>{escape(identity["checkpoint"])}</code>, on LIBERO-plus task {escape(identity["task"])}. The edit is on transformer block {escape(spec["layer"])} at the final denoise step.</p>
+    <h2>Stop rule</h2>
+    <p data-testid="stop-rule" data-stop-rule="{escape(spec["stop_rule"])}">{escape(_stop_rule_text(spec))}</p>
+    <h2>Arms</h2>
+    <div class="arm-switch" role="group" aria-label="Arms" data-testid="arm-switch">{''.join(buttons)}</div>
+    <p data-testid="interval-note">Intervals are unadjusted for early stopping; read them as descriptive.</p>
+    {''.join(panels)}
+    <p>Every condition is listed on the <a href="/groot/#conditions">GR00T page</a>.</p>
+    <h2>Now run it on yours</h2>
+    <pre class="quickstart"><code>uv sync
+uv run ii try</code></pre>
+    <p><code>ii try</code> writes practice clips and runs the pipeline on the fake model. <code>ii rollouts --policy groot-1028</code> brings GR00T rollouts onto <code>ii</code>, but the random-weights SAE control (research rule 4) does not run on GR00T yet, so no GR00T rollout result can count as a finding.</p>
+    <script>
+    (function () {{
+      var root = document.querySelector("[data-testid=arm-switch]");
+      if (!root) return;
+      var buttons = root.querySelectorAll("[data-arm-button]");
+      var panels = document.querySelectorAll("[data-arm-panel]");
+      function show(id) {{
+        panels.forEach(function (panel) {{
+          panel.hidden = panel.getAttribute("data-arm-panel") !== id;
+        }});
+        buttons.forEach(function (button) {{
+          button.setAttribute("aria-pressed", button.getAttribute("data-arm-button") === id ? "true" : "false");
+        }});
+      }}
+      buttons.forEach(function (button) {{
+        button.addEventListener("click", function () {{
+          show(button.getAttribute("data-arm-button"));
+        }});
+      }});
+    }})();
+    </script>
+    """
+    path.write_text(_page(f"GR00T task {identity['task']}", "explore", body), encoding="utf-8")
+
+
+def _arm_button(row: dict) -> str:
+    cond = str(row["cond"])
+    fraction = _fraction(row)
+    if cond == "baseline":
+        return f"Baseline {fraction}"
+    return f"{_latent_name(cond)} off {fraction}"
+
+
+def _arm_panel(summary: dict, row: dict, selected: bool) -> str:
+    cond = str(row["cond"])
+    hidden = "" if selected else " hidden"
+    if cond == "baseline":
+        context = ""
+        controls = ""
+    else:
+        matched = _matched_controls(summary, cond)
+        context = f'<p data-testid="arm-context">{escape(_arm_line(row, matched))}</p>'
+        controls = _control_table(matched)
+    return (
+        f'<section class="arm-panel" data-arm-panel="{escape(cond)}" data-testid="arm-panel-{escape(cond)}"{hidden}>'
+        f'<div class="compare">{_arm_compare(summary, row)}</div>'
+        f"{context}"
+        f'<p data-testid="arm-detail">{escape(_arm_detail(row))}</p>'
+        f"{controls}"
+        "</section>"
+    )
+
+
+def _arm_compare(summary: dict, row: dict) -> str:
+    baseline = _one_row(summary, lambda name: name == "baseline")
+    if str(row["cond"]) == "baseline":
+        return _compare_card(row)
+    return _compare_card(row) + _compare_card(baseline)
+
+
+def _compare_card(row: dict) -> str:
+    name = "Baseline" if str(row["cond"]) == "baseline" else f"{_latent_name(str(row['cond']))} off"
+    verdict = row.get("verdict")
+    verdict_html = f"<dt>Stop-rule verdict</dt><dd>{escape(str(verdict))}</dd>" if verdict else ""
+    return (
+        "<dl>"
+        f"<dt>{escape(name)}</dt>"
+        f"<dd>{_fraction(row)}</dd>"
+        f"{verdict_html}"
+        "</dl>"
+    )
+
+
+def _control_table(rows: list) -> str:
+    body = []
+    for row in rows:
+        low, high = row["wilson95"]
+        delta = row.get("delta_paired")
+        delta_text = "" if delta is None else f"{float(delta):+.3f}"
+        body.append(
+            "<tr>"
+            f"<td>{escape(_latent_name(str(row['cond'])))} off</td>"
+            f"<td>{_fraction(row)}</td>"
+            f"<td>[{_bound(low)}, {_bound(high)}]</td>"
+            f"<td>{escape(delta_text)}</td>"
+            f"<td>{escape(str(row.get('verdict') or ''))}</td>"
+            "</tr>"
+        )
+    return (
+        '<table class="score-table" data-testid="arm-controls">'
+        "<thead><tr><th>Control</th><th>Success</th><th>Wilson 95%</th><th>Paired change</th><th>Stop-rule verdict</th></tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+def _arm_detail(row: dict) -> str:
+    low, high = row["wilson95"]
+    parts = [f"{_fraction(row)}. Wilson 95% [{_bound(low)}, {_bound(high)}]."]
+    delta = row.get("delta_paired")
+    shared = row.get("n_shared")
+    if delta is not None and shared is not None:
+        parts.append(f"Paired change {float(delta):+.3f} on {int(shared)} shared seeds.")
+    verdict = row.get("verdict")
+    if verdict:
+        parts.append(f"Stop-rule verdict: {verdict}.")
+    else:
+        parts.append("The stop rule does not run on baseline.")
+    return " ".join(parts)
+
+
+def _latent_name(cond: str) -> str:
+    return cond.split("-", 2)[-1]
+
+
+def _fraction(row: dict) -> str:
+    return f"{int(row['successes'])}/{int(row['n'])}"
+
+
+def _explore_headline(summary: dict) -> str:
+    """720's result sits in the same sentence as the controls that also fell."""
+    baseline = _one_row(summary, lambda cond: cond == "baseline")
+    single = _single_feature_candidate(summary)
+    controls = _control_rows(summary)
+    fell = sum(1 for row in controls if row.get("verdict") == "fall")
+    return (
+        f"{_latent_name(str(single['cond']))} off: {_fraction(single)}. "
+        f"{fell} of {len(controls)} random controls also fell. "
+        f"Baseline: {_fraction(baseline)}."
+    )
+
+
+def _matched_controls(summary: dict, cond: str) -> list:
+    """Controls paired with this candidate. A-cand matches A-ctrl; B-cand matches B-ctrl."""
+    prefix = str(cond).split("-", 1)[0] + "-ctrl"
+    return [row for row in _control_rows(summary) if str(row["cond"]).startswith(prefix)]
+
+
+def _arm_line(row: dict, controls: list) -> str:
+    """This arm against its own matched controls. Counts come from the summary rows."""
+    fell = sum(1 for item in controls if item.get("verdict") == "fall")
+    return (
+        f"{_latent_name(str(row['cond']))} off: {_fraction(row)}. "
+        f"{fell} of {len(controls)} matched controls also fell."
+    )
+
+
+def _sprt_spec() -> dict:
+    """Stop-rule parameters, copied from the literals in ablate_v9.default_plan."""
+    source = (REPO / RUNNER_PATH).read_text(encoding="utf-8")
+    match = re.search(
+        r'"p0": (?P<p0>\d+(?:\.\d+)?), "p1_rise": (?P<p1_rise>\d+(?:\.\d+)?), '
+        r'"p1_fall": (?P<p1_fall>\d+(?:\.\d+)?), "alpha": (?P<alpha>\d+(?:\.\d+)?), '
+        r'"beta": (?P<beta>\d+(?:\.\d+)?), "cap": cap,\s*'
+        r'"stop_rule": "(?P<stop_rule>[^"]+)"',
+        source,
+    )
+    cap = re.search(r"cap: int = (\d+)", source)
+    note = re.search(r'"p0_note": "(\d+(?:\.\d+)?) = capture success rate (\d+)/(\d+)', source)
+    layer = re.search(r'"layer": (\d+)', source)
+    if not match or not cap or not note or not layer:
+        raise ValueError(f"{RUNNER_PATH} no longer states the stop rule")
+    if note.group(1) != match.group("p0"):
+        raise ValueError("p0 and its capture-rate note disagree")
+    spec = match.groupdict()
+    spec["cap"] = cap.group(1)
+    spec["capture_successes"] = note.group(2)
+    spec["capture_n"] = note.group(3)
+    spec["layer"] = layer.group(1)
+    return spec
+
+
+def _stop_rule_text(spec: dict) -> str:
+    return (
+        f"Stop rule: Sobel–Wald. Stop when the rise test or the fall test accepts H1, "
+        f"or both accept H0, or at {spec['cap']} episodes. "
+        f"Rise compares {spec['p0']} with {spec['p1_rise']}. "
+        f"Fall compares {spec['p0']} with {spec['p1_fall']}. "
+        f"Alpha is {spec['alpha']}. Beta is {spec['beta']}. "
+        f"{spec['p0']} is the capture success rate, {spec['capture_successes']}/{spec['capture_n']}. "
+        "The verdict is rise when the rise test accepts H1, fall when the fall test accepts H1, "
+        "and no_effect when both accept H0. At the cap with no decision, the verdict is cap_undecided."
+    )
+
+
+def _groot_identity() -> dict:
+    notes = (REPO / "data" / "groot-1028.md").read_text(encoding="utf-8")
+    task = re.search(r"task \*\*(\d+)\*\*", notes)
+    checkpoint = re.search(r"`(nvidia/gr00t17-lerobot-libero_10-640)`", notes)
+    adapter = (REPO / "src" / "interpretableintelligence" / "adapters" / "groot" / "adapter.py").read_text(encoding="utf-8")
+    name = "GR00T N1.7"
+    if not task or not checkpoint or name not in adapter:
+        raise ValueError("GR00T task identity is not in the repo")
+    return {"task": task.group(1), "checkpoint": checkpoint.group(1), "name": name}
 
 
 def _load_groot_summary(groot: Path) -> dict:

@@ -152,7 +152,7 @@ def test_results_put_real_results_above_the_synthetic_demos():
     assert page[synthetic:].count('href="/fake/"') == main.count('href="/fake/"') == 1
     assert page[synthetic:].count('href="/picker/"') == main.count('href="/picker/"') == 1
     nav = _nav(page)
-    assert nav.index("/results/") < nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
+    assert nav.index("/explore/") < nav.index("/results/") < nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
     assert 'aria-current="page"' in nav and "/results/" in nav
     headline = _control_headline(_ablation_summary())
     assert headline in page
@@ -258,9 +258,12 @@ def test_product_page_is_the_front_door():
     assert main.index('href="/results/"') < main.index('data-testid="synthetic-sections"')
     assert page[synthetic:].count('href="/fake/"') == main.count('href="/fake/"') == 1
     assert page[synthetic:].count('href="/picker/"') == main.count('href="/picker/"') == 1
-    assert main.count('href="/results/"') == 2
+    assert main.count('href="/results/"') == 1
+    assert 'href="/explore/" data-testid="proof-link"' in page
+    assert page.index('data-testid="proof-link"') < page.index('data-testid="synthetic-sections"')
+    assert "Synthetic" in page[synthetic:]
     nav = _nav(page)
-    assert nav.index("/results/") < nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
+    assert nav.index("/explore/") < nav.index("/results/") < nav.index("/groot/") < nav.index("/vjepa/") < nav.index("/picker/") < nav.index("/fake/")
     quick = re.search(r'<h2 id="quickstart">.*?</pre>', page, re.S).group(0)
     assert "uv sync" in quick and "uv run ii try" in quick
     assert "README.md" in page
@@ -303,6 +306,176 @@ def test_product_page_commands_exist_or_are_coming():
     assert "Live GR00T rollouts through" in _text(coming) and re.search(r"through <code>ii</code>\.", coming)
     assert "ii import" in _text(rest) and "ii import" not in _text(coming)
     assert "ii probe" not in page
+
+
+def _number_tokens(text: str) -> list[str]:
+    return re.findall(r"\d+(?:\.\d+)?", text)
+
+
+def _allow(allowed: set[str], text: str) -> None:
+    allowed.update(_number_tokens(text))
+
+
+def test_explore_page_numbers_match_the_repo():
+    """Every number on the explore page is a figure already in the ablation summary or the runner."""
+    summary = _ablation_summary()
+    page = (ROOT / "explore" / "index.html").read_text(encoding="utf-8")
+    main = page[page.index("<main"):page.index("</main>")]
+    text = _text(main)
+    title = re.search(r"<title>(.*?)</title>", page, re.S).group(1)
+    # "Wilson 95%" is the name of the summary field wilson95, not a separate measurement.
+    assert summary["table"] and all("wilson95" in row for row in summary["table"])
+    assert "Wilson 95%" in text
+    shown = _number_tokens(text.replace("Wilson 95%", "Wilson")) + _number_tokens(title)
+
+    allowed: set[str] = set()
+    for row in summary["table"]:
+        if row["cond"] == "recon-only":
+            continue
+        _allow(allowed, f"{int(row['successes'])}/{int(row['n'])}")
+        _allow(allowed, f"{row['wilson95'][0]:.4f}")
+        _allow(allowed, f"{row['wilson95'][1]:.4f}")
+        if row.get("delta_paired") is not None:
+            _allow(allowed, f"{float(row['delta_paired']):+.3f}")
+        if row.get("n_shared") is not None:
+            _allow(allowed, str(int(row["n_shared"])))
+        _allow(allowed, str(row["cond"]))
+    _allow(allowed, str(int(summary["episodes_logged"])))
+    controls = [row for row in summary["table"] if "-ctrl" in row["cond"]]
+    fell = sum(row["verdict"] == "fall" for row in controls)
+    _allow(allowed, f"{fell} of {len(controls)}")
+    for prefix in ("A-ctrl", "B-ctrl"):
+        matched = [row for row in controls if str(row["cond"]).startswith(prefix)]
+        matched_fell = sum(row["verdict"] == "fall" for row in matched)
+        _allow(allowed, f"{matched_fell} of {len(matched)}")
+
+    runner = (_repo() / "src/interpretableintelligence/adapters/groot/v9/ablate_v9.py").read_text(encoding="utf-8")
+    sprt = re.search(
+        r'"p0": (\d+(?:\.\d+)?), "p1_rise": (\d+(?:\.\d+)?), "p1_fall": (\d+(?:\.\d+)?), '
+        r'"alpha": (\d+(?:\.\d+)?), "beta": (\d+(?:\.\d+)?), "cap": cap,\s*'
+        r'"stop_rule": "([^"]+)"',
+        runner,
+    )
+    assert sprt, "ablate_v9.py stop rule moved"
+    for group in sprt.groups():
+        _allow(allowed, group)
+    cap = re.search(r"cap: int = (\d+)", runner)
+    note = re.search(r'"p0_note": "(\d+(?:\.\d+)?) = capture success rate (\d+)/(\d+)', runner)
+    layer = re.search(r'"layer": (\d+)', runner)
+    assert cap and note and layer
+    assert note.group(1) == sprt.group(1)
+    _allow(allowed, cap.group(1))
+    _allow(allowed, f"{note.group(2)}/{note.group(3)}")
+    _allow(allowed, layer.group(1))
+    assert f'data-stop-rule="{sprt.group(6)}"' in page
+
+    notes = (_repo() / "data/groot-1028.md").read_text(encoding="utf-8")
+    task = re.search(r"task \*\*(\d+)\*\*", notes)
+    checkpoint = re.search(r"`(nvidia/gr00t17-lerobot-libero_10-640)`", notes)
+    assert task and checkpoint and checkpoint.group(1) in page
+    _allow(allowed, task.group(1))
+    _allow(allowed, checkpoint.group(1))
+    adapter = (_repo() / "src/interpretableintelligence/adapters/groot/adapter.py").read_text(encoding="utf-8")
+    assert "GR00T N1.7" in adapter and "GR00T N1.7" in page
+    _allow(allowed, "N1.7")
+
+    missing = sorted({token for token in shown if token not in allowed})
+    assert missing == [], missing
+
+    baseline = next(row for row in summary["table"] if row["cond"] == "baseline")
+    single = next(row for row in summary["table"] if row["cond"] == "A-cand-720")
+    pair = next(row for row in summary["table"] if row["cond"] == "B-cand-7081+5852")
+    headline = (
+        f"{str(single['cond']).split('-')[-1]} off: {int(single['successes'])}/{int(single['n'])}. "
+        f"{fell} of {len(controls)} random controls also fell. "
+        f"Baseline: {int(baseline['successes'])}/{int(baseline['n'])}."
+    )
+    assert headline in text
+    assert text.index("720 off: 1/9") < text.index(f"{fell} of {len(controls)} random controls also fell")
+    assert text.index(f"{fell} of {len(controls)} random controls also fell") < text.index(
+        f"Baseline: {int(baseline['successes'])}/{int(baseline['n'])}."
+    )
+    assert text.count(f"{fell} of {len(controls)} random controls also fell") == 1
+    headline_html = page.split('data-testid="explore-headline"', 1)[1].split("</p>", 1)[0]
+    assert f"{fell} of {len(controls)} random controls also fell" in headline_html
+
+    def _matched(prefix: str) -> tuple[list, list]:
+        rows = [row for row in controls if str(row["cond"]).startswith(prefix)]
+        fallen = [row for row in rows if row["verdict"] == "fall"]
+        return rows, fallen
+
+    def _names(rows: list) -> list[str]:
+        return [str(row["cond"]).split("-", 2)[-1] for row in rows]
+
+    arm_lines = {
+        "A-ctrl": single,
+        "B-ctrl": pair,
+    }
+    for prefix, candidate in arm_lines.items():
+        matched, fallen = _matched(prefix)
+        line = (
+            f"{str(candidate['cond']).split('-')[-1]} off: "
+            f"{int(candidate['successes'])}/{int(candidate['n'])}. "
+            f"{len(fallen)} of {len(matched)} matched controls also fell."
+        )
+        panel = re.search(
+            rf'data-testid="arm-panel-{re.escape(str(candidate["cond"]))}".*?</section>',
+            page,
+            re.S,
+        ).group(0)
+        panel_text = _text(panel)
+        assert line in panel_text
+        assert "random controls also fell" not in panel_text
+        fall_cells = []
+        for row_html in re.findall(r"<tr>(.*?)</tr>", panel, re.S):
+            cells = re.findall(r"<td>(.*?)</td>", row_html)
+            if cells and cells[-1] == "fall":
+                fall_cells.append(cells[0].removesuffix(" off"))
+        assert fall_cells == _names(fallen)
+    base_panel = re.search(r'data-testid="arm-panel-baseline".*?</section>', page, re.S).group(0)
+    assert "matched controls" not in _text(base_panel)
+    assert "random controls" not in _text(base_panel)
+    assert text.count("Intervals are unadjusted for early stopping; read them as descriptive.") == 1
+    assert "Verdict:" not in text
+    assert "Stop-rule verdict:" in text
+    for row in summary["table"]:
+        fraction = f"{int(row['successes'])}/{int(row['n'])}"
+        if row["cond"] == "recon-only":
+            assert fraction not in text
+        else:
+            assert fraction in text
+            if row.get("verdict"):
+                assert str(row["verdict"]) in text
+    assert summary["real"] is False
+    assert "real=false" in text
+    assert text.count("Tested: no causal effect found") == text.lower().count("found")
+    assert "Tested: no causal effect found" in text
+    assert "src/interpretableintelligence/adapters/groot/v9/ablate_v9.py" in page
+    assert "not through ii rollouts" in text
+    assert "ii rollouts --policy groot-1028" in text
+    assert "uv sync" in page and "uv run ii try" in page
+    assert "does not run on GR00T yet" in text and "can count as a finding" in text
+    assert "open source" not in page.lower()
+    assert "mailto:" not in page
+    assert not re.search(r"[\w.+-]+@[\w.-]+\.\w+", text)
+    assert "contact" not in text.lower()
+    assert "<video" not in page.lower()
+    assert "data-groot-1028" not in page
+    assert "/releases/" not in page
+    lower = text.lower()
+    assert "failure cause" not in lower
+    assert "causes failure" not in lower
+    assert "the cause" not in lower
+    assert "caused the failure" not in lower
+    for name in ("stripe", "pulse", "corner", "flicker", "band", "speckle"):
+        assert name not in lower
+    assert 'data-testid="arm-switch"' in page
+    assert 'data-arm-button="baseline"' in page
+    assert 'data-arm-button="A-cand-720"' in page
+    assert 'data-arm-button="B-cand-7081+5852"' in page
+    assert "hidden" not in re.search(r'data-arm-panel="A-cand-720"[^>]*>', page).group(0)
+    assert "hidden" in re.search(r'<section class="arm-panel" data-arm-panel="baseline"[^>]*>', page).group(0)
+    assert "hidden" in re.search(r'<section class="arm-panel" data-arm-panel="B-cand-7081\+5852"[^>]*>', page).group(0)
 
 
 def test_groot_method_checks_come_from_the_vendored_files():
