@@ -172,6 +172,15 @@ Each LIBERO clip is 16 frames, so a vision model and GR00T read it as exactly on
 
 `vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. `II_THREADS=N` lets a CPU-only run use N threads at the cost of bit-reproducibility.
 
+### No GPU? Run on a hosted one
+
+```bash
+uv sync --extra remote && uv run modal setup     # once
+uv run ii run hf --model facebook/dinov2-small --clips clips/mine --out runs/dinov2 --remote
+```
+
+`--remote` runs the same pipeline on a [Modal](https://modal.com) GPU on your own account (default `--gpu L4`, about $1.12/h with its CPU and memory) and mirrors each finished stage into `--out`. The local viewer opens once features exist and refreshes itself when scores land, with a status pill showing the GPU, the stage, and the spend so far. `--max-cost` (default $2.00) becomes the container's timeout, so the cap holds on Modal's side even if this machine disconnects. The estimate and the run's details are written to `runs/<run_id>/remote.json`. Clips upload once, weights are cached, and a rerun resumes remotely. Setup, prices, and limits: [docs/REMOTE.md](docs/REMOTE.md).
+
 ### Share a run as a static page
 
 ```bash

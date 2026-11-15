@@ -213,6 +213,8 @@ def execute_pipeline(
     use_cache: bool = True,
     cache_dir: Path | None = None,
     log=print,
+    on_stage=None,
+    manifest_clips_dir: str | None = None,
 ) -> dict:
     """Run every missing stage and, unless ``serve`` is false, block on the viewer.
 
@@ -221,7 +223,13 @@ def execute_pipeline(
     Captured layers go through the shared activation cache (``act_cache``) unless
     ``use_cache`` is false, so a rerun into a new folder, a new seed or split, or a
     new SAE size reads them from disk instead of running the model again.
+
+    ``on_stage(name)`` is called after each stage has run or been skipped, once its outputs
+    are on disk (``ii run --remote`` uses it to ship finished stages back). ``manifest_clips_dir``
+    is the ``clips_dir`` recorded on the manifest instead of ``clips_dir`` itself, for a run whose
+    clips live at a different path on the machine that will view it.
     """
+    stage_done = on_stage if on_stage is not None else (lambda _name: None)
     if gpu_cost_per_hour is not None and (not math.isfinite(gpu_cost_per_hour) or gpu_cost_per_hour < 0):
         raise ValueError("gpu_cost_per_hour must be a non-negative finite number")
     if not 0.0 < float(heldout_frac) < 1.0:
@@ -280,12 +288,24 @@ def execute_pipeline(
         _invalidate(out, "capture")
         with _measure(device) as measured:
             rows = _capture(
-                adapter, meta, out, layer, seed, heldout_frac, model_sha, capture_inputs, clips_dir, cache, log=log
+                adapter,
+                meta,
+                out,
+                layer,
+                seed,
+                heldout_frac,
+                model_sha,
+                capture_inputs,
+                clips_dir,
+                cache,
+                manifest_clips_dir,
+                log=log,
             )
             measured["rows"] = rows
             measured["tokens"] = rows
         _record_stage(out, "capture", measured["metrics"])
         _write_complete(out / "acts" / "complete.json", capture_inputs, measured["metrics"])
+    stage_done("capture")
 
     if _sae_ready(out, sae_inputs, config):
         log("skip sae")
@@ -298,6 +318,7 @@ def execute_pipeline(
             measured["tokens"] = trained
         _record_stage(out, "sae", measured["metrics"])
         _write_complete(out / "sae" / "complete.json", sae_inputs, measured["metrics"])
+    stage_done("sae")
 
     weights_sha = file_sha256(out / "sae" / "weights.safetensors")
     feature_inputs = _with_kind(sae_inputs, "features", weights_sha=weights_sha)
@@ -312,6 +333,7 @@ def execute_pipeline(
             measured["tokens"] = tokens
         _record_stage(out, "features", measured["metrics"])
         _write_complete(out / "features" / "complete.json", feature_inputs, measured["metrics"])
+    stage_done("features")
 
     stats_path = out / "features" / "stats.json"
     score_inputs = _with_kind(
@@ -354,6 +376,8 @@ def execute_pipeline(
             measured["tokens"] = int(read_json(out / "acts" / "stream" / "meta.json")["n"])
         _record_stage(out, "score", measured["metrics"])
         _write_complete(out / "score.complete.json", score_inputs, measured["metrics"])
+    if score:
+        stage_done("score")
 
     view_inputs = _with_kind(feature_inputs, "view")
     if (out / "scoreboard.json").is_file():
@@ -377,6 +401,8 @@ def execute_pipeline(
 
     if cache.hits or cache.stored:
         log(cache.summary())
+    stage_done("view")
+
     manifest = read_json(out / "manifest.json")
     report = _report(manifest, gpu_cost_per_hour)
     for line in format_report(report).splitlines():
@@ -440,8 +466,18 @@ def _duration(seconds: float) -> str:
 
 
 def _capture(
-    adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, clips_dir: Path,
-    cache: ActivationCache | None = None, log=None,
+    adapter,
+    meta,
+    out,
+    layer,
+    seed,
+    heldout_frac,
+    model_sha,
+    inputs,
+    clips_dir: Path,
+    cache: ActivationCache | None = None,
+    recorded_clips_dir: str | None = None,
+    log=None,
 ) -> int:
     cache = cache if cache is not None else ActivationCache(None)
     split = assign_split([item["clip_id"] for item in meta], int(seed), float(heldout_frac))
@@ -500,7 +536,7 @@ def _capture(
             }
             for item in meta
         ],
-        "clips_dir": str(Path(clips_dir).resolve()),
+        "clips_dir": recorded_clips_dir or str(Path(clips_dir).resolve()),
         "stages": {},
     }
     write_json(out / "manifest.json", manifest)

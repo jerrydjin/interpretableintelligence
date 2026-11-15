@@ -252,20 +252,72 @@ def run(
             help="Run every forward pass even when the activation cache has it (see `ii cache`). Nothing is read from or written to the cache.",
         ),
     ] = False,
+    remote: Annotated[
+        bool,
+        typer.Option(
+            "--remote",
+            help="Run on a hosted GPU (Modal, your account) and stream results into the local folder and viewer. "
+            "Needs `uv sync --extra remote` and `modal setup` once. See docs/REMOTE.md.",
+        ),
+    ] = False,
+    gpu: Annotated[
+        str | None,
+        typer.Option("--gpu", help="--remote only: GPU type, e.g. T4, L4, A10, L40S, A100-80GB, H100. Default L4."),
+    ] = None,
+    max_cost: Annotated[
+        float | None,
+        typer.Option(
+            "--max-cost",
+            help="--remote only: spending cap in USD. Becomes the container's timeout at the GPU's price. Default 2.00.",
+        ),
+    ] = None,
 ) -> None:
     """Capture, train, extract features, score what is missing, then serve the viewer.
 
     A stage whose outputs are already valid is skipped. The run prints a cost report
     from measured stage time. Pass --gpu-cost-per-hour to price an hour of footage.
+    With --remote the same stages run on a hosted GPU and the folder fills in as each finishes.
     """
-    from interpretableintelligence.pipeline import execute_pipeline
+    from interpretableintelligence.remote.backends import RemoteSetupError
 
     modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
     try:
+        if not remote and (gpu is not None or max_cost is not None):
+            raise ValueError("--gpu and --max-cost only apply with --remote")
         adapter = _adapter_name(adapter, model, blocks, tiny=tiny)
         if adapter.startswith("groot:"):
             tiny = False  # groot:tiny names the stand-in itself, so the run folder can rebuild it
         layer = _default_layer(adapter) if layer is None else layer
+        if remote:
+            from interpretableintelligence.remote.client import execute_remote
+            from interpretableintelligence.remote.pricing import DEFAULT_GPU, DEFAULT_MAX_COST
+
+            execute_remote(
+                adapter_name=adapter,
+                clips_dir=clips,
+                out_dir=out,
+                layer=layer,
+                seed=seed,
+                heldout_frac=heldout_frac,
+                tiny=tiny,
+                prefilter=prefilter,
+                extra_effects=modes,
+                gpu_cost_per_hour=gpu_cost_per_hour,
+                sae_features=sae_features,
+                concepts_file=concepts,
+                score=not no_score,
+                serve=not no_serve,
+                host=host,
+                port=port,
+                open_browser=not no_open,
+                gpu=gpu or DEFAULT_GPU,
+                max_cost=DEFAULT_MAX_COST if max_cost is None else max_cost,
+                use_cache=not no_cache,
+                log=typer.echo,
+            )
+            return
+        from interpretableintelligence.pipeline import execute_pipeline
+
         execute_pipeline(
             adapter_name=adapter,
             clips_dir=clips,
@@ -288,6 +340,9 @@ def run(
             use_cache=not no_cache,
             log=typer.echo,
         )
+    except RemoteSetupError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
     except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
