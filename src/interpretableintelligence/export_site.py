@@ -869,16 +869,52 @@ def _conditions_html(summary: dict) -> str:
             f"<td>{escape(str(row['cond']))}</td>"
             f"<td>{int(row['successes'])}/{int(row['n'])}</td>"
             f"<td>[{_bound(low)}, {_bound(high)}]</td>"
+            f"<td>{_seq_cell(row)}</td>"
             f"<td>{escape('' if delta is None else f'{float(delta):+.3f}')}</td>"
             f"<td>{escape(str(row.get('verdict') or ''))}</td>"
             "</tr>"
         )
     return f"""    <h2 id="conditions">Every condition</h2>
     <p>Conditions share seeds. Paired change is against baseline on the shared seeds. From <code>demo-data/groot/groot-1028-ablate-summary.json</code>.</p>
+    <p data-testid="groot-sequential-note">The Wilson interval assumes the number of episodes was fixed in advance. Each SPRT condition stopped as soon as its boundary was crossed, so the sequential column is the exact 95% interval under that stopping rule, valid however early the run stopped. It is usually wider, and it is the one to read for the ablated conditions.</p>
+{_arms_html(summary)}
     <table class="score-table" data-testid="groot-conditions">
-      <thead><tr><th>Condition</th><th>Success</th><th>Wilson 95%</th><th>Paired change</th><th>Verdict</th></tr></thead>
+      <thead><tr><th>Condition</th><th>Success</th><th>Wilson 95%</th><th>Sequential 95%</th><th>Paired change</th><th>Verdict</th></tr></thead>
       <tbody>{''.join(rows)}</tbody>
     </table>"""
+
+
+def _seq_cell(row: dict) -> str:
+    seq = row.get("seq95")
+    if seq is None:
+        return "fixed n"
+    return f"[{_bound(seq[0])}, {_bound(seq[1])}]"
+
+
+def _arms_html(summary: dict) -> str:
+    """Per candidate: matched controls that also fell, the permutation-style p-value, and Holm across candidates."""
+    arms = summary.get("arms")
+    if not arms:
+        return ""
+    lines = []
+    for cond, d in arms["candidates"].items():
+        vs, holm = d["vs_controls"], d["holm"]
+        ident = str(cond).split("-", 2)[-1]
+        name = f"The {ident} pair" if "+" in ident else f"Feature {ident}"
+        lines.append(
+            f'    <p data-testid="groot-arm">{escape(name)}: {vs["controls_fell"]} of {vs["n_controls"]} matched random '
+            f"controls also fell, and {vs['n_controls_at_least_as_bad']} of {vs['n_controls']} did at least as badly "
+            f"(permutation p = {vs['p_perm_fall']:.3f}, Holm {holm['p_perm_fall']:.3f}). Against p0 = {arms['p0']:g} "
+            f"the sequential fall p is {d['p_seq']['fall']:.3f} (Holm {holm['p_seq_fall']:.3f}) and the rise p is "
+            f"{d['p_seq']['rise']:.3f} (Holm {holm['p_seq_rise']:.3f}). A drop below p0 that random features also "
+            "produce is not specific to this feature.</p>"
+        )
+    k = next(iter(arms["candidates"].values()))["vs_controls"]
+    lines.append(
+        f"    <p>With {k['n_controls']} controls per arm the permutation p-value cannot go below "
+        f"{k['min_attainable_p']:.3f}. Holm is across the {len(arms['candidates'])} candidates. None of these numbers sets a verdict.</p>"
+    )
+    return "\n".join(lines)
 
 
 def _random_control(randinit: Path) -> dict:

@@ -29,7 +29,7 @@ The single-feature ablation on LIBERO-plus task **1028** was a formal **null** (
 | Features **7081** + **5852** (ablated together) | **23** / **63** |
 | Random controls | **5** of **20** control arms also received a SPRT **fall** verdict |
 
-Candidate falls were **not** distinguishable from matched random controls. Do not re-run single-feature rise sweeps on 1028 without a **new experimental design** approved in the research thread.
+Candidate falls were **not** distinguishable from matched random controls. The vendored summary also carries early-stopping-valid statistics (exact intervals and p-values under the plan's SPRT, per-arm control counts with a permutation-style p-value, Holm across the two candidates; see `src/interpretableintelligence/adapters/groot/v9/ablate/README.md`). Feature 720: 3 of 10 matched controls also fell, 1 of 10 did at least as badly, permutation p 0.18. Pair 7081+5852: 2 of 10 fell, 2 of 10 at least as badly, permutation p 0.27. Sequential rise p-values are 0.99 and 0.96; both stay `real: false`. Do not re-run single-feature rise sweeps on 1028 without a **new experimental design** approved in the research thread.
 
 ## Draft release metadata (not publicly downloadable)
 

@@ -4,6 +4,8 @@
   "unvalidated": true,
   "real": false,
   "updated": "2026-11-10 22:41:19 UTC",
+  "stats_updated": "2026-11-15 01:27:59 UTC",
+  "stats_source": "vendored table (n, successes, verdict per condition; sufficient for the SPRT statistics), checked against the plan; per-episode logs not in the repo",
   "schedule_order": [
     "baseline",
     "recon-only",
@@ -44,7 +46,10 @@
       ],
       "verdict": null,
       "delta_paired": null,
-      "n_shared": null
+      "n_shared": null,
+      "seq95": null,
+      "p_seq_rise": null,
+      "p_seq_fall": null
     },
     {
       "cond": "recon-only",
@@ -57,7 +62,10 @@
       ],
       "verdict": null,
       "delta_paired": 0.0,
-      "n_shared": 8
+      "n_shared": 8,
+      "seq95": null,
+      "p_seq_rise": null,
+      "p_seq_fall": null
     },
     {
       "cond": "A-cand-720",
@@ -70,7 +78,13 @@
       ],
       "verdict": "fall",
       "delta_paired": -0.5556,
-      "n_shared": 9
+      "n_shared": 9,
+      "seq95": [
+        0.0042,
+        0.507
+      ],
+      "p_seq_rise": 0.992744,
+      "p_seq_fall": 0.011977
     },
     {
       "cond": "B-cand-7081+5852",
@@ -83,7 +97,13 @@
       ],
       "verdict": "fall",
       "delta_paired": -0.1746,
-      "n_shared": 63
+      "n_shared": 63,
+      "seq95": [
+        0.2403,
+        0.5814
+      ],
+      "p_seq_rise": 0.961131,
+      "p_seq_fall": 0.038911
     },
     {
       "cond": "A-ctrl01-7774",
@@ -96,7 +116,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0714,
-      "n_shared": 14
+      "n_shared": 14,
+      "seq95": [
+        0.2943,
+        0.8225
+      ],
+      "p_seq_rise": 0.530037,
+      "p_seq_fall": 0.601974
     },
     {
       "cond": "B-ctrl01-1159+7339",
@@ -109,7 +135,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0476,
-      "n_shared": 21
+      "n_shared": 21,
+      "seq95": [
+        0.4007,
+        0.8517
+      ],
+      "p_seq_rise": 0.220549,
+      "p_seq_fall": 0.800639
     },
     {
       "cond": "A-ctrl02-2343",
@@ -122,7 +154,13 @@
       ],
       "verdict": "fall",
       "delta_paired": -0.3478,
-      "n_shared": 23
+      "n_shared": 23,
+      "seq95": [
+        0.154,
+        0.5742
+      ],
+      "p_seq_rise": 0.970157,
+      "p_seq_fall": 0.03249
     },
     {
       "cond": "B-ctrl02-3311+992",
@@ -135,7 +173,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.1429,
-      "n_shared": 21
+      "n_shared": 21,
+      "seq95": [
+        0.2547,
+        0.708
+      ],
+      "p_seq_rise": 0.772916,
+      "p_seq_fall": 0.256268
     },
     {
       "cond": "A-ctrl03-6814",
@@ -148,7 +192,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": 0.0,
-      "n_shared": 18
+      "n_shared": 18,
+      "seq95": [
+        0.3561,
+        0.8389
+      ],
+      "p_seq_rise": 0.308721,
+      "p_seq_fall": 0.722189
     },
     {
       "cond": "B-ctrl03-10+1456",
@@ -161,7 +211,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0909,
-      "n_shared": 11
+      "n_shared": 11,
+      "seq95": [
+        0.2686,
+        0.7751
+      ],
+      "p_seq_rise": 0.658377,
+      "p_seq_fall": 0.38689
     },
     {
       "cond": "A-ctrl04-6810",
@@ -174,7 +230,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": 0.0,
-      "n_shared": 22
+      "n_shared": 22,
+      "seq95": [
+        0.4127,
+        0.8616
+      ],
+      "p_seq_rise": 0.189728,
+      "p_seq_fall": 0.861194
     },
     {
       "cond": "B-ctrl04-1685+3311",
@@ -187,7 +249,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": 0.0,
-      "n_shared": 18
+      "n_shared": 18,
+      "seq95": [
+        0.3561,
+        0.8389
+      ],
+      "p_seq_rise": 0.308721,
+      "p_seq_fall": 0.722189
     },
     {
       "cond": "A-ctrl05-8157",
@@ -200,7 +268,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0625,
-      "n_shared": 16
+      "n_shared": 16,
+      "seq95": [
+        0.2871,
+        0.7943
+      ],
+      "p_seq_rise": 0.577609,
+      "p_seq_fall": 0.469963
     },
     {
       "cond": "B-ctrl05-7063+1685",
@@ -213,7 +287,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0784,
-      "n_shared": 51
+      "n_shared": 51,
+      "seq95": [
+        0.2442,
+        0.5916
+      ],
+      "p_seq_rise": 0.952024,
+      "p_seq_fall": 0.050315
     },
     {
       "cond": "A-ctrl06-2010",
@@ -226,7 +306,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0652,
-      "n_shared": 46
+      "n_shared": 46,
+      "seq95": [
+        0.2443,
+        0.5963
+      ],
+      "p_seq_rise": 0.94733,
+      "p_seq_fall": 0.05649
     },
     {
       "cond": "B-ctrl06-754+6347",
@@ -239,7 +325,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0968,
-      "n_shared": 31
+      "n_shared": 31,
+      "seq95": [
+        0.2455,
+        0.6306
+      ],
+      "p_seq_rise": 0.907025,
+      "p_seq_fall": 0.108475
     },
     {
       "cond": "A-ctrl07-1869",
@@ -252,7 +344,13 @@
       ],
       "verdict": "fall",
       "delta_paired": -0.6667,
-      "n_shared": 6
+      "n_shared": 6,
+      "seq95": [
+        0.0,
+        0.4593
+      ],
+      "p_seq_rise": 1.0,
+      "p_seq_fall": 0.007256
     },
     {
       "cond": "B-ctrl07-7542+553",
@@ -265,7 +363,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0667,
-      "n_shared": 30
+      "n_shared": 30,
+      "seq95": [
+        0.2465,
+        0.6842
+      ],
+      "p_seq_rise": 0.875376,
+      "p_seq_fall": 0.20535
     },
     {
       "cond": "A-ctrl08-7353",
@@ -278,7 +382,13 @@
       ],
       "verdict": "fall",
       "delta_paired": -0.375,
-      "n_shared": 16
+      "n_shared": 16,
+      "seq95": [
+        0.0896,
+        0.5612
+      ],
+      "p_seq_rise": 0.978495,
+      "p_seq_fall": 0.025497
     },
     {
       "cond": "B-ctrl08-6742+3585",
@@ -291,7 +401,13 @@
       ],
       "verdict": "fall",
       "delta_paired": -0.3077,
-      "n_shared": 26
+      "n_shared": 26,
+      "seq95": [
+        0.171,
+        0.5759
+      ],
+      "p_seq_rise": 0.96751,
+      "p_seq_fall": 0.033682
     },
     {
       "cond": "A-ctrl09-1364",
@@ -304,7 +420,13 @@
       ],
       "verdict": "cap_undecided",
       "delta_paired": -0.1067,
-      "n_shared": 75
+      "n_shared": 75,
+      "seq95": [
+        0.2426,
+        0.5819
+      ],
+      "p_seq_rise": 0.960702,
+      "p_seq_fall": 0.039669
     },
     {
       "cond": "B-ctrl09-60+2144",
@@ -317,7 +439,13 @@
       ],
       "verdict": "fall",
       "delta_paired": -0.4545,
-      "n_shared": 11
+      "n_shared": 11,
+      "seq95": [
+        0.0294,
+        0.5396
+      ],
+      "p_seq_rise": 0.988023,
+      "p_seq_fall": 0.018373
     },
     {
       "cond": "A-ctrl10-5039",
@@ -330,7 +458,13 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0909,
-      "n_shared": 11
+      "n_shared": 11,
+      "seq95": [
+        0.2686,
+        0.7751
+      ],
+      "p_seq_rise": 0.658377,
+      "p_seq_fall": 0.38689
     },
     {
       "cond": "B-ctrl10-553+2994",
@@ -343,9 +477,116 @@
       ],
       "verdict": "no_effect",
       "delta_paired": -0.0714,
-      "n_shared": 14
+      "n_shared": 14,
+      "seq95": [
+        0.2943,
+        0.8225
+      ],
+      "p_seq_rise": 0.530037,
+      "p_seq_fall": 0.601974
     }
   ],
+  "arms": {
+    "alpha": 0.05,
+    "candidates": {
+      "A-cand-720": {
+        "arm": "A",
+        "n": 9,
+        "successes": 1,
+        "verdict": "fall",
+        "p_seq": {
+          "rise": 0.992744,
+          "fall": 0.011977
+        },
+        "vs_controls": {
+          "n_controls": 10,
+          "controls_fell": 3,
+          "controls_fell_ids": [
+            "A-ctrl02-2343",
+            "A-ctrl07-1869",
+            "A-ctrl08-7353"
+          ],
+          "controls_rose": 0,
+          "n_controls_at_least_as_bad": 1,
+          "controls_at_least_as_bad_ids": [
+            "A-ctrl07-1869"
+          ],
+          "frac_controls_at_least_as_bad": 0.1,
+          "p_perm_fall": 0.181818,
+          "n_controls_at_least_as_good": 9,
+          "p_perm_rise": 0.909091,
+          "beats_every_control_rise": false,
+          "statistic": "success proportion s/n at the SPRT stop (same order as the sequential fall p-value)",
+          "min_attainable_p": 0.090909
+        },
+        "holm": {
+          "p_seq_rise": 1.0,
+          "p_seq_fall": 0.023954,
+          "p_perm_rise": 1.0,
+          "p_perm_fall": 0.363636
+        }
+      },
+      "B-cand-7081+5852": {
+        "arm": "B",
+        "n": 63,
+        "successes": 23,
+        "verdict": "fall",
+        "p_seq": {
+          "rise": 0.961131,
+          "fall": 0.038911
+        },
+        "vs_controls": {
+          "n_controls": 10,
+          "controls_fell": 2,
+          "controls_fell_ids": [
+            "B-ctrl08-6742+3585",
+            "B-ctrl09-60+2144"
+          ],
+          "controls_rose": 0,
+          "n_controls_at_least_as_bad": 2,
+          "controls_at_least_as_bad_ids": [
+            "B-ctrl08-6742+3585",
+            "B-ctrl09-60+2144"
+          ],
+          "frac_controls_at_least_as_bad": 0.2,
+          "p_perm_fall": 0.272727,
+          "n_controls_at_least_as_good": 8,
+          "p_perm_rise": 0.818182,
+          "beats_every_control_rise": false,
+          "statistic": "success proportion s/n at the SPRT stop (same order as the sequential fall p-value)",
+          "min_attainable_p": 0.090909
+        },
+        "holm": {
+          "p_seq_rise": 1.0,
+          "p_seq_fall": 0.038911,
+          "p_perm_rise": 1.0,
+          "p_perm_fall": 0.363636
+        }
+      }
+    },
+    "holm": {
+      "p_seq_rise": {
+        "A-cand-720": 1.0,
+        "B-cand-7081+5852": 1.0
+      },
+      "p_seq_fall": {
+        "A-cand-720": 0.023954,
+        "B-cand-7081+5852": 0.038911
+      },
+      "p_perm_rise": {
+        "A-cand-720": 1.0,
+        "B-cand-7081+5852": 1.0
+      },
+      "p_perm_fall": {
+        "A-cand-720": 0.363636,
+        "B-cand-7081+5852": 0.363636
+      }
+    },
+    "holm_note": "Holm step-down across the 2 candidates, separately for each p-value family",
+    "sequential_method": "exact, under the plan's SPRT stopping rule; seq95 = equal-tailed 95% interval, p_seq_* vs p0",
+    "p0": 0.56,
+    "sets_verdicts": false
+  },
   "pool": {
     "n_envs": 8,
     "predict": "per_env",
