@@ -29,7 +29,8 @@ from interpretableintelligence.rollout import (
     make_episode_id,
     summarize,
 )
-from interpretableintelligence.attribute import PREDICTION_LOSS, METHOD, RANK_OBJECTIVES, rank_feature_ids
+from interpretableintelligence.attribute import METHOD, RANK_OBJECTIVES, SCORED_OBJECTIVES, rank_feature_ids
+from interpretableintelligence.policies.base import dictionary_seed
 from interpretableintelligence.sae import load_sae
 from interpretableintelligence.split import assign_split, split_sha
 from interpretableintelligence.stats import feature_is_real, is_usable
@@ -211,6 +212,9 @@ def validate_run(run_dir: Path) -> list[str]:
     from interpretableintelligence.steer_scorecard import check_steering  # noqa: PLC0415
 
     errors.extend(check_steering(run_dir, manifest, scoreboard))
+    from interpretableintelligence.probe import check_probe  # noqa: PLC0415
+
+    errors.extend(check_probe(run_dir, manifest))
     return errors
 
 
@@ -972,7 +976,7 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
             errors.append(f"{where}.feature_ids must be a list of integers")
             return
         if condition == "baseline":
-            if feature_ids or row["kind"] is not None or row["value"] is not None or row["layer"] is not None:
+            if feature_ids or row["kind"] is not None or row["value"] is not None or row["layer"] is not None or row["dictionary"] is not None:
                 errors.append(f"{where} baseline rows have an empty intervention spec")
                 return
         elif condition == "intervention":
@@ -987,6 +991,11 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
                 return
             if not _is_number(row["value"]):
                 errors.append(f"{where}.value must be finite")
+                return
+            try:
+                dictionary_seed(row["dictionary"])
+            except ValueError:
+                errors.append(f"{where}.dictionary must be trained or random:<seed>")
                 return
         else:
             errors.append(f"{where}.condition must be baseline or intervention")
@@ -1010,6 +1019,7 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
                 layer=row["layer"],
                 kind=row["kind"],
                 value=row["value"],
+                dictionary=row["dictionary"],
             )
             if episode_id != expected_id:
                 errors.append(f"{where}.episode_id does not match the intervention spec")
@@ -1085,12 +1095,12 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
         return
     recorded = read_attribution_objective(path)
     imported = "import" in manifest
-    # A scored run ranks by prediction_loss. An import has no model to backprop through, so it may
-    # rank by any recorded objective (in practice ``activation``); candidates.json must agree.
-    expected_objective = recorded if imported and recorded in RANK_OBJECTIVES else PREDICTION_LOSS
-    if recorded != expected_objective:
+    # A scored run ranks by the adapter's gradient objective. An import has no model to backprop
+    # through, so it may rank by any recorded objective (in practice ``activation``).
+    allowed = RANK_OBJECTIVES if imported else SCORED_OBJECTIVES
+    if recorded not in allowed:
         errors.append(
-            f"attribution.parquet objective metadata must be {PREDICTION_LOSS!r} on a scored run, got {recorded!r}"
+            f"attribution.parquet objective metadata must be one of {allowed}, got {recorded!r}"
         )
     frame = table.to_pydict()
     clip_ids = [clip["clip_id"] for clip in manifest["clips"] if isinstance(clip, dict)]
@@ -1130,8 +1140,8 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
     _exact_keys(document, _CANDIDATE_KEYS, "candidates.json", errors)
     if document.get("method") != METHOD:
         errors.append(f"candidates.json method must be {METHOD}")
-    if document.get("objective") != expected_objective:
-        errors.append(f"candidates.json objective must be {expected_objective!r} (the attribution parquet's)")
+    if document.get("objective") != recorded:
+        errors.append(f"candidates.json objective must match attribution.parquet ({recorded!r})")
     if document.get("shortlist_only") is not True:
         errors.append("candidates are a shortlist and must be confirmed by a real ablation")
     if not isinstance(document.get("rank_by"), str) or not document["rank_by"]:

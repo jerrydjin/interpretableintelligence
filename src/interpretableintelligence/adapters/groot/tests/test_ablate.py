@@ -1,4 +1,5 @@
 """SAE feature-ablation runner (v9/ablate_v9.py): hook arithmetic, identity path, SPRT boundaries, resumable logs."""
+from box_paths import COLAB, RUNS  # noqa: E402 (box roots; see box_paths.py)
 import json, math, sys
 from pathlib import Path
 
@@ -6,12 +7,12 @@ import numpy as np
 import pytest
 import torch
 
-sys.path[:0] = ["/workspace/groot-colab/v8", "/workspace/groot-colab/v9"]
+sys.path[:0] = [f"{COLAB}/v8", f"{COLAB}/v9"]
 import ablate_v9 as A  # noqa: E402
 
-SAE_DIR = Path("/workspace/runs/groot-1028-v9-n100/sae")
-PLAN = Path("/workspace/runs/groot-1028-v9-ablate/ablate_plan.json")
-SUBSET = Path("/workspace/runs/groot-1028-v9-ablate/sae_subset.safetensors")
+SAE_DIR = Path(f"{RUNS}/groot-1028-v9-n100/sae")
+PLAN = Path(f"{RUNS}/groot-1028-v9-ablate/ablate_plan.json")
+SUBSET = Path(f"{RUNS}/groot-1028-v9-ablate/sae_subset.safetensors")
 
 
 def synth_sae(D=16, M=64, seed=0, thr=0.05):
@@ -294,7 +295,7 @@ def test_default_plan_matches_candidates():
     if not PLAN.is_file():
         pytest.skip("plan absent")
     p = json.loads(PLAN.read_text())
-    cf = json.loads(Path("/workspace/runs/groot-1028-v9-n100/candidates_final.json").read_text())
+    cf = json.loads(Path(f"{RUNS}/groot-1028-v9-n100/candidates_final.json").read_text())
     c = {x["id"]: x for x in p["conditions"]}
     assert c["A-cand-720"]["latents"] == [720] and c["B-cand-7081+5852"]["latents"] == [7081, 5852]
     a = [x for x in p["conditions"] if x["arm"] == "A" and x["kind"] == "control"]

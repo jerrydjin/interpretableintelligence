@@ -212,6 +212,41 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
 .numbers-toggle[aria-pressed="true"] .switch { background: var(--ink); }
 .numbers-toggle[aria-pressed="true"] .switch::after { transform: translateX(10px); }
 
+/* Remote run status (ii run --remote): where it runs, the latest stage, and the cost so far.
+   Grey dot while running, the verified green once done, warn on a problem. No ember: that is
+   reserved for where a feature fires. */
+.live-status {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--sheet);
+  box-shadow: 0 0 0 1px var(--line), 0 6px 20px rgba(20, 20, 19, 0.06);
+  font-family: var(--sans);
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.live-status[hidden] { display: none; }
+.live-status::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
+.live-status[data-state="running"]::before { animation: live-pulse 1.4s ease-in-out infinite; }
+.live-status[data-state="done"]::before { background: var(--real); }
+.live-status:not([data-state="running"]):not([data-state="done"]) { color: var(--warn); }
+.live-status:not([data-state="running"]):not([data-state="done"])::before { background: var(--warn); }
+@keyframes live-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .live-status[data-state="running"]::before { animation: none; } }
+@media (max-width: 560px) {
+  .live-status { left: 16px; white-space: normal; border-radius: var(--radius); }
+}
+
 #app { padding: 32px var(--gutter) 120px; }
 
 /* ---- clip page: clips | player | what the model notices ------------------ */

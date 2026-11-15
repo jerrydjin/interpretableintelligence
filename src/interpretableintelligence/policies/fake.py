@@ -25,7 +25,12 @@ from contextlib import contextmanager
 
 import numpy as np
 
-from interpretableintelligence.policies.base import Intervention, apply_latent_intervention
+from interpretableintelligence.policies.base import (
+    Intervention,
+    apply_latent_intervention,
+    dictionary_seed,
+    edit_through_dictionary,
+)
 
 PLANTED_FEATURE_ID = 3
 N_FEATURES = 32
@@ -51,6 +56,8 @@ class FakePolicyEnv:
     n_features = N_FEATURES
     horizon = HORIZON
     planted_feature_id = PLANTED_FEATURE_ID
+    # Untrained SAEs of the identity SAE's shape (32 x 32), for ``--random-sae``.
+    random_dictionaries = True
 
     def __init__(self, *, plant: bool = True) -> None:
         self.plant = bool(plant)
@@ -64,6 +71,7 @@ class FakePolicyEnv:
         self._u = 0.0
         self._steps = 0
         self._task_id = TASK_ID
+        self._random_saes: dict[int, object] = {}
 
     def reset(self, *, task_id: str, seed: int) -> np.ndarray:
         if task_id != TASK_ID:
@@ -85,10 +93,14 @@ class FakePolicyEnv:
         if self._latents is None:
             raise RuntimeError("call reset() before act()")
         activation = self.layer_activation(observation)
-        latents = self.encode_latents(activation)
-        # Hook: SAE latents at `self.layer`, after encode and before decode.
-        latents = apply_latent_intervention(latents, self._intervention)
-        steered = self.decode_latents(latents)
+        seed = None if self._intervention is None else dictionary_seed(self._intervention.dictionary)
+        if seed is None:
+            latents = self.encode_latents(activation)
+            # Hook: SAE latents at `self.layer`, after encode and before decode.
+            latents = apply_latent_intervention(latents, self._intervention)
+            steered = self.decode_latents(latents)
+        else:
+            steered = edit_through_dictionary(activation, self.random_sae(seed), self._intervention)
         self._steered = steered
         return self.controller(steered, observation)
 
@@ -133,6 +145,23 @@ class FakePolicyEnv:
             yield None
         finally:
             self._intervention = previous
+
+    def random_sae(self, seed: int):
+        """The untrained SAE ``random:<seed>``: training's own initialisation, never stepped.
+
+        ``b_dec`` is 0, the mean of this layer's activations (Gaussian codes and a
+        target uniform on [-1, 1]).
+        """
+        cached = self._random_saes.get(int(seed))
+        if cached is None:
+            import torch
+
+            from interpretableintelligence.sae import SAEConfig, untrained_sae
+
+            config = SAEConfig(d_model=N_FEATURES, n_features=N_FEATURES, seed=int(seed))
+            cached = untrained_sae(config, torch.zeros(N_FEATURES), torch.device("cpu")).eval().requires_grad_(False)
+            self._random_saes[int(seed)] = cached
+        return cached
 
     def layer_activation(self, observation: np.ndarray) -> np.ndarray:
         """Perception code for this episode. Cached at reset; the position is separate."""
