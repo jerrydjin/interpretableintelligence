@@ -6,7 +6,7 @@ Shared rules for Claude Code, Codex, and other coding agents working in this rep
 
 **interpretableintelligence** (`ii`) is infrastructure for mechanistic interpretability on video world models and robot / VLA policies: a shared **run folder** format, SAE training, offline scoreboard gates, local viewers, and causal rollouts.
 
-The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, the generic `hf:<model>` adapter (any ViT-style Hugging Face vision model, `ii run hf --model <id>`), and `groot:<checkpoint>` (NVIDIA GR00T N1.7 through LeRobot, `ii run groot`; needs `lerobot[groot]==0.7.0`, and `--tiny` is a random-weights stand-in for tests). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
+The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, the generic `hf:<model>` adapter (any Hugging Face vision model: ViT-style, CNN, the vision tower of CLIP/SigLIP/VLMs, or a SmolVLA-style policy's frozen encoder; `ii run hf --model <id>`), and `groot:<checkpoint>` (NVIDIA GR00T N1.7 through LeRobot, `ii run groot`; needs `lerobot[groot]==0.7.0`, and `--tiny` is a random-weights stand-in for tests). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
 
 Contract details: `SCHEMA.md`, `ARCHITECTURE.md`, `README.md`. Do not drift from them in agent docs.
 
@@ -22,7 +22,7 @@ uv run pytest
 
 `interpretableintelligence` is the long command name; **`ii` is the same CLI**. PyTorch is pinned to CPU wheels in `pyproject.toml` for CI and local dev; GR00T/LIBERO jobs use separate GPU environments (Colab), not this default install.
 
-On a fresh clone of `main`, expect **147 passed, 13 skipped** (`pytest` excludes `slow` and two deselected tests by default). Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
+On a fresh clone of `main` with `cargo`, Chrome and `node` on the machine (as in CI, on Ubuntu and macOS), expect **232 passed, 13 skipped, 3 deselected** (the three `slow` tests, excluded by default). Without `cargo` the 3 Rust parity tests in `tests/test_contract.py` also skip (**229 passed, 16 skipped**). Without Chrome or Chromium the 10 browser tests skip, and without `node` 4 guide tests skip. Every skip prints its reason with `pytest -rs`. Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
 
 ## `ii` CLI (public surface)
 
@@ -32,19 +32,29 @@ All experiments that belong in this repo should be reachable through these comma
 | --- | --- |
 | `try` | Guided first run for newcomers: practice clips, a `fake` run under `runs/try`, then the playground opened on the strongest verified feature. |
 | `generate-clips` | Write deterministic synthetic clips for the `fake` adapter. |
+| `get-clips` | Download short real robot clips (DROID, MIT licence) to run a real model on, for learners with no video of their own. |
 | `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). |
 | `rank` | Attribution prefilter shortlist; does not replace ablation. |
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
 | `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
+| `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls; effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
+| `compare` | Match SAE features across runs on the same clips (activation correlation, shuffle null): which concepts models share and which are unique. Writes `compare.json` and a static page. |
 | `validate` | Check a run folder against `SCHEMA.md`. |
+| `cache` | Show or clear the shared activation cache (keyed by model, layer, clip hash, window, preprocessing) that lets reruns and the playground skip forward passes. Not part of the run contract. |
 | `view` | Local browser viewer for a finished run. `--steer` adds the playground (steer SAE features, see the prediction move; exploration only, never evidence). |
 
 World-model path: `ii run fake --clips … --out runs/…` or `vjepa2`. Policy path on main: `ii rollouts runs/… --policy fake`.
 
 **Known gap:** GR00T is on `ii` for the offline lane (`ii run groot`: capture at DiT block 5 on the final denoise step, SAE, scoring, `ii view --steer`), but **closed-loop LIBERO-plus rollouts are not**. They still run through `src/interpretableintelligence/adapters/groot/v9/` (Colab, `ablate_v9.py`, ablation plans), the current pre-CLI route, not a violation of the long-term CLI rule. Steering GR00T in the playground is exploration, never evidence; the research rules below still decide findings.
+
+## Language: Rust for engineering and infra
+
+New technical engineering and infrastructure (servers, storage, file formats and readers, tooling that does not run a model) is written in **Rust**, in the Cargo workspace (`server/` is the example).
+
+The exception is code that runs inside the model process and touches model tensors: adapters, the pipeline stages, scoring, steering, and the glue that hands tensors to and from PyTorch (for example the activation cache in `act_cache.py`, whose file I/O already goes through the Rust-backed `safetensors` package). That stays Python, so the package still installs with `uv sync` and no Rust toolchain. When a change is unclear, prefer Rust for anything that reads or serves run folders or caches without loading a model, and say which side of the line it is on in the PR.
 
 ## Run folder layout
 

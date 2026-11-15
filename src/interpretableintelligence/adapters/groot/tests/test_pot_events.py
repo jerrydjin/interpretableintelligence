@@ -3,6 +3,7 @@
 Replays the 100 recorded traces of groot-1028-v9-n100 (sim/ep-*.npz) through the SAME code the Colab capture uses and
 requires the offline relabel in that run's episodes.jsonl exactly. Skips if the run folder is not on this machine.
 """
+from box_paths import RUNS  # noqa: E402 (box roots; see box_paths.py)
 import json
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "v9"), str(ROOT / "v8")]
 import pot_events as pe  # noqa: E402
 
-RUN = Path("/workspace/runs/groot-1028-v9-n100")
+RUN = Path(f"{RUNS}/groot-1028-v9-n100")
 pytestmark = pytest.mark.skipif(not (RUN / "episodes.jsonl").is_file(), reason="groot-1028-v9-n100 run folder not present")
 
 

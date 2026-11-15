@@ -4,7 +4,7 @@
 
 A feature is marked `real` only when the SAE is good enough to splice back into the predictor and the feature passes four checks: it fires across clips, its label holds on held-out clips, its ablation effect beats matched random features, and a randomly initialised copy of the model does not reproduce its firing pattern. A missing check is `null`, and `null` never counts as a pass.
 
-`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings any ViT-style Hugging Face image or video model by name (see below). `groot` is NVIDIA's GR00T N1.7 robot policy through LeRobot. pi0.5 is still a later lane.
+`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings a Hugging Face vision model by name: ViT-style and video encoders, CNNs, the vision tower of CLIP, SigLIP and VLMs, and SmolVLA-style robot policies (see below). `groot` is NVIDIA's GR00T N1.7 robot policy through LeRobot. pi0.5 is still a later lane.
 
 `interpretableintelligence rollouts` is the causal check on a policy. It runs paired baseline and intervention episodes, plus matched random-feature controls, and writes `rollouts/` into the run folder (schema version 1). The fake policy is a reacher whose planted feature drops success from about 0.80 to about 0.30 when ablated; other features do not move it. LIBERO, OpenVLA, and pi0.5 sit behind the optional `robots` extra as stubs. That extra installs no simulator and no GPU package.
 
@@ -12,16 +12,31 @@ Runs on CPU and Apple Silicon (MPS). PyTorch is the only tensor library; nothing
 
 ## Quickstart
 
-New here? One command, no download and no setup:
+New here? Clone the repo, then one command. No model download, no GPU, no setup:
 
 ```bash
+git clone https://github.com/jerrydjin/interpretableintelligence.git
+cd interpretableintelligence
 uv sync
 uv run ii try
 ```
 
+You need git and [uv](https://docs.astral.sh/uv/getting-started/installation/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`). uv downloads Python 3.11+ itself if your machine has an older one. It works on Linux (x86_64 and arm64) and on macOS 14 or later on Apple Silicon; PyTorch no longer publishes wheels for Intel Macs. Nothing else is needed: no ffmpeg (video goes through PyAV, which ships its own), no Rust toolchain, no Hugging Face account. The first `uv sync` fills about 1.5 GB of uv's package cache, mostly PyTorch's CPU build. CI runs exactly these commands on fresh Ubuntu and macOS runners with empty caches (`scripts/quickstart_smoke.sh`, which you can also run yourself).
+
 `ii try` writes 30 practice clips to `clips/try`, runs the whole pipeline on the `fake` model into `runs/try` (about 15 seconds on a laptop), and opens the viewer with the playground on. The page starts on the verified feature with the biggest effect, at the held-out moment where it fires hardest, and the terminal suggests what to try first: remove that feature, then remove a decoy and compare. The practice model has three features planted on purpose, so you can check what the tool finds against the truth before you point it at a real model. A second `ii try` reuses the run and opens in a couple of seconds. `--no-open` skips the browser and `--verbose` prints the full pipeline log.
 
-The rest of this section is the same pipeline step by step.
+Then try a real model on real video. You do not need clips of your own:
+
+```bash
+uv run ii get-clips --out clips/droid          # 100 short robot clips from DROID (MIT), one 175 MB download
+uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid --no-score --steer
+```
+
+`--no-score --steer` gets you to the playground fastest (about 10 minutes on a laptop CPU): every feature is explorable, but none is verified yet. Run the same command without `--no-score` to add the checks; it reuses what is done. Scoring a real model is the slow part, up to an hour on a CPU, and it now prints progress with a time estimate as it goes.
+
+`ii get-clips` cuts a 4-second mp4 from the middle of each of the 100 episodes in [`lerobot/droid_100`](https://huggingface.co/datasets/lerobot/droid_100), real robot arms in real kitchens and offices, and keeps each episode's instruction in `clips/droid/clips.json`. `--n` and `--seconds` take fewer or longer clips. Any folder of your own mp4s works in its place.
+
+The rest of this section is the fake pipeline step by step.
 
 ```bash
 uv sync
@@ -33,7 +48,9 @@ That command captures the layer, trains the SAE, writes feature candidates, scor
 
 The report's cost per hour of footage is measured stage wall time times `--gpu-cost-per-hour`, divided by the hours of footage in the clips. It is omitted when the flag is absent. Stage wall time, peak RSS, device, and row/token counts are stored on `manifest.stages`. Activation rows are streamed from an on-disk cache; a stage does not load the full activation matrix.
 
-`interpretableintelligence rank` is the cheap prefilter. One forward and backward per window scores every SAE feature by `activation × ∂objective/∂activation`, summed over tokens and windows. `--objective prediction_loss` is the masked predictor MSE. `--objective action_loglik` is the log-likelihood of the action the policy took, for a robot policy whose success is not differentiable. `--objective activation` ranks by activation magnitude only, the baseline the attribution has to beat. The objective is stored in the parquet metadata. The output is a shortlist: every pick is confirmed by a real ablation, and the score itself is not evidence.
+Captured layers also go into a content-addressed activation cache shared by every run on the machine (`~/.cache/interpretableintelligence/acts`, or `$II_ACTS_CACHE`; `II_ACTS_CACHE=off` disables it). An entry is keyed by the adapter, the weights' sha (the random-init control has its own), the layer, the device type, the clip's sha256, the window and a hash of its frames, the adapter's preprocessing, and the tool version, so a rerun into a new folder, with a new seed or split, or with a new SAE size reads the layer back instead of running the model. The playground (`view --steer`, `export`) caches each window's unedited pass the same way, so only the edited pass runs. Entries are safetensors files whose stored key is checked on read; a mismatched or damaged entry is recomputed. `interpretableintelligence cache` shows its size, `cache --clear` empties it, and `run --no-cache` bypasses it. The cache is capped at `$II_ACTS_CACHE_MAX_GB` (default 20, `0` for no cap); past the cap the least recently used windows are deleted. It holds activations only, never results. GR00T is not cached yet: its activations also depend on per-clip sidecars and the denoising noise.
+
+`interpretableintelligence rank` is the cheap prefilter. One forward and backward per window scores every SAE feature by `activation × ∂objective/∂activation`, summed over tokens and windows. `--objective prediction_loss` is the masked predictor MSE. `--objective action_loglik` is the log-likelihood of the action the policy took, for a robot policy whose success is not differentiable. `--objective output_sensitivity` (the default for hf and groot, whose loss against their own clean output has a zero gradient) ranks by a random-probe estimate of how far ablating each feature turns the output. `--objective activation` ranks by activation magnitude only, the baseline the attribution has to beat. The objective is stored in the parquet metadata. The output is a shortlist: every pick is confirmed by a real ablation, and the score itself is not evidence.
 
 ```bash
 uv run interpretableintelligence rank fake --clips clips/demo --prefilter 3 --out runs/rank
@@ -87,7 +104,16 @@ uv run ii run hf --model facebook/dinov2-small --clips clips/mine --out runs/din
 uv run ii view runs/dinov2 --clips clips/mine --steer
 ```
 
-`--model` is a Hub id or a local directory (anything `AutoModel` loads that takes `pixel_values` or `pixel_values_videos`: ViT, DINOv2, VideoMAE, V-JEPA 2 and similar). The run records the adapter as `hf:<model>`, so `explain` and the playground reload the same model later. `--layer` is the 1-indexed block output (`hidden_states[layer]`) and defaults to the middle block. The block list is detected from `config.num_hidden_layers`; `--blocks encoder.layer` picks it by hand.
+`--model` is a Hub id or a local directory. What works:
+
+| Kind | Examples | What gets hooked |
+| --- | --- | --- |
+| ViT-style image or video encoder | `facebook/dinov2-small`, `WinKawaks/vit-tiny-patch16-224`, `MCG-NJU/videomae-base` | Patch tokens of a transformer block |
+| Image-text model or VLM | `openai/clip-vit-base-patch32`, `google/siglip-base-patch16-224`, `HuggingFaceTB/SmolVLM-256M-Instruct` | The vision tower only; the text side is dropped |
+| Convolutional model | `microsoft/resnet-18`, `facebook/convnext-tiny-224` | A stage's feature map, one token per map cell; the readout is the final map resized to that grid |
+| LeRobot policy with a frozen VLM vision encoder | `lerobot/smolvla_base` | The vision tower of its backbone (`vlm_model_name`), which is exactly what the policy sees |
+
+Anything else stops before downloading weights with the reason and what to try: text-only models, wrong ids, gated repos (accept the licence, then `hf auth login`), and other LeRobot policies (use `ii run groot`, or point `--model` at the policy's vision backbone). The run records the adapter as `hf:<model>`, so `explain` and the playground reload the same model later. `--layer` is the 1-indexed block output (`hidden_states[layer]`) and defaults to the middle block (for CNNs, the second-to-last stage, 14x14 at 224 px). The block list is detected from the vision config's depth; `--blocks encoder.layer` picks it by hand.
 
 A generic encoder has no masked-prediction head, so for `hf` the "prediction" is the model's own final patch tokens. Every token is scored, the target is the clean output, and the visible-mean baseline replaces every token with the average token. An ablation effect therefore reads as "how far does removing this feature move the model's output". Image models see each sampled frame (8 by default) as its own image; video models see the window at once. Frames are resized to the model's square input without cropping, so the heatmap covers the whole frame. The input side comes from the model's preprocessor config when the model accepts it (DINOv2: 224 px, although its config says 518), else from the model config. Prefix tokens (CLS, registers) pass through unedited.
 
@@ -109,12 +135,42 @@ GR00T also needs a wrist camera, the robot state and an instruction. Put them in
 
 Weights stream in at half precision (6.3 GB). On a 4-core CPU the model loads in about a minute and each window takes a few seconds; a GPU is much faster. `ii run groot --tiny` runs a GR00T-shaped random network instead, with no download; it is for tests and is not GR00T. Closed-loop LIBERO rollouts for GR00T still go through `adapters/groot/v9/`.
 
+#### Steering scorecard
+
+```bash
+uv run ii steer-scorecard runs/groot --clips clips/libero
+```
+
+For the top verified (`real`) features, strongest ablation effect first (`--top`, default 5), it removes each feature (scale 0) and boosts it (`--boost`, default ×3) on every held-out window where the feature fires. It then measures how far the planned action chunk moved: the relative L2 change against the clean chunk. Each edit is paired with `--controls` (default 32, at least 19) matched random-feature controls on the same window. A control is a random direction at the feature's decoder norm, carrying the same per-token edit sizes, on a random permutation of that window's tokens. The scorecard reports, per feature and edit:
+
+- how much: the mean change, the controls' mean change, the excess, and the ratio to controls;
+- how reliably: the share of windows where the edit moved the actions more than every control did (chance is `1 / (controls + 1)`);
+- a Monte Carlo p-value against the control arms;
+- 95% intervals from a bootstrap that resamples held-out episodes, since windows of one episode are not independent.
+
+It writes `steering/effects.parquet` and `steering/scorecard.json`, and `ii view` shows it under **Steering** and on each feature's page. When no feature is `real`, the command stops; `--features 3,7` measures named features and records them as unverified. The scorecard never touches `scoreboard.json` or a badge. It is offline, on recorded clips, so it is not a rollout finding under the research rules. It works on any run (`fake`, `hf`, `vjepa2`), where it measures the masked prediction instead.
+
 ```bash
 uv run interpretableintelligence rollouts runs/demo --policy fake --episodes 32 --features 3 --controls 10 --workers 2
 uv run pytest
 ```
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
+
+`uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust read-API parity tests need `cargo` (https://rustup.rs); and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
+
+### Compare models on the same clips
+
+```bash
+uv run python scripts/make_libero_clips.py --out clips/libero-moments   # 148 LIBERO moments with GR00T sidecars
+uv run ii run hf --model facebook/dinov2-small --clips clips/libero-moments --out runs/cmp-dinov2 --no-serve
+uv run ii run groot --clips clips/libero-moments --out runs/cmp-groot --sae-features 512 --no-serve
+uv run ii compare runs/cmp-dinov2 runs/cmp-groot --out site/compare
+```
+
+Each LIBERO clip is 16 frames, so a vision model and GR00T read it as exactly one window and see the same moment. `ii compare` takes each feature's largest activation in each shared clip (clips are matched by file hash), pairs features across models that are each other's best partner by Pearson r, and keeps a pair only if r beats the 99th percentile of the best r after shuffling clip order. It writes `compare.json` and a static `index.html`. A match is correlational. Only scoreboard-`real` features are marked verified; a run that has not been scored can still be compared, and all its features show as exploratory. When clips carry GR00T sidecars, each shared concept is described by the instruction most of its top moments come from; otherwise by a CLIP hint, which is a reading aid and never a label.
+
+`vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. `II_THREADS=N` lets a CPU-only run use N threads at the cost of bit-reproducibility.
 
 ### Share a run as a static page
 
@@ -144,11 +200,14 @@ The playground needs the model, so the export precomputes it: remove, scale, cla
 | `src/interpretableintelligence/score.py` | Explained variance, loss recovered, ablations, random controls |
 | `src/interpretableintelligence/attribute.py` | Attribution-patching prefilter and the ablation comparison |
 | `src/interpretableintelligence/pipeline.py` | Resumable capture, SAE, features, score, and viewer |
+| `src/interpretableintelligence/act_cache.py` | Content-addressed activation cache shared by reruns and the playground |
+| `scripts/bench_act_cache.py` | Rerun and playground timings with and without the activation cache |
 | `demo-site/` | Static demo. Regenerated by `make demo-site` |
 | `src/interpretableintelligence/run.py` | `execute_run` entry that does not start the viewer, and `interpretableintelligence rank` |
 | `scripts/compare_attribution_vs_ablation.py` | Spearman and top-K overlap for a finished run |
 | `src/interpretableintelligence/view.py` | Local clip viewer over a finished run folder |
 | `src/interpretableintelligence/steer.py` | Playground steering behind `view --steer` |
+| `src/interpretableintelligence/steer_scorecard.py` | `ii steer-scorecard`: remove and boost features against matched controls, `steering/` |
 | `src/interpretableintelligence/contract_view.py` | Read-API payloads matched by `interpretableintelligence-server` |
 | `src/interpretableintelligence/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
 | `src/interpretableintelligence/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |

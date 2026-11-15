@@ -349,6 +349,50 @@ class VJEPA2Adapter:
             self._pixels_cache[key] = cached
         return cached
 
+    def cache_spec(self, clip: Clip) -> dict:
+        """What besides weights, layer and frames decides this adapter's tensors (``act_cache``)."""
+        del clip
+        return {
+            "adapter": "vjepa2-v1",
+            "frames": int(self.n_frames),
+            "crop": int(self.crop),
+            "tubelet": TUBELET,
+            "patch": PATCH,
+            "mean": list(IMAGENET_MEAN),
+            "std": list(IMAGENET_STD),
+            "context_tokens": None if self._ctx is None else int(self._ctx.shape[-1]),
+        }
+
+    def clean_state(self, clip: Clip, window: Window) -> dict[str, torch.Tensor]:
+        """Full-video layer tokens, visible-only layer tokens and target-encoder tokens for one window."""
+        self._ensure()
+        return {
+            "layer": self._cached_layer_tokens(clip, window),
+            "visible": self._cached_visible(clip, window),
+            "encoder": self._cached_encoder_tokens(clip, window),
+        }
+
+    def load_clean_state(self, clip: Clip, window: Window, state: dict[str, torch.Tensor]) -> None:
+        """Put :meth:`clean_state` back, so encode and every prediction skip the encoder up to ``layer``."""
+        self._ensure()
+        assert self._ctx is not None
+        width = self.d_model
+        expected = {
+            "layer": (1, self._n_tokens, width),
+            "visible": (1, int(self._ctx.shape[-1]), width),
+            "encoder": (1, self._n_tokens, width),
+        }
+        loaded = {}
+        for name, shape in expected.items():
+            tensor = state[name]
+            if tuple(tensor.shape) != shape:
+                raise ValueError(f"cached {name} tokens {tuple(tensor.shape)} != {shape}")
+            loaded[name] = tensor.to(device=self.device, dtype=torch.float32)
+        key = (clip.clip_id, window.index)
+        self._layer_cache[key] = loaded["layer"]
+        self._visible_cache[key] = loaded["visible"]
+        self._encoder_cache[key] = loaded["encoder"]
+
     def _training_target(self, encoder_hidden: torch.Tensor) -> torch.Tensor:
         """No-affine layer norm applied on top of the target encoder.
 
@@ -460,6 +504,14 @@ class VJEPA2Adapter:
                 assert handle.fn is not None
                 edited = handle.fn(edited)
         return edited
+
+    def view_frames(self, frames: np.ndarray) -> np.ndarray:
+        """Frames as the model sees them (the centre crop), in [0, 1], for the concept labeller."""
+        video = torch.from_numpy(np.ascontiguousarray(frames)).float()
+        if float(video.max()) > 1.5:
+            video = video / 255.0
+        video = _resize_center_crop(video.permute(0, 3, 1, 2).contiguous(), self.crop)
+        return video.permute(0, 2, 3, 1).contiguous().numpy()
 
     def _preprocess(self, frames: np.ndarray) -> torch.Tensor:
         video = torch.from_numpy(np.ascontiguousarray(frames))
