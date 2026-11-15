@@ -37,8 +37,6 @@ from interpretableintelligence.rollout_stats import (
 from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_ALPHA,
     DEFAULT_ROLLOUT_BATCH,
-    DEFAULT_ROLLOUT_CONTROLS,
-    DEFAULT_ROLLOUT_EPISODES,
     DEFAULT_ROLLOUT_MIN_EPISODES,
     DEFAULT_ROLLOUT_WORKERS,
     SPRT_LAMBDA,
@@ -458,6 +456,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
         return {
             "feature_id": feature_id,
             "role": role if role != "recon" else "control",
+            "dictionary": "trained",
             "baseline_success": float(sum(paired_base) / len(paired_base)),
             "intervention_success": float(sum(flags) / len(flags)),
             "delta": delta,
@@ -503,7 +502,19 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
             control_percentile=percentile,
             alpha=config.alpha,
         )
-        features.append({**scored, "control_percentile": percentile, "n_controls": len(others), "causal": causal})
+        # Rule 4 (random-weights SAE control) is not wired into GR00T yet, so nothing here is a finding.
+        features.append(
+            {
+                **scored,
+                "control_percentile": percentile,
+                "n_controls": len(others),
+                "causal": causal,
+                "random_sae_percentile": None,
+                "n_random_sae": 0,
+                "beats_random_sae": None,
+                "finding": False,
+            }
+        )
 
     def condition_record(
         arm: tuple[str, str, str, tuple[int, ...]],
@@ -531,6 +542,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
         return {
             "role": role,
             "condition": arm[2],
+            "dictionary": None if arm[1] == "baseline" else "trained",
             "feature_ids": list(arm[3]),
             "layer": layer,
             "kind": kind,
@@ -573,6 +585,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
         "total_episodes": total,
         "episodes_saved": fixed_budget - total,
         "validated_feature_ids": validated,
+        "finding_feature_ids": [],
         "rollouts_per_validated_feature": per,
         "conditions": conditions,
         "features": features,
