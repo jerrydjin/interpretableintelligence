@@ -434,7 +434,7 @@ def _write_explore(path: Path, summary: dict) -> None:
     <p><span class="badge badge-unverified" data-testid="explore-verdict">{escape(status)}</span></p>
     <p data-testid="explore-headline">{escape(headline)}</p>
     <p data-testid="explore-real">Every feature on this run is real=false.</p>
-    <p data-testid="explore-runner">{episodes} rollouts. This ablation ran through <a href="{RUNNER_URL}"><code>{escape(RUNNER_PATH)}</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts</code> on main runs only the bundled fake policy.</p>
+    <p data-testid="explore-runner">{episodes} rollouts. This ablation ran through <a href="{RUNNER_URL}"><code>{escape(RUNNER_PATH)}</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts --policy groot-1028</code> can now import or replay these v9 logs as a standard run folder.</p>
     <p data-testid="explore-model">{escape(identity["name"])}, checkpoint <code>{escape(identity["checkpoint"])}</code>, on LIBERO-plus task {escape(identity["task"])}. The edit is on transformer block {escape(spec["layer"])} at the final denoise step.</p>
     <h2>Stop rule</h2>
     <p data-testid="stop-rule" data-stop-rule="{escape(spec["stop_rule"])}">{escape(_stop_rule_text(spec))}</p>
@@ -446,7 +446,7 @@ def _write_explore(path: Path, summary: dict) -> None:
     <h2>Now run it on yours</h2>
     <pre class="quickstart"><code>uv sync
 uv run ii try</code></pre>
-    <p><code>ii try</code> writes practice clips and runs the pipeline on the fake model. <code>ii rollouts</code> on main runs only the bundled fake policy. Live GR00T through <code>ii</code> is coming.</p>
+    <p><code>ii try</code> writes practice clips and runs the pipeline on the fake model. <code>ii rollouts --policy groot-1028</code> brings GR00T rollouts onto <code>ii</code>, but the random-weights SAE control (research rule 4) does not run on GR00T yet, so no GR00T rollout result can count as a finding.</p>
     <script>
     (function () {{
       var root = document.querySelector("[data-testid=arm-switch]");

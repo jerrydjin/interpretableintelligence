@@ -452,9 +452,9 @@ def test_explore_page_numbers_match_the_repo():
     assert "Tested: no causal effect found" in text
     assert "src/interpretableintelligence/adapters/groot/v9/ablate_v9.py" in page
     assert "not through ii rollouts" in text
-    assert "ii rollouts on main runs only the bundled fake policy" in text
+    assert "ii rollouts --policy groot-1028" in text
     assert "uv sync" in page and "uv run ii try" in page
-    assert "Live GR00T through" in text and "is coming" in text
+    assert "does not run on GR00T yet" in text and "can count as a finding" in text
     assert "open source" not in page.lower()
     assert "mailto:" not in page
     assert not re.search(r"[\w.+-]+@[\w.-]+\.\w+", text)

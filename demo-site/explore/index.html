@@ -24,7 +24,7 @@
     <p><span class="badge badge-unverified" data-testid="explore-verdict">Tested: no causal effect found</span></p>
     <p data-testid="explore-headline">720 off: 1/9. 5 of 20 random controls also fell. Baseline: 39/75.</p>
     <p data-testid="explore-real">Every feature on this run is real=false.</p>
-    <p data-testid="explore-runner">641 rollouts. This ablation ran through <a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>src/interpretableintelligence/adapters/groot/v9/ablate_v9.py</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts</code> on main runs only the bundled fake policy.</p>
+    <p data-testid="explore-runner">641 rollouts. This ablation ran through <a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>src/interpretableintelligence/adapters/groot/v9/ablate_v9.py</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts --policy groot-1028</code> can now import or replay these v9 logs as a standard run folder.</p>
     <p data-testid="explore-model">GR00T N1.7, checkpoint <code>nvidia/gr00t17-lerobot-libero_10-640</code>, on LIBERO-plus task 1028. The edit is on transformer block 5 at the final denoise step.</p>
     <h2>Stop rule</h2>
     <p data-testid="stop-rule" data-stop-rule="h1_or_both_h0">Stop rule: Sobel–Wald. Stop when the rise test or the fall test accepts H1, or both accept H0, or at 75 episodes. Rise compares 0.56 with 0.86. Fall compares 0.56 with 0.26. Alpha is 0.05. Beta is 0.05. 0.56 is the capture success rate, 56/100. The verdict is rise when the rise test accepts H1, fall when the fall test accepts H1, and no_effect when both accept H0. At the cap with no decision, the verdict is cap_undecided.</p>
@@ -36,7 +36,7 @@
     <h2>Now run it on yours</h2>
     <pre class="quickstart"><code>uv sync
 uv run ii try</code></pre>
-    <p><code>ii try</code> writes practice clips and runs the pipeline on the fake model. <code>ii rollouts</code> on main runs only the bundled fake policy. Live GR00T through <code>ii</code> is coming.</p>
+    <p><code>ii try</code> writes practice clips and runs the pipeline on the fake model. <code>ii rollouts --policy groot-1028</code> brings GR00T rollouts onto <code>ii</code>, but the random-weights SAE control (research rule 4) does not run on GR00T yet, so no GR00T rollout result can count as a finding.</p>
     <script>
     (function () {
       var root = document.querySelector("[data-testid=arm-switch]");
