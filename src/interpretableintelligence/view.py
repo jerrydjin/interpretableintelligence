@@ -694,6 +694,7 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
     extra = manifest.get("extra") if isinstance(manifest.get("extra"), dict) else None
     features, viz = _feature_index(scoreboard, labels, candidates, run_dir)
     moments = _read_moments(run_dir / "heldout_loss.json")
+    steering = _read_optional_json(run_dir / "steering" / "scorecard.json")
     pixels = _resolve_pixels(manifest, run_dir, None if clips_dir is None else Path(clips_dir))
     manifest_clips: dict[str, dict] = {}
     loaded: dict[str, LoadedClip] = {}
@@ -744,6 +745,7 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
         "clips": list(meta.values()),
         "features": features,
         "moments": moments,
+        "steering": steering if isinstance(steering, dict) and isinstance(steering.get("rows"), list) else None,
     }
     model = RunModel(
         run_payload=run_payload,

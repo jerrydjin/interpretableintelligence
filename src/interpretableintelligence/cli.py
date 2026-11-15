@@ -20,6 +20,10 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_MIN_EPISODES,
     DEFAULT_ROLLOUT_WORKERS,
     DEFAULT_SEED,
+    STEER_BOOST_FACTOR,
+    STEER_BOOTSTRAP,
+    STEER_CONTROLS,
+    STEER_TOP_FEATURES,
 )
 
 if TYPE_CHECKING:
@@ -505,6 +509,58 @@ def rollouts(
         raise typer.Exit(code=1) from exc
     typer.echo(format_report(summary))
     typer.echo(f"wrote {run_dir / 'rollouts'}")
+
+
+@app.command("steer-scorecard")
+def steer_scorecard_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder. The scorecard is written under steering/.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Directory of clip files. Overrides a clip path recorded in the manifest."),
+    ] = None,
+    features: Annotated[
+        str,
+        typer.Option(
+            "--features",
+            help="Comma-separated feature ids. Default: the top verified (real) features. Unverified ids are measured and recorded as unverified.",
+        ),
+    ] = "",
+    top: Annotated[int, typer.Option("--top", min=1, help="How many verified features to score when --features is omitted.")] = STEER_TOP_FEATURES,
+    boost: Annotated[float, typer.Option("--boost", help="Scale factor for the boost edit. Remove is always scale 0.")] = STEER_BOOST_FACTOR,
+    controls: Annotated[int, typer.Option("--controls", min=1, help="Matched random-feature controls per edit.")] = STEER_CONTROLS,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for control directions, placements and the bootstrap.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Bootstrap resamples of held-out episodes for the intervals.")] = STEER_BOOTSTRAP,
+    max_episodes: Annotated[
+        int | None,
+        typer.Option("--max-episodes", min=1, help="Score only the first N held-out clips (sorted by id)."),
+    ] = None,
+) -> None:
+    """Steering scorecard: remove and boost top features on held-out clips, against matched random controls.
+
+    For GR00T this measures how much, and how reliably, the planned action chunk moves. It never changes
+    scoreboard.json or a badge, and it is not a rollout finding.
+    """
+    from interpretableintelligence.explain import ExplainError
+    from interpretableintelligence.steer_scorecard import execute_steer_scorecard, format_report, parse_feature_ids
+
+    try:
+        card = execute_steer_scorecard(
+            run_dir,
+            clips_dir=clips,
+            features=parse_feature_ids(features) or None,
+            top=top,
+            boost=boost,
+            controls=controls,
+            seed=seed,
+            bootstrap=bootstrap,
+            max_episodes=max_episodes,
+            log=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ExplainError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(format_report(card))
+    typer.echo(f"wrote {run_dir / 'steering'}")
 
 
 @app.command("export")

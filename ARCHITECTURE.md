@@ -68,6 +68,10 @@ The shipped pair is `fake`: a point-mass reacher with one planted coordinate. Ba
 
 The schedule is paired on seed. Baseline and candidate features run all `N` episodes. After each batch a control is dropped only for efficacy: a one-sided SPRT on discordant pairs (control succeeds and the candidate fails) crosses a Bonferroni share of `--alpha`. Per-control beta is about 0.022 when there are 10 controls, so family-wise power stays about 0.8. A control that does not cross runs to `N`. The summary reports the success delta, a paired Wald interval, an exact McNemar p-value, the average-rank percentile against controls (ties score 50, not 100), episodes used against the fixed `N` budget, and rollouts per feature flagged causal.
 
+## Steering scorecard
+
+`interpretableintelligence steer-scorecard` asks how much, and how reliably, editing a feature moves the model's output, compared with matched random directions. It reuses the playground's edit (`steer.steer_edit`) and the run's held-out clips. For GR00T the output is the planned action chunk. Results go to `steering/` (see `SCHEMA.md`); `validate` rebuilds the scorecard from the effects parquet. Nothing here reads or writes the scoreboard gates, and it is not a closed-loop rollout.
+
 ## Next lanes
 
 1. **pi0.5.** V-JEPA 2 is `src/interpretableintelligence/adapters/vjepa2`. The remaining world-model adapter is pi0.5, and the policy stubs for LIBERO / OpenVLA / pi0.5 still need real simulators. They must run on MPS and CPU. They do not change the run folder or the gates.
