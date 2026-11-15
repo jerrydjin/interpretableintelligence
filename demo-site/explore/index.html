@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f5">
+  <title>GR00T task 1028 · interpretableintelligence</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/demo.css">
+  <link rel="icon" href="/favicon.ico">
+</head>
+<body>
+  <header class="top demo-top">
+    <div class="brand-row">
+      <a class="wordmark" href="/" aria-label="interpretable intelligence">
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
+        <span class="wordmark-text">interpretable intelligence</span>
+      </a>
+      <nav class="nav"><a href="/explore/" aria-current="page">Explore</a><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
+    </div>
+  </header>
+  <main class="prose">
+    <h1>GR00T task 1028</h1>
+    <p><span class="badge badge-unverified" data-testid="explore-verdict">Tested: no causal effect found</span></p>
+    <p data-testid="explore-headline">720 off: 1/9. 5 of 20 random controls also fell. Baseline: 39/75.</p>
+    <p data-testid="explore-real">Every feature on this run is real=false.</p>
+    <p data-testid="explore-runner">641 rollouts. This ablation ran through <a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>src/interpretableintelligence/adapters/groot/v9/ablate_v9.py</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts</code> on main runs only the bundled fake policy.</p>
+    <p data-testid="explore-model">GR00T N1.7, checkpoint <code>nvidia/gr00t17-lerobot-libero_10-640</code>, on LIBERO-plus task 1028. The edit is on transformer block 5 at the final denoise step.</p>
+    <h2>Stop rule</h2>
+    <p data-testid="stop-rule" data-stop-rule="h1_or_both_h0">Stop rule: Sobel–Wald. Stop when the rise test or the fall test accepts H1, or both accept H0, or at 75 episodes. Rise compares 0.56 with 0.86. Fall compares 0.56 with 0.26. Alpha is 0.05. Beta is 0.05. 0.56 is the capture success rate, 56/100. The verdict is rise when the rise test accepts H1, fall when the fall test accepts H1, and no_effect when both accept H0. At the cap with no decision, the verdict is cap_undecided.</p>
+    <h2>Arms</h2>
+    <div class="arm-switch" role="group" aria-label="Arms" data-testid="arm-switch"><button type="button" data-arm-button="baseline" aria-pressed="false">Baseline 39/75</button><button type="button" data-arm-button="A-cand-720" aria-pressed="true">720 off 1/9</button><button type="button" data-arm-button="B-cand-7081+5852" aria-pressed="false">7081+5852 off 23/63</button></div>
+    <section class="arm-panel" data-arm-panel="baseline" data-testid="arm-panel-baseline" hidden><div class="compare"><dl><dt>Baseline</dt><dd>39/75</dd></dl></div><p>720 off: 1/9. 5 of 20 random controls also fell. Baseline: 39/75.</p><p data-testid="arm-detail">39/75. Wilson 95% [0.4087, 0.6293]. The stop rule does not run on baseline.</p></section><section class="arm-panel" data-arm-panel="A-cand-720" data-testid="arm-panel-A-cand-720"><div class="compare"><dl><dt>720 off</dt><dd>1/9</dd><dt>Verdict</dt><dd>fall</dd></dl><dl><dt>Baseline</dt><dd>39/75</dd></dl></div><p>720 off: 1/9. 5 of 20 random controls also fell. Baseline: 39/75.</p><p data-testid="arm-detail">1/9. Wilson 95% [0.0199, 0.4350]. Paired change -0.556 on 9 shared seeds. Verdict: fall.</p><table class="score-table" data-testid="arm-controls"><thead><tr><th>Control</th><th>Success</th><th>Wilson 95%</th><th>Paired change</th><th>Verdict</th></tr></thead><tbody><tr><td>7774 off</td><td>8/14</td><td>[0.3259, 0.7862]</td><td>-0.071</td><td>no_effect</td></tr><tr><td>2343 off</td><td>7/23</td><td>[0.1560, 0.5087]</td><td>-0.348</td><td>fall</td></tr><tr><td>6814 off</td><td>11/18</td><td>[0.3862, 0.7970]</td><td>+0.000</td><td>no_effect</td></tr><tr><td>6810 off</td><td>14/22</td><td>[0.4295, 0.8027]</td><td>+0.000</td><td>no_effect</td></tr><tr><td>8157 off</td><td>9/16</td><td>[0.3318, 0.7690]</td><td>-0.062</td><td>no_effect</td></tr><tr><td>2010 off</td><td>21/46</td><td>[0.3215, 0.5982]</td><td>-0.065</td><td>no_effect</td></tr><tr><td>1869 off</td><td>0/6</td><td>[0.0000, 0.3903]</td><td>-0.667</td><td>fall</td></tr><tr><td>7353 off</td><td>4/16</td><td>[0.1018, 0.4950]</td><td>-0.375</td><td>fall</td></tr><tr><td>1364 off</td><td>31/75</td><td>[0.3088, 0.5263]</td><td>-0.107</td><td>cap_undecided</td></tr><tr><td>5039 off</td><td>6/11</td><td>[0.2801, 0.7873]</td><td>-0.091</td><td>no_effect</td></tr></tbody></table></section><section class="arm-panel" data-arm-panel="B-cand-7081+5852" data-testid="arm-panel-B-cand-7081+5852" hidden><div class="compare"><dl><dt>7081+5852 off</dt><dd>23/63</dd><dt>Verdict</dt><dd>fall</dd></dl><dl><dt>Baseline</dt><dd>39/75</dd></dl></div><p>720 off: 1/9. 5 of 20 random controls also fell. Baseline: 39/75. 7081+5852 off: 23/63. 5 of 20 random controls also fell. Baseline: 39/75.</p><p data-testid="arm-detail">23/63. Wilson 95% [0.2572, 0.4885]. Paired change -0.175 on 63 shared seeds. Verdict: fall.</p><table class="score-table" data-testid="arm-controls"><thead><tr><th>Control</th><th>Success</th><th>Wilson 95%</th><th>Paired change</th><th>Verdict</th></tr></thead><tbody><tr><td>1159+7339 off</td><td>13/21</td><td>[0.4088, 0.7925]</td><td>-0.048</td><td>no_effect</td></tr><tr><td>3311+992 off</td><td>11/21</td><td>[0.3237, 0.7166]</td><td>-0.143</td><td>no_effect</td></tr><tr><td>10+1456 off</td><td>6/11</td><td>[0.2801, 0.7873]</td><td>-0.091</td><td>no_effect</td></tr><tr><td>1685+3311 off</td><td>11/18</td><td>[0.3862, 0.7970]</td><td>+0.000</td><td>no_effect</td></tr><tr><td>7063+1685 off</td><td>23/51</td><td>[0.3227, 0.5862]</td><td>-0.078</td><td>no_effect</td></tr><tr><td>754+6347 off</td><td>15/31</td><td>[0.3197, 0.6516]</td><td>-0.097</td><td>no_effect</td></tr><tr><td>7542+553 off</td><td>15/30</td><td>[0.3315, 0.6685]</td><td>-0.067</td><td>no_effect</td></tr><tr><td>6742+3585 off</td><td>8/26</td><td>[0.1650, 0.4999]</td><td>-0.308</td><td>fall</td></tr><tr><td>60+2144 off</td><td>2/11</td><td>[0.0514, 0.4770]</td><td>-0.455</td><td>fall</td></tr><tr><td>553+2994 off</td><td>8/14</td><td>[0.3259, 0.7862]</td><td>-0.071</td><td>no_effect</td></tr></tbody></table></section>
+    <p>Every condition is listed on the <a href="/groot/#conditions">GR00T page</a>.</p>
+    <h2>Now run it on yours</h2>
+    <pre class="quickstart"><code>uv sync
+uv run ii try</code></pre>
+    <p><code>ii try</code> writes practice clips and runs the pipeline on the fake model. <code>ii rollouts</code> on main runs only the bundled fake policy. Live GR00T through <code>ii</code> is coming.</p>
+    <script>
+    (function () {
+      var root = document.querySelector("[data-testid=arm-switch]");
+      if (!root) return;
+      var buttons = root.querySelectorAll("[data-arm-button]");
+      var panels = document.querySelectorAll("[data-arm-panel]");
+      function show(id) {
+        panels.forEach(function (panel) {
+          panel.hidden = panel.getAttribute("data-arm-panel") !== id;
+        });
+        buttons.forEach(function (button) {
+          button.setAttribute("aria-pressed", button.getAttribute("data-arm-button") === id ? "true" : "false");
+        });
+      }
+      buttons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          show(button.getAttribute("data-arm-button"));
+        });
+      });
+    })();
+    </script>
+    </main>
+</body>
+</html>
