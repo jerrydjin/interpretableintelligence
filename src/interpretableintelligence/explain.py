@@ -86,20 +86,38 @@ def cites_feature(*, real: bool, effect_kind: str) -> bool:
     return real is True and effect_kind == EFFECT_ABLATION
 
 
-def load_run(run_dir: Path) -> RunContext:
-    """Read the manifest and scoreboard. Does not decide whether the SAE may be cited."""
+def _unscored(manifest: dict, run_dir: Path) -> dict:
+    """In-memory stand-in for a missing scoreboard: every feature unverified. Never written."""
+    config = run_dir / "sae" / "config.json"
+    if not config.is_file():
+        raise ExplainError(f"run folder {run_dir} has no scoreboard.json and no sae/config.json", run_id=run_dir.name)
+    n_features = int(read_json(config)["n_features"])
+    model = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
+    return {
+        "run": {"model_sha": model.get("sha"), "layer": manifest.get("layer")},
+        "features": [{"id": index, "real": False} for index in range(n_features)],
+    }
+
+
+def load_run(run_dir: Path, allow_unscored: bool = False) -> RunContext:
+    """Read the manifest and scoreboard. Does not decide whether the SAE may be cited.
+
+    ``allow_unscored`` (the playground only) accepts a run stopped before scoring, with every
+    feature unverified. ``explain`` never passes it, because it cites only scored features.
+    """
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
         raise RunNotFound(f"run folder not found: {run_dir}", run_id=run_dir.name)
     manifest_path = run_dir / "manifest.json"
     scoreboard_path = run_dir / "scoreboard.json"
-    if not manifest_path.is_file() or not scoreboard_path.is_file():
+    unscored = allow_unscored and manifest_path.is_file() and not scoreboard_path.is_file()
+    if not manifest_path.is_file() or not (scoreboard_path.is_file() or unscored):
         raise ExplainError(
             f"run folder {run_dir} is missing manifest.json or scoreboard.json",
             run_id=run_dir.name,
         )
     manifest = read_json(manifest_path)
-    scoreboard = read_json(scoreboard_path)
+    scoreboard = _unscored(manifest, run_dir) if unscored else read_json(scoreboard_path)
     run_id = manifest.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ExplainError(f"{manifest_path} has no run_id", run_id=run_dir.name)
@@ -296,9 +314,9 @@ def explain_clip(run_dir: Path, clip_path: Path, *, clip_id: str | None = None) 
             model_sha=ctx.model_sha,
             layer=ctx.layer,
         ) from exc
-    if config.activation not in ("relu", "topk"):
+    if config.activation not in ("relu", "topk", "jumprelu"):
         raise ExplainError(
-            f"refusing to explain: SAE for run {ctx.run_id} has activation {config.activation!r}, expected relu or topk",
+            f"refusing to explain: SAE for run {ctx.run_id} has activation {config.activation!r}, expected relu, topk or jumprelu",
             run_id=ctx.run_id,
             model_sha=ctx.model_sha,
             layer=ctx.layer,

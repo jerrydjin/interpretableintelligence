@@ -26,6 +26,13 @@ def _activation_cache(tmp_path_factory):
     yield
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_label_provider():
+    """A developer's API key must never turn tests into paid vision-model calls."""
+    os.environ["II_LABEL_PROVIDER"] = "none"
+    yield
+
+
 @pytest.fixture(scope="session")
 def demo(tmp_path_factory, _activation_cache) -> Demo:
     os.environ.setdefault("II_DEVICE", "cpu")

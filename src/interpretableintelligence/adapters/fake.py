@@ -203,6 +203,51 @@ def generate_clips(out_dir, n: int, seed: int) -> None:
     (out / "clips.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+FAILURE_LABEL_MODES = ("planted", "null")
+FAILURE_LABELS_FILE = "failures.json"
+# The planted failure: an episode fails when the stripe cue's strongest site in the
+# first half of the clip is above FAILURE_LEVEL, i.e. its peak or its second site
+# (0.45) lands there, not only the weaker 0.40 / 0.35 sites. Onset is the end of the
+# clip, so a probe that sees only tokens at least 1 s before onset sees exactly that
+# first half. The level sits between two stripe site values, so pooling has to
+# happen along the stripe direction: max-pooling raw coordinates or random
+# directions mixes in the other cues' peaks.
+FAILURE_CUE = "stripe"
+FAILURE_LEVEL = 0.425
+
+
+def failure_labels(n: int, seed: int, mode: str) -> dict:
+    """Seeded episode failure labels for ``generate_clips(n, seed)``, as ``ii probe --labels`` reads them.
+
+    ``planted``: failure iff the largest ``FAILURE_CUE`` site in a time bin before
+    ``GRID.t // 2`` is above ``FAILURE_LEVEL``. Only the stripe direction carries
+    the signal. ``null``: a seeded fair coin per clip, independent of every pixel.
+    Onset is the clip end (``N_FRAMES / FPS`` seconds) for failures.
+    """
+    if mode not in FAILURE_LABEL_MODES:
+        raise ValueError(f"failure label mode must be one of {FAILURE_LABEL_MODES}, got {mode!r}")
+    if n < 1:
+        raise ValueError("n must be positive")
+    width = max(3, len(str(n - 1)))
+    n_tokens = GRID.t * GRID.h * GRID.w
+    cue_index = CUE_NAMES.index(FAILURE_CUE)
+    onset = N_FRAMES / FPS
+    episodes = []
+    for index in range(n):
+        if mode == "planted":
+            early = [
+                value
+                for flat, value in cue_sites(index, cue_index, seed, n_tokens)
+                if unravel(flat, GRID.t, GRID.h, GRID.w)[0] < GRID.t // 2
+            ]
+            failure = max(early, default=0.0) > FAILURE_LEVEL
+        else:
+            failure = bool(_generator(seed, index, 4242).random() < 0.5)
+        episodes.append({"clip_id": f"clip-{index:0{width}d}", "failure": bool(failure), "onset_s": onset if failure else None})
+    source = f"fake-{mode}-v1" + (f":{FAILURE_CUE}-first-half-above-{FAILURE_LEVEL:g}" if mode == "planted" else ":coin")
+    return {"source": source, "seed": int(seed), "episodes": episodes}
+
+
 class FakeAdapter:
     """Tiny position-wise predictor. One instrumented layer, id chosen by the run."""
 

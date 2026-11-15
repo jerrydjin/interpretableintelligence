@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +30,10 @@ class SAEConfig:
     activation: str = "relu"
     # Active features per token for ``activation="topk"`` (Gao et al. 2024).
     k: int | None = None
+    # Inference cutoff for ``activation="jumprelu"``: a feature is kept only
+    # where its ReLU pre-activation is strictly above this value. This is how a
+    # BatchTopK SAE is evaluated, so imported BatchTopK dictionaries use it.
+    threshold: float | None = None
 
     def as_dict(self) -> dict:
         out = {
@@ -45,25 +50,38 @@ class SAEConfig:
         }
         if self.activation == "topk":
             out["k"] = self.k
+        if self.activation == "jumprelu":
+            out["threshold"] = self.threshold
         return out
 
 
-ACTIVATIONS = ("relu", "topk")
+ACTIVATIONS = ("relu", "topk", "jumprelu")
 
 
 class SAE(torch.nn.Module):
-    """``relu``: L1-sparse ReLU SAE. ``topk``: keep the ``k`` largest ReLU pre-activations per token."""
+    """``relu``: L1-sparse ReLU SAE. ``topk``: keep the ``k`` largest ReLU pre-activations per token.
+    ``jumprelu``: keep the ReLU pre-activations strictly above ``threshold``."""
 
-    def __init__(self, d_model: int, n_features: int, activation: str = "relu", k: int | None = None) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        n_features: int,
+        activation: str = "relu",
+        k: int | None = None,
+        threshold: float | None = None,
+    ) -> None:
         super().__init__()
         if activation not in ACTIVATIONS:
             raise ValueError(f"SAE activation must be one of {ACTIVATIONS}, got {activation!r}")
         if activation == "topk" and (k is None or not 1 <= int(k) <= n_features):
             raise ValueError(f"topk SAE needs 1 <= k <= n_features, got k={k}")
+        if activation == "jumprelu" and (threshold is None or not math.isfinite(float(threshold)) or float(threshold) < 0):
+            raise ValueError(f"jumprelu SAE needs a finite threshold >= 0, got {threshold}")
         self.d_model = d_model
         self.n_features = n_features
         self.activation = activation
         self.k = None if k is None else int(k)
+        self.threshold = None if threshold is None else float(threshold)
         self.W_enc = torch.nn.Parameter(torch.empty(n_features, d_model))
         self.b_enc = torch.nn.Parameter(torch.empty(n_features))
         self.W_dec = torch.nn.Parameter(torch.empty(d_model, n_features))
@@ -71,6 +89,8 @@ class SAE(torch.nn.Module):
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         pre = F.relu((x - self.b_dec) @ self.W_enc.T + self.b_enc)
+        if self.activation == "jumprelu":
+            return pre * (pre > self.threshold)
         if self.activation != "topk":
             return pre
         top = pre.topk(self.k, dim=-1)
@@ -109,6 +129,49 @@ def _loss(mse: torch.Tensor, features: torch.Tensor, model: SAE, config: SAEConf
     return loss
 
 
+def untrained_sae(config: SAEConfig, mean: torch.Tensor, device: torch.device) -> SAE:
+    """The SAE that training starts from, seeded by ``config.seed``, with no optimiser step.
+
+    A unit-norm Gaussian decoder, the encoder tied to its transpose, a zero encoder bias, and
+    ``b_dec`` at ``mean`` (the train-row mean). :func:`train_sae` and
+    :func:`train_sae_fetched` start here, so an untrained SAE is the trained one's own
+    initialisation, not a lookalike. The rollout lane's random-weights SAE control
+    (``ii rollouts --random-sae``) edits with these weights. It leaves torch's global RNG
+    at the same point the training loop then continues from.
+    """
+    if int(mean.shape[0]) != config.d_model:
+        raise ValueError(f"d_model {config.d_model} != mean {tuple(mean.shape)}")
+    torch.manual_seed(config.seed)
+    model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
+    with torch.no_grad():
+        decoder = torch.randn(config.d_model, config.n_features, device=device)
+        decoder = decoder / decoder.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        model.W_dec.copy_(decoder)
+        model.W_enc.copy_(decoder.T)
+        model.b_enc.zero_()
+        model.b_dec.copy_(mean.detach().to(device=device, dtype=torch.float32))
+    return model
+
+
+def random_weights_sae(config: SAEConfig, mean: torch.Tensor, seed: int, device: torch.device) -> SAE:
+    """Untrained control SAE: the trained SAE's architecture, width and ``k``, zero optimiser steps.
+
+    Deterministic in ``seed``: the same ``(config, mean, seed)`` gives bit-identical
+    weights. Weights come from :func:`untrained_sae` with ``seed`` in place of
+    ``config.seed``, so ``seed == config.seed`` is the trained SAE before its first step.
+    ``mean`` is the float32 mean of the train rows (``b_dec``'s initial value), the only
+    thing the control takes from the data. Nothing here is optimised, and the caller's
+    torch RNG is left untouched.
+    """
+    devices = [device] if device.type == "cuda" else []
+    with torch.random.fork_rng(devices=devices):
+        model = untrained_sae(replace(config, seed=int(seed)), mean, device)
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
+    return model
+
+
 def train_sae(
     activations: torch.Tensor,
     config: SAEConfig,
@@ -123,16 +186,8 @@ def train_sae(
     if activations.shape[0] < 2:
         raise ValueError("need at least 2 activation rows to train an SAE")
 
-    torch.manual_seed(config.seed)
     data = activations.detach().to(device=device, dtype=torch.float32)
-    model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
-    with torch.no_grad():
-        decoder = torch.randn(config.d_model, config.n_features, device=device)
-        decoder = decoder / decoder.norm(dim=0, keepdim=True).clamp(min=1e-8)
-        model.W_dec.copy_(decoder)
-        model.W_enc.copy_(decoder.T)
-        model.b_enc.zero_()
-        model.b_dec.copy_(data.mean(dim=0))
+    model = untrained_sae(config, data.mean(dim=0), device)
 
     opt = torch.optim.Adam(model.parameters(), lr=config.lr)
     n = data.shape[0]
@@ -182,15 +237,7 @@ def train_sae_fetched(
     if int(mean.shape[0]) != config.d_model:
         raise ValueError(f"d_model {config.d_model} != mean {tuple(mean.shape)}")
 
-    torch.manual_seed(config.seed)
-    model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
-    with torch.no_grad():
-        decoder = torch.randn(config.d_model, config.n_features, device=device)
-        decoder = decoder / decoder.norm(dim=0, keepdim=True).clamp(min=1e-8)
-        model.W_dec.copy_(decoder)
-        model.W_enc.copy_(decoder.T)
-        model.b_enc.zero_()
-        model.b_dec.copy_(mean.detach().to(device=device, dtype=torch.float32))
+    model = untrained_sae(config, mean, device)
 
     opt = torch.optim.Adam(model.parameters(), lr=config.lr)
     batch = min(config.batch_size, n_rows)
@@ -245,8 +292,9 @@ def load_sae(directory: Path, device: torch.device) -> tuple[SAE, SAEConfig]:
         normalize_decoder=bool(raw["normalize_decoder"]),
         activation=str(raw["activation"]),
         k=None if raw.get("k") is None else int(raw["k"]),
+        threshold=None if raw.get("threshold") is None else float(raw["threshold"]),
     )
-    model = SAE(config.d_model, config.n_features, config.activation, config.k)
+    model = SAE(config.d_model, config.n_features, config.activation, config.k, config.threshold)
     state = load_file(str(directory / "weights.safetensors"), device="cpu")
     model.load_state_dict(state)
     model.to(device)

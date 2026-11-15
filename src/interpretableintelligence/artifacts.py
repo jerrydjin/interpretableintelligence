@@ -27,7 +27,10 @@ ROLLOUT_COLUMNS = (
     "success",
     "steps",
     "wall_time_s",
+    "dictionary",
 )
+# Written before the random-weights SAE control: no ``dictionary`` column, every edit on the trained SAE.
+ROLLOUT_COLUMNS_V1_0 = ROLLOUT_COLUMNS[:-1]
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -132,6 +135,7 @@ def write_rollout_episodes(path: Path, rows: list[dict]) -> None:
             "success": pa.array([row["success"] for row in rows], type=pa.bool_()),
             "steps": pa.array([row["steps"] for row in rows], type=pa.int32()),
             "wall_time_s": pa.array([row["wall_time_s"] for row in rows], type=pa.float64()),
+            "dictionary": pa.array([_row_dictionary(row) for row in rows], type=pa.string()),
         }
     )
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -139,10 +143,19 @@ def write_rollout_episodes(path: Path, rows: list[dict]) -> None:
     tmp.replace(path)
 
 
+def _row_dictionary(row: dict) -> str | None:
+    """Null for baseline, ``trained`` for an edit of the policy's SAE, else ``random:<seed>``."""
+    if row["condition"] == "baseline":
+        return None
+    return row.get("dictionary") or "trained"
+
+
 def read_rollout_episodes(path: Path) -> list[dict]:
+    """Rows as written by :func:`write_rollout_episodes`. A file from before the ``dictionary`` column still reads."""
     table = pq.read_table(path)
-    if tuple(table.column_names) != ROLLOUT_COLUMNS:
-        raise ValueError(f"rollout columns must be {ROLLOUT_COLUMNS}, got {tuple(table.column_names)}")
+    columns = tuple(table.column_names)
+    if columns not in (ROLLOUT_COLUMNS, ROLLOUT_COLUMNS_V1_0):
+        raise ValueError(f"rollout columns must be {ROLLOUT_COLUMNS}, got {columns}")
     frame = table.to_pydict()
     rows = []
     for index in range(table.num_rows):
@@ -165,6 +178,8 @@ def read_rollout_episodes(path: Path) -> list[dict]:
                 "wall_time_s": float(frame["wall_time_s"][index]),
             }
         )
+        stored = frame["dictionary"][index] if "dictionary" in frame else None
+        rows[-1]["dictionary"] = _row_dictionary({**rows[-1], "dictionary": stored})
     return rows
 
 
