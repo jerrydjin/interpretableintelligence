@@ -8,6 +8,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -1198,45 +1199,12 @@ def fresh_fake_run(tmp_path_factory) -> tuple[Path, Path]:
 @pytest.fixture(scope="module")
 def viewer_url(fresh_fake_run: tuple[Path, Path]):
     clips, out = fresh_fake_run
-    err_path = out.parent / "viewer.err"
-    err = err_path.open("w", encoding="utf-8")
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "interpretableintelligence",
-            "view",
-            str(out),
-            "--clips",
-            str(clips),
-            "--no-open",
-            "--port",
-            "0",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=err,
-        text=True,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-    )
+    proc, url = _start_viewer(out, clips, out.parent / "viewer.err")
     try:
-        assert proc.stdout is not None
-        ready, _, _ = select.select([proc.stdout], [], [], 30)
-        err.flush()
-        if not ready or proc.poll() not in (None, 0):
-            raise RuntimeError(err_path.read_text(encoding="utf-8") or "viewer exited before printing a url")
-        line = proc.stdout.readline().strip()
-        match = re.search(r"http://127\.0\.0\.1:\d+/", line)
-        assert match, line
-        url = match.group(0)
         _wait_http(url)
         yield url
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        err.close()
+        _stop_viewer(proc)
 
 
 def test_playwright_scrub_shows_real_ablation_and_unverified_decoy(fresh_fake_run, viewer_url: str, tmp_path: Path):
@@ -1396,13 +1364,19 @@ def test_playwright_plain_view_numbers_switch_and_phone_width(fresh_fake_run, vi
         browser.close()
 
 
-@contextmanager
-def _view_server(run: Path, clips: Path):
-    err_path = run.parent / f"viewer-{run.name}.err"
+def _start_viewer(run: Path, clips: Path, err_path: Path, timeout: float = 90.0) -> tuple[subprocess.Popen, str]:
+    """Start ``ii view`` in a subprocess and return it with the URL it printed.
+
+    It runs with ``-X faulthandler``. If no URL arrives in ``timeout`` seconds the process gets
+    SIGABRT, so faulthandler writes every thread's Python stack to stderr, and the error says
+    whether it hung or died (with the exit code), not just that it printed nothing.
+    """
     err = err_path.open("w", encoding="utf-8")
     proc = subprocess.Popen(
         [
             sys.executable,
+            "-X",
+            "faulthandler",
             "-m",
             "interpretableintelligence",
             "view",
@@ -1418,25 +1392,47 @@ def _view_server(run: Path, clips: Path):
         text=True,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
+    err.close()
+    assert proc.stdout is not None
+    started = time.monotonic()
+    ready, _, _ = select.select([proc.stdout], [], [], timeout)
+    line = proc.stdout.readline().strip() if ready else ""
+    match = re.search(r"http://127\.0\.0\.1:\d+/", line)
+    if match and proc.poll() is None:
+        return proc, match.group(0)
+    if proc.poll() is None:
+        state = f"printed nothing in {time.monotonic() - started:.0f}s (hung; stacks below)"
+        if hasattr(signal, "SIGABRT"):
+            proc.send_signal(signal.SIGABRT)
+    else:
+        state = f"exited with code {proc.returncode} after {time.monotonic() - started:.1f}s"
     try:
-        assert proc.stdout is not None
-        ready, _, _ = select.select([proc.stdout], [], [], 30)
-        err.flush()
-        if not ready or proc.poll() not in (None, 0):
-            raise RuntimeError(err_path.read_text(encoding="utf-8") or "viewer exited before printing a url")
-        line = proc.stdout.readline().strip()
-        match = re.search(r"http://127\.0\.0\.1:\d+/", line)
-        assert match, line
-        url = match.group(0)
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    rest = proc.stdout.read() if proc.stdout else ""
+    raise RuntimeError(
+        f"ii view {state}\nstdout: {(line + rest).strip()!r}\nstderr:\n{err_path.read_text(encoding='utf-8')}"
+    )
+
+
+def _stop_viewer(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+@contextmanager
+def _view_server(run: Path, clips: Path):
+    proc, url = _start_viewer(run, clips, run.parent / f"viewer-{run.name}.err")
+    try:
         _wait_http(url)
         yield url
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        err.close()
+        _stop_viewer(proc)
 
 
 def _scrub(page, frame: int) -> None:
