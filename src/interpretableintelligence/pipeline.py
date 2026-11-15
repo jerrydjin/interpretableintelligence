@@ -1143,11 +1143,18 @@ def _ablation_rows(
                 baseline, _target = adapter.predict_masked(clip, window)
                 baselines.append(baseline.detach())
                 masks.append(adapter.mask(window).detach())
-            for feature_id in feature_ids:
-                edit = ablate_edit(sae, feature_id)
-                for window, baseline, mask in zip(windows, baselines, masks, strict=True):
-                    edited, _target = adapter.predict_masked(clip, window, edit=edit)
-                    dist = cosine_distance(baseline, edited).detach().cpu()
+            # Every feature's edit on a window runs as one batch when the adapter supports it.
+            edits = [ablate_edit(sae, feature_id) for feature_id in feature_ids]
+            dists_by_window = []
+            for window, baseline in zip(windows, baselines, strict=True):
+                with torch.no_grad():
+                    edited_all = _predict_many(adapter, clip, window, edits)
+                dists_by_window.append(
+                    [cosine_distance(baseline, edited).detach().cpu() for edited in edited_all]
+                )
+            for slot, feature_id in enumerate(feature_ids):
+                for window, mask, dists in zip(windows, masks, dists_by_window, strict=True):
+                    dist = dists[slot]
                     if heldout:
                         held_total[feature_id] += float(dist.sum())
                         held_count[feature_id] += int(dist.numel())
