@@ -555,7 +555,10 @@ def rollouts(
     run_dir: Annotated[Path, typer.Argument(help="Run folder. Rollouts are written under rollouts/.")],
     policy: Annotated[
         str,
-        typer.Option("--policy", help="Policy+simulator name. This lane ships 'fake' and 'fake-null'."),
+        typer.Option(
+            "--policy",
+            help="Policy+simulator: fake, fake-null, groot-1028 (LIBERO-plus v9 ablation), groot-mock (CI replay).",
+        ),
     ] = "fake",
     episodes: Annotated[
         int,
@@ -596,6 +599,36 @@ def rollouts(
         int,
         typer.Option("--batch-size", min=1, help="New episodes per active arm between early-stop checks."),
     ] = DEFAULT_ROLLOUT_BATCH,
+    plan: Annotated[
+        Path | None,
+        typer.Option("--plan", exists=True, dir_okay=False, help="groot ablate_plan.json (default: bundled 1028 plan)."),
+    ] = None,
+    verify_slice: Annotated[
+        bool,
+        typer.Option(
+            "--verify-slice",
+            help="GR00T only: run the 8-episode verification slice (recon-only, baseline, cand-720, 2 controls).",
+        ),
+    ] = False,
+    only: Annotated[
+        str,
+        typer.Option(
+            "--only",
+            help="GR00T only: comma-separated v9 condition ids (e.g. baseline,recon-only,A-cand-720).",
+        ),
+    ] = "",
+    sae: Annotated[
+        Path | None,
+        typer.Option("--sae", exists=True, dir_okay=False, help="GR00T SAE subset weights for live v9 runs."),
+    ] = None,
+    v9_out: Annotated[
+        Path | None,
+        typer.Option(
+            "--v9-out",
+            file_okay=False,
+            help="Import existing v9 ablation logs from this directory instead of re-running.",
+        ),
+    ] = None,
     pick: Annotated[
         int | None,
         typer.Option(
@@ -621,8 +654,29 @@ def rollouts(
 ) -> None:
     """Compare baseline and intervened task success. Resume skips episodes already written."""
     from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
+    from interpretableintelligence.rollout_groot import execute_groot_rollouts, format_groot_report, is_groot_policy
 
     try:
+        if is_groot_policy(policy):
+            if pick is not None or random_sae:
+                raise ValueError("--pick and --random-sae are not available for GR00T policies yet (research rule 4 known gap)")
+            only_ids = [part.strip() for part in only.split(",") if part.strip()] or None
+            summary = execute_groot_rollouts(
+                run_dir,
+                policy=policy,
+                plan_path=plan,
+                verify_slice=verify_slice,
+                only=only_ids,
+                workers=workers,
+                alpha=alpha,
+                min_episodes=min_episodes,
+                batch_size=batch_size,
+                sae_path=sae,
+                v9_out=v9_out,
+            )
+            typer.echo(format_groot_report(summary))
+            typer.echo(f"wrote {run_dir / 'rollouts'}")
+            return
         feature_ids = parse_feature_ids(features) if features.strip() or pick is None else []
         summary = execute_rollouts(
             run_dir,
