@@ -209,26 +209,47 @@ def mean_predictor_loss(adapter: Adapter, clips: list[Clip], edit=None, zero: bo
     return sse / count
 
 
-def estimate_effects(adapter: Adapter, sae: SAE, clip: Clip, window, objective: str = "prediction_loss") -> torch.Tensor:
-    """Activation × ∂(objective)/∂(feature) at every grid cell.
+PREDICTION_LOSS = "prediction_loss"
+# First-order estimate of how far ablating a feature turns the model's output,
+# for adapters whose ``predict_masked`` target is the model's own clean output
+# (hf, groot). There ``prediction_loss`` is zero with a zero gradient at the
+# clean point, so activation x gradient is float noise and ranks nothing.
+OUTPUT_SENSITIVITY = "output_sensitivity"
+SENSITIVITY_PROBES = 8
 
-    ``objective`` is an adapter scalar: ``prediction_loss`` (mean masked MSE)
-    or ``action_loglik`` (mean log-likelihood of the taken action).
+
+def default_objective(adapter) -> str:
+    """The attribution objective an adapter's scored runs use (``prediction_loss`` unless it says otherwise)."""
+    return str(getattr(adapter, "attribution_default", PREDICTION_LOSS))
+
+
+def _straight_through(sae: SAE, features: torch.Tensor):
+    def edit(acts: torch.Tensor) -> torch.Tensor:
+        recon = sae.decode(features).reshape_as(acts)
+        recon_det = sae.decode(features.detach()).reshape_as(acts)
+        return acts + recon - recon_det
+
+    return edit
+
+
+def estimate_effects(adapter: Adapter, sae: SAE, clip: Clip, window, objective: str | None = None) -> torch.Tensor:
+    """Per-token attribution of every SAE feature, ``[t, h, w, n_features]``.
+
+    ``objective=None`` takes the adapter's default (:func:`default_objective`).
+    ``prediction_loss`` or ``action_loglik``: activation x d(objective)/d(feature),
+    the adapter's scalar. ``output_sensitivity``: see :func:`output_sensitivity_effects`.
     Straight-through: the forward value is the true activation, and the
-    gradient flows through the SAE decoder. Returns [t, h, w, n_features].
+    gradient flows through the SAE decoder.
     """
+    objective = default_objective(adapter) if objective is None else objective
+    if objective == OUTPUT_SENSITIVITY:
+        return output_sensitivity_effects(adapter, sae, clip, window)
     with torch.enable_grad():
         raw = adapter.raw_activations(clip, window)
         t, h, w, d = raw.shape
         flat = raw.reshape(-1, d).detach()
         features = sae.encode(flat).detach().requires_grad_(True)
-
-        def edit(acts: torch.Tensor) -> torch.Tensor:
-            recon = sae.decode(features).reshape_as(acts)
-            recon_det = sae.decode(features.detach()).reshape_as(acts)
-            return acts + recon - recon_det
-
-        scalar = adapter.attribution_objective(clip, window, objective, edit=edit)
+        scalar = adapter.attribution_objective(clip, window, objective, edit=_straight_through(sae, features))
         if not isinstance(scalar, torch.Tensor) or scalar.ndim != 0:
             raise RuntimeError(f"{objective} objective must return a 0-dim tensor")
         scalar.backward()
@@ -236,6 +257,69 @@ def estimate_effects(adapter: Adapter, sae: SAE, clip: Clip, window, objective: 
             raise RuntimeError(f"{objective} did not depend on SAE features")
         effect = (features.detach() * features.grad).reshape(t, h, w, -1)
         return effect.detach()
+
+
+def _probe_seed(clip_id: str, window_index: int) -> int:
+    import zlib
+
+    return zlib.crc32(f"{clip_id}:{int(window_index)}".encode()) & 0x7FFFFFFF
+
+
+def output_sensitivity_effects(
+    adapter: Adapter, sae: SAE, clip: Clip, window, probes: int = SENSITIVITY_PROBES
+) -> torch.Tensor:
+    """Per-token shares of each feature's estimated ablation effect, ``[t, h, w, n_features]``.
+
+    Ablating feature ``i`` moves the output by about ``J v_i``, where ``v_i`` is
+    the feature's decoded contribution summed into the residual and ``J`` the
+    network after the hooked layer. The scoreboard measures that move as a
+    cosine distance, which to second order is half of
+    ``sum_tok |(J v_i)_perp|^2 / |out_tok|^2`` (the part orthogonal to each clean
+    output token). For a Gaussian probe ``u`` drawn per token orthogonal to the
+    clean output and divided by its norm, ``E[(u . J v_i)^2]`` is exactly that
+    sum (Hutchinson), and ``u . J v_i = sum_tok f_i * (J^T u)_i`` is one
+    vector-Jacobian product for every feature at once. ``probes`` products run
+    as one batched backward; ``s[r, i]`` is probe ``r``'s estimate and the score
+    is ``rms_i = sqrt(mean_r s[r, i]^2)``.
+
+    The per-token share ``f_i * mean_r(g[r] s[r, i]) / rms_i`` sums over tokens
+    to ``rms_i`` exactly, so summing the returned tensor gives each feature's
+    score (non-negative), as :func:`attribution_by_clip` expects. Probes are
+    seeded from the clip id and window, so the result is reproducible.
+    """
+    if probes < 1:
+        raise ValueError(f"need at least one probe, got {probes}")
+    with torch.enable_grad():
+        raw = adapter.raw_activations(clip, window)
+        t, h, w, d = raw.shape
+        flat = raw.reshape(-1, d).detach()
+        features = sae.encode(flat).detach().requires_grad_(True)
+        pred, target = adapter.predict_masked(clip, window, edit=_straight_through(sae, features))
+        if not pred.requires_grad:
+            raise RuntimeError("output_sensitivity: the prediction does not depend on SAE features")
+        target = target.detach().to(dtype=pred.dtype)
+        norm = target.norm(dim=-1, keepdim=True).clamp(min=COSINE_EPS)
+        unit = target / norm
+        generator = torch.Generator(device="cpu").manual_seed(_probe_seed(clip.clip_id, window.index))
+        u = torch.randn((probes, *pred.shape), generator=generator, dtype=torch.float32).to(pred.device, pred.dtype)
+        u = (u - (u * unit).sum(dim=-1, keepdim=True) * unit) / norm
+        try:
+            (grads,) = torch.autograd.grad(pred, features, grad_outputs=u, is_grads_batched=True)
+        except RuntimeError:
+            # Some kernels have no batching rule for the backward; one probe at a time is the same estimate.
+            grads = torch.stack(
+                [
+                    torch.autograd.grad(pred, features, grad_outputs=u[r], retain_graph=r + 1 < probes)[0]
+                    for r in range(probes)
+                ]
+            )
+    feats = features.detach().to(torch.float64)
+    grads = grads.detach().to(torch.float64)  # [probes, tokens, n_features]
+    per_probe = (feats.unsqueeze(0) * grads).sum(dim=1)  # [probes, n_features]
+    rms = per_probe.pow(2).mean(dim=0).sqrt()
+    weight = (grads * per_probe.unsqueeze(1)).mean(dim=0)  # [tokens, n_features]
+    share = feats * weight / torch.where(rms > 0, rms, torch.ones_like(rms))
+    return share.to(torch.float32).reshape(t, h, w, -1)
 
 
 def top_examples(values: np.ndarray, tokens: list[Token], k: int = TOP_K_EXAMPLES) -> tuple[list[dict], int]:

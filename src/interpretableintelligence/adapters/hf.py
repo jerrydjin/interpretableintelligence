@@ -107,6 +107,10 @@ def adapter_class(spec: str) -> type:
 
 
 class HFAdapter:
+    # predict_masked scores against the model's own clean output, so prediction_loss
+    # and its gradient are zero at the clean point: rank by output_sensitivity instead.
+    attribution_default = "output_sensitivity"
+
     def __init__(
         self,
         model: str,

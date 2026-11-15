@@ -38,7 +38,6 @@ from interpretableintelligence.artifacts import (
     write_json,
 )
 from interpretableintelligence.attribute import (
-    PREDICTION_LOSS,
     attribution_by_clip,
     candidates_document,
     rank_feature_ids,
@@ -52,6 +51,7 @@ from interpretableintelligence.score import (
     ablate_edit,
     check_extra_effects,
     cosine_distance,
+    default_objective,
     estimate_effects,
     extra_effect_rows,
     predictor_sse,
@@ -693,7 +693,8 @@ def _score(
     _clear_cache(adapter)
     attribution_started = time.perf_counter()
     # One decoded clip at a time: a long episode is hundreds of MB as float32 frames.
-    by_clip = attribution_by_clip(adapter, model, (load_clip(item) for item in meta), objective=PREDICTION_LOSS)
+    objective = default_objective(adapter)
+    by_clip = attribution_by_clip(adapter, model, (load_clip(item) for item in meta), objective=objective)
     attribution_seconds = time.perf_counter() - attribution_started
     _clear_cache(adapter)
     attr_rows, mean_scores = summarize_attribution(by_clip)
@@ -851,13 +852,13 @@ def _score(
     }
     write_json(out / "scoreboard.json", scoreboard)
     _write_jsonl(out / "features" / "features.jsonl", jsonl)
-    write_attribution(out / "features" / "attribution.parquet", attr_rows, objective=PREDICTION_LOSS)
+    write_attribution(out / "features" / "attribution.parquet", attr_rows, objective=objective)
     write_json(
         out / "features" / "candidates.json",
         candidates_document(
             mean_scores,
             reported_k,
-            objective=PREDICTION_LOSS,
+            objective=objective,
             labels=[row["label"] for row in labels],
             seconds={
                 "attribution": attribution_seconds,
