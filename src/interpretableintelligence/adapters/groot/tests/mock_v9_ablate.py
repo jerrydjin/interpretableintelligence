@@ -7,6 +7,7 @@ Exec the hotfix twice on a simulated live v8 runtime with GROOT_ABLATE_PLAN = a 
   (bit-identical on CPU), ablated conditions change actions, hook stats, no duplicate episodes, resume order.
 /content -> /tmp/content9a.
 """
+from box_paths import COLAB, RUNS  # noqa: E402 (box roots; see box_paths.py)
 import os, sys, shutil, json, copy
 from pathlib import Path
 
@@ -15,7 +16,7 @@ def make_mock(root: Path):
     import torch
     from safetensors.torch import save_file
     import ablate_v9 as A
-    plan = json.loads(Path("/workspace/runs/groot-1028-v9-ablate/ablate_plan.json").read_text())
+    plan = json.loads(Path(f"{RUNS}/groot-1028-v9-ablate/ablate_plan.json").read_text())
     ids = plan["sae"]["latent_ids"]
     g = torch.Generator().manual_seed(3)
     W = torch.randn(8, len(ids), generator=g); W = W / W.norm(dim=0, keepdim=True)
@@ -37,7 +38,7 @@ def make_mock(root: Path):
 
 if __name__ == "__main__":
     os.environ.update({"MUJOCO_GL": "egl", "GROOT_MAX_STEPS": "20", "GROOT_N_ENVS": "3"})
-    sys.path[:0] = ["/workspace/groot-colab/tests", "/workspace/groot-colab/v9", "/workspace/groot-colab/v8"]
+    sys.path[:0] = [f"{COLAB}/tests", f"{COLAB}/v9", f"{COLAB}/v8"]
     from v9_standin import StandIn, CK
     import physint_inproc_v8 as v8
     root = Path("/tmp/content9a"); shutil.rmtree(root, ignore_errors=True); root.mkdir()
@@ -46,14 +47,14 @@ if __name__ == "__main__":
 
     pol = StandIn()
     V8 = v8.Ctx(run=root / "physint/groot/colab-t4-libero-plus-v8", run_id="colab-t4-libero-plus-v8", policy=pol,
-                ckpt=CK, layer=5, plus_dir=Path("/workspace/groot-colab/LIBERO-plus"), snapshot_tar=root / "physint_snapshot.tar")
+                ckpt=CK, layer=5, plus_dir=Path(f"{COLAB}/LIBERO-plus"), snapshot_tar=root / "physint_snapshot.tar")
     v8.setup(V8, device="cpu")
-    src = open("/workspace/groot-colab/v9_hotfix_cell.py").read().replace("/content", str(root))
+    src = open(f"{COLAB}/v9_hotfix_cell.py").read().replace("/content", str(root))
     out = root / "physint/groot/groot-1028-v9-ablate"
 
     # run 1: stop handing out work after 7 finished episodes (simulated disconnect), then tear the last log line
     g1 = {"__name__": "__main__", "policy": pol, "CKPT": CK, "FAMILY": "groot", "LAYER": 5,
-          "PLUS_DIR": "/workspace/groot-colab/LIBERO-plus", "V8": V8, "v8": v8}
+          "PLUS_DIR": f"{COLAB}/LIBERO-plus", "V8": V8, "v8": v8}
     os.environ["GROOT_ABLATE_STOP_AFTER"] = "7"
     exec(compile(src.replace("ABLATE_SUMMARY = _run_ablate_from_env(V8)",
                              "_orig = v9.Ctx.hours_left\n"
@@ -75,7 +76,7 @@ if __name__ == "__main__":
 
     # run 2: resume
     g2 = {"__name__": "__main__", "policy": pol, "CKPT": CK, "FAMILY": "groot", "LAYER": 5,
-          "PLUS_DIR": "/workspace/groot-colab/LIBERO-plus", "V8": V8, "v8": v8}
+          "PLUS_DIR": f"{COLAB}/LIBERO-plus", "V8": V8, "v8": v8}
     exec(compile(src, "v9_hotfix_cell.py#2", "exec"), g2)
     top = g2["ABLATE_SUMMARY"]
     assert top["all_finished"], top["table"]

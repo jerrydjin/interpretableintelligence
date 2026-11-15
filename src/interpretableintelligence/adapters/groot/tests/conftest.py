@@ -5,7 +5,7 @@ on ``sys.path``, and a few cases read ``/workspace/runs``. CI has neither tree.
 Importing this package registers the ``ablate_v9`` and ``physint_inproc_v9``
 aliases, so that bare import resolves here. Cases that open a missing run folder
 skip themselves, the same way ``test_pot_events.py`` does. If the alias is not
-in place and those paths are missing, collection skips the module instead of
+in place and those paths are missing (``box_paths.py`` says how to move them), collection skips the module instead of
 erroring.
 
 ``mock_v9_ablate.py`` and ``mock_v9_nbcells_ablate.py`` are drivers, not tests.
@@ -19,10 +19,9 @@ from pathlib import Path
 import pytest
 
 import interpretableintelligence.adapters.groot.v9  # noqa: F401
+from box_paths import COLAB as _COLAB, RUNS as _RUNS
 
 _MOCK_DRIVERS = {"mock_v9_ablate.py", "mock_v9_nbcells_ablate.py"}
-_COLAB = Path("/workspace/groot-colab")
-_RUNS = Path("/workspace/runs")
 
 
 def pytest_ignore_collect(collection_path, config):
@@ -42,7 +41,7 @@ def pytest_pycollect_makemodule(module_path, parent):
     class _SkipAblade(pytest.Module):
         def collect(self):
             pytest.skip(
-                "ablate_v9 is not importable and /workspace/groot-colab or /workspace/runs is absent",
+                f"ablate_v9 is not importable and {_COLAB} or {_RUNS} is absent",
                 allow_module_level=True,
             )
 

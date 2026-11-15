@@ -57,6 +57,8 @@ Two optional manifest fields are not part of the contract readers must understan
 - `clips_dir`: absolute directory the capture read. The viewer uses it when `--clips` is omitted.
 - `stages`: one object per finished stage (`capture`, `sae`, `features`, `score`, `view`). Each object has exactly `wall_s` (seconds), `peak_ram_bytes`, `device`, `rows`, and `tokens`. These are measurements from that stage, not estimates.
 
+`remote.json` is written by `ii run --remote` next to a run it mirrored: where the run executed, the price per hour it was estimated at, the `--max-cost` cap, timings, status, and the estimated cost. No reader depends on it, and it is not part of the contract (`docs/REMOTE.md`).
+
 `acts/stream/` is a float32 row cache the pipeline uses to resume training and encoding without loading every shard. It is not part of the contract. Shards remain the activation record. The shared activation cache (`interpretableintelligence cache`) lives outside run folders and is not part of the contract either.
 
 ## split.json
@@ -137,11 +139,12 @@ Cheap prefilter scores, one row per feature and clip. Columns, in order:
 
 The objective is recorded in the parquet schema metadata as `objective`. For `prediction_loss` and `action_loglik`, `score` is the sum over that clip's windows and tokens of `activation × ∂(objective)/∂(activation)`, from one forward and one backward per window. For `activation` there is no backward, and `score` is the sum of `|activation|`.
 
-- `prediction_loss`: mean masked predictor MSE. This is what `interpretableintelligence run` writes, and it matches `effect_kind="estimate"`.
+- `prediction_loss`: mean masked predictor MSE. This is what `interpretableintelligence run` writes for `fake` and `vjepa2`, and it matches `effect_kind="estimate"`.
+- `output_sensitivity`: what `interpretableintelligence run` writes for `hf:<model>` and `groot:<checkpoint>`, whose `predict_masked` target is the model's own clean output. There `prediction_loss` and its gradient are zero at the clean point, so activation × gradient is float noise. Instead, per window, eight Gaussian probes drawn per output token orthogonal to the clean token and divided by its norm are pulled back through the network in one batched backward. For probe `r`, `s[r, i] = sum over tokens of activation_i × (Jᵀu_r)_i` estimates how far ablating feature `i` turns the output, and the window's score is `sqrt(mean_r s[r, i]²)`, which to second order tracks the mean cosine shift the scoreboard measures. Scores are non-negative. Probes are seeded from the clip id and window, so reruns match. `effect_kind="estimate"` rows hold each token's share of that score (the shares sum to it).
 - `action_loglik`: mean log-likelihood of the action the policy took. Use this when success is not differentiable.
 - `activation`: no backward. The score is the sum of `|activation|`, a magnitude baseline.
 
-`interpretableintelligence rank --objective` selects which one. A scored run's metadata is `prediction_loss`. The file is a shortlist, not a confirmation.
+`interpretableintelligence rank --objective` selects which one. A scored run's metadata is `prediction_loss` or `output_sensitivity` (the adapter decides), and `candidates.json` records the same objective. The file is a shortlist, not a confirmation.
 
 ## features/candidates.json
 
@@ -243,7 +246,7 @@ One record per run. No extra keys.
 
 `absent_in_random_init` reruns capture and SAE training with the same hyperparameters on `load(random_init=True)`. It is true when the feature's activation pattern has variance and no random-init feature has Pearson correlation ≥ `0.45` with it. A flat pattern is not absent: dead features share that pattern.
 
-`label_holds_heldout` is the labeller's held-out check. For the fake labeller (`fake-cue-v1`), the label is the planted cue with the highest train-token Pearson correlation, and only if that correlation is > `0.50`. The label holds when the same cue correlates ≥ `0.60` on held-out tokens. Otherwise the field is false. `null` means the check was not run. The `hf` adapter uses `clip-concepts-v2:openai/clip-vit-base-patch16`. Each concept's per-token strength is the CLIP similarity between the patch (MaskCLIP dense embedding, resized to the token grid and averaged per tubelet) and the prompt `a photo of {concept}.`. Because real-model features are sparse, the statistic is ROC AUC rather than Pearson: how well the concept's strength separates tokens where the feature fires (> `1e-5`) from tokens where it does not. The label is the concept with the highest train AUC, and only if that AUC is ≥ `0.80`; it holds when the same concept's held-out AUC is ≥ `0.80`. The concept list is built in, or one per line from `ii run hf --concepts FILE`.
+`label_holds_heldout` is the labeller's held-out check. For the fake labeller (`fake-cue-v1`), the label is the planted cue with the highest train-token Pearson correlation, and only if that correlation is > `0.50`. The label holds when the same cue correlates ≥ `0.60` on held-out tokens. Otherwise the field is false. `null` means the check was not run. The `hf` adapter uses `clip-concepts-v2:openai/clip-vit-base-patch16`. Each concept's per-token strength is the CLIP similarity between the patch (MaskCLIP dense embedding, resized to the token grid and averaged per tubelet) and the prompt `a photo of {concept}.`. Because real-model features are sparse, the statistic is ROC AUC rather than Pearson: how well the concept's strength separates tokens where the feature fires (> `1e-5`) from tokens where it does not. The label is the concept with the highest train AUC, and only if that AUC is ≥ `0.80`; it holds when the same concept's held-out AUC is ≥ `0.80`. The concept list is built in, or one per line from `ii run hf --concepts FILE`. `vjepa2` (not `--tiny`) uses the same dense labeller on the frames as the model sees them (its centre crop). `groot` (not `groot:tiny`) has no image tokens, so its concept strength is window-level: the CLIP similarity between the window's whole observation frame and the prompt, given to every token of that window; the AUC rule and thresholds are the same. `--concepts FILE` works for all three.
 
 `real` is true only when `usable` is true and all four of the following hold:
 
