@@ -329,12 +329,16 @@ def rank(
         ),
     ] = None,
     objective: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--objective",
-            help="prediction_loss, action_loglik, or activation (magnitude baseline). The result is a shortlist.",
+            help=(
+                "prediction_loss, output_sensitivity, action_loglik, or activation (magnitude baseline). "
+                "Default: the adapter's own (output_sensitivity for hf and groot, else prediction_loss). "
+                "The result is a shortlist."
+            ),
         ),
-    ] = "prediction_loss",
+    ] = None,
 ) -> None:
     """Rank SAE features. Does not ablate; every pick still needs a real ablation."""
     from interpretableintelligence.run import execute_rank

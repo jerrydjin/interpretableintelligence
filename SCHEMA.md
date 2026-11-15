@@ -137,11 +137,12 @@ Cheap prefilter scores, one row per feature and clip. Columns, in order:
 
 The objective is recorded in the parquet schema metadata as `objective`. For `prediction_loss` and `action_loglik`, `score` is the sum over that clip's windows and tokens of `activation × ∂(objective)/∂(activation)`, from one forward and one backward per window. For `activation` there is no backward, and `score` is the sum of `|activation|`.
 
-- `prediction_loss`: mean masked predictor MSE. This is what `interpretableintelligence run` writes, and it matches `effect_kind="estimate"`.
+- `prediction_loss`: mean masked predictor MSE. This is what `interpretableintelligence run` writes for `fake` and `vjepa2`, and it matches `effect_kind="estimate"`.
+- `output_sensitivity`: what `interpretableintelligence run` writes for `hf:<model>` and `groot:<checkpoint>`, whose `predict_masked` target is the model's own clean output. There `prediction_loss` and its gradient are zero at the clean point, so activation × gradient is float noise. Instead, per window, eight Gaussian probes drawn per output token orthogonal to the clean token and divided by its norm are pulled back through the network in one batched backward. For probe `r`, `s[r, i] = sum over tokens of activation_i × (Jᵀu_r)_i` estimates how far ablating feature `i` turns the output, and the window's score is `sqrt(mean_r s[r, i]²)`, which to second order tracks the mean cosine shift the scoreboard measures. Scores are non-negative. Probes are seeded from the clip id and window, so reruns match. `effect_kind="estimate"` rows hold each token's share of that score (the shares sum to it).
 - `action_loglik`: mean log-likelihood of the action the policy took. Use this when success is not differentiable.
 - `activation`: no backward. The score is the sum of `|activation|`, a magnitude baseline.
 
-`interpretableintelligence rank --objective` selects which one. A scored run's metadata is `prediction_loss`. The file is a shortlist, not a confirmation.
+`interpretableintelligence rank --objective` selects which one. A scored run's metadata is `prediction_loss` or `output_sensitivity` (the adapter decides), and `candidates.json` records the same objective. The file is a shortlist, not a confirmation.
 
 ## features/candidates.json
 
