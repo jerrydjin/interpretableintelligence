@@ -10,6 +10,7 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import os
 import shutil
 import threading
 import time
@@ -165,7 +166,8 @@ def sae_dictionary_size(adapter_name: str, d_model: int, requested: int | None =
 
 
 def sae_config_for(adapter_name: str, d_model: int, seed: int, requested: int | None = None) -> SAEConfig:
-    """``fake`` and ``vjepa2``: the L1 ReLU acceptance SAE. ``hf``: a TopK SAE sized to the model.
+    """``fake`` and ``vjepa2``: the L1 ReLU acceptance SAE. ``hf``, or any wider
+    dictionary asked for with ``--sae-features``: a TopK SAE.
 
     The L1 and decoder-orthogonality terms are tuned for the 12-feature
     acceptance dictionary; the orthogonality term sums over every pair of
@@ -173,7 +175,7 @@ def sae_config_for(adapter_name: str, d_model: int, seed: int, requested: int | 
     TopK fixes sparsity directly and needs neither term.
     """
     n_features = sae_dictionary_size(adapter_name, d_model, requested)
-    if not adapter_name.startswith("hf:"):
+    if not adapter_name.startswith("hf:") and n_features <= SCORE_ALL_MAX_FEATURES:
         return SAEConfig(d_model=int(d_model), n_features=n_features, seed=int(seed))
     return SAEConfig(
         d_model=int(d_model),
@@ -216,14 +218,15 @@ def execute_pipeline(
         raise ValueError(f"heldout_frac must be in (0, 1), got {heldout_frac}")
     if tiny and adapter_name != "vjepa2":
         raise ValueError("--tiny is only supported for the vjepa2 adapter")
-    if concepts_file is not None and not adapter_name.startswith("hf:"):
-        raise ValueError("--concepts applies to the hf adapter; fake labels from its planted cues")
+    if concepts_file is not None and concept_labelling(adapter_name, tiny) is None:
+        raise ValueError("--concepts applies to real models (hf, vjepa2, groot); fake labels from its planted cues")
     if prefilter is not None and int(prefilter) < 1:
         raise ValueError(f"prefilter K must be >= 1, got {prefilter}")
     prefilter = None if prefilter is None else int(prefilter)
     extra_effects = check_extra_effects(extra_effects)
 
-    torch.set_num_threads(1)
+    # One thread keeps runs bit-reproducible; II_THREADS trades that for speed on a CPU-only box.
+    torch.set_num_threads(max(1, int(os.environ.get("II_THREADS", "1"))))
     device = pick_device()
     clips_dir = Path(clips_dir)
     out = Path(out_dir)
@@ -304,7 +307,7 @@ def execute_pipeline(
         stats_sha=file_sha256(stats_path),
         prefilter=prefilter,
         extra_effects=list(extra_effects),
-        **_concept_inputs(adapter.name, concepts_file),
+        **_concept_inputs(adapter.name, concepts_file, tiny),
     )
     scoreboard = _read_scoreboard(out)
     if not score:
@@ -660,7 +663,7 @@ def _score(
         meta,
         device,
         label_cues=adapter.name == "fake",
-        concepts=_concept_source(adapter, concepts_file, device, log),
+        concepts=_concept_source(adapter, concepts_file, device, log, tiny),
     )
     del control_model
 
@@ -952,7 +955,8 @@ def _correlate(
                 main_f = model.encode(torch.from_numpy(main_rows).to(device)).detach().cpu().numpy()
                 ctrl_f = control_model.encode(torch.from_numpy(control_rows).to(device)).detach().cpu().numpy()
             if label_cues:
-                cue_rows = cues.rows(meta, clip_index, t, h, w)
+                window = np.array(main.window[start:stop], dtype=np.int64, copy=True)
+                cue_rows = cues.rows(meta, clip_index, t, h, w, window=window)
                 if auroc is not None:
                     auroc.add_concepts(cue_rows, split)
                 else:
@@ -1341,24 +1345,44 @@ def _wait_health(url: str) -> dict:
     raise RuntimeError(f"/api/run health check failed: {last}")
 
 
-def _concept_inputs(adapter_name: str, concepts_file) -> dict:
+def concept_labelling(adapter_name: str, tiny: bool = False) -> str | None:
+    """How a real model's features get CLIP concept labels.
+
+    ``"dense"``: per-patch concept maps (``hf`` and ``vjepa2``, whose tokens
+    are image patches). ``"window"``: one whole-frame score per window
+    (``groot``, whose tokens are state and action steps). ``None``: the fake
+    adapter's planted cues, or no labels for a random stand-in.
+    """
+    if tiny:
+        return None
+    if adapter_name.startswith("hf:") or adapter_name == "vjepa2":
+        return "dense"
+    if adapter_name.startswith("groot:") and adapter_name != "groot:tiny":
+        return "window"
+    return None
+
+
+def _concept_inputs(adapter_name: str, concepts_file, tiny: bool = False) -> dict:
     """Score-stage cache key for the labeller, so a new concept list relabels."""
-    if not adapter_name.startswith("hf:"):
+    kind = concept_labelling(adapter_name, tiny)
+    if kind is None:
         return {}
     from interpretableintelligence.labelers import CLIP_LABEL_MODEL, load_concepts
 
-    return {"labeller": CLIP_LABEL_MODEL, "concepts": load_concepts(concepts_file)}
+    return {"labeller": CLIP_LABEL_MODEL, "concepts": load_concepts(concepts_file), "concept_level": kind}
 
 
-def _concept_source(adapter, concepts_file, device, log):
-    """CLIP concept maps for a real model behind ``hf``; ``None`` keeps the default labelling."""
-    if not adapter.name.startswith("hf:"):
+def _concept_source(adapter, concepts_file, device, log, tiny: bool = False):
+    """CLIP concepts for a real model; ``None`` keeps the default labelling."""
+    kind = concept_labelling(adapter.name, tiny)
+    if kind is None:
         return None
-    from interpretableintelligence.labelers import ClipConceptSource, load_concepts
+    from interpretableintelligence.labelers import ClipConceptSource, WindowConceptSource, load_concepts
 
     names = load_concepts(concepts_file)
-    log(f"score: labelling with {len(names)} CLIP concepts")
-    return ClipConceptSource(adapter, names, device=device)
+    log(f"score: labelling with {len(names)} CLIP concepts ({kind})")
+    source = ClipConceptSource if kind == "dense" else WindowConceptSource
+    return source(adapter, names, device=device)
 
 
 class _AurocLabels:
@@ -1436,7 +1460,8 @@ class _CueCache:
         self.index: int | None = None
         self.volume: np.ndarray | None = None
 
-    def rows(self, meta, clip_index, t, h, w) -> np.ndarray:
+    def rows(self, meta, clip_index, t, h, w, window=None) -> np.ndarray:
+        del window
         out = np.zeros((int(clip_index.shape[0]), len(CUE_NAMES)), dtype=np.float64)
         for chosen in np.unique(clip_index):
             mask = clip_index == chosen

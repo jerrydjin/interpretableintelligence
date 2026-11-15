@@ -172,7 +172,7 @@ def run(
         typer.Option(
             "--sae-features",
             min=1,
-            help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf.",
+            help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf. Above 64, a TopK SAE.",
         ),
     ] = None,
     concepts: Annotated[
@@ -181,7 +181,7 @@ def run(
             "--concepts",
             exists=True,
             dir_okay=False,
-            help="hf only: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
+            help="hf, vjepa2, groot: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
         ),
     ] = None,
     tiny: Annotated[
@@ -534,6 +534,33 @@ def export_site_cmd(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"wrote {dest}")
+
+
+@app.command("compare")
+def compare_cmd(
+    runs: Annotated[list[Path], typer.Argument(help="Two or more finished run folders that captured the same clips.")],
+    out: Annotated[Path, typer.Option("--out", help="Folder for compare.json and index.html.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Clip directory for thumbnails. Defaults to the first run's recorded clips_dir."),
+    ] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Shuffle-null seed.")] = 0,
+) -> None:
+    """Match SAE features across models on the same clips: which concepts they share and which are unique."""
+    from interpretableintelligence.compare import compare_runs, describe_groups, write_compare
+
+    report = compare_runs(list(runs), seed=seed, log=typer.echo)
+    clips_dir = clips
+    if clips_dir is None and report["_profiles"][0].clips_dir:
+        clips_dir = Path(report["_profiles"][0].clips_dir)
+    describe_groups(report, clips_dir)
+    write_compare(report, out, clips_dir)
+    shared = report["shared"]
+    every = sum(1 for group in shared if group["n_models"] == len(runs))
+    typer.echo(
+        f"{len(shared)} shared concepts ({every} in all {len(runs)} models), "
+        f"{len(report['unmatched_verified'])} verified features with no counterpart. Wrote {out / 'index.html'}"
+    )
 
 
 @app.command()

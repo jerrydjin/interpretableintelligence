@@ -116,6 +116,19 @@ uv run pytest
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
 
+### Compare models on the same clips
+
+```bash
+uv run python scripts/make_libero_clips.py --out clips/libero-moments   # 148 LIBERO moments with GR00T sidecars
+uv run ii run hf --model facebook/dinov2-small --clips clips/libero-moments --out runs/cmp-dinov2 --no-serve
+uv run ii run groot --clips clips/libero-moments --out runs/cmp-groot --sae-features 512 --no-serve
+uv run ii compare runs/cmp-dinov2 runs/cmp-groot --out site/compare
+```
+
+Each LIBERO clip is 16 frames, so a vision model and GR00T read it as exactly one window and see the same moment. `ii compare` takes each feature's largest activation in each shared clip (clips are matched by file hash), pairs features across models that are each other's best partner by Pearson r, and keeps a pair only if r beats the 99th percentile of the best r after shuffling clip order. It writes `compare.json` and a static `index.html`. A match is correlational. Only scoreboard-`real` features are marked verified; a run that has not been scored can still be compared, and all its features show as exploratory. When clips carry GR00T sidecars, each shared concept is described by the instruction most of its top moments come from; otherwise by a CLIP hint, which is a reading aid and never a label.
+
+`vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. `II_THREADS=N` lets a CPU-only run use N threads at the cost of bit-reproducibility.
+
 ### Share a run as a static page
 
 ```bash

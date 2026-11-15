@@ -39,6 +39,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
+| `compare` | Match SAE features across runs on the same clips (activation correlation, shuffle null): which concepts models share and which are unique. Writes `compare.json` and a static page. |
 | `validate` | Check a run folder against `SCHEMA.md`. |
 | `view` | Local browser viewer for a finished run. `--steer` adds the playground (steer SAE features, see the prediction move; exploration only, never evidence). |
 
