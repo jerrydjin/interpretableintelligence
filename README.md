@@ -137,6 +137,15 @@ GR00T also needs a wrist camera, the robot state and an instruction. Put them in
 
 Weights stream in at half precision (6.3 GB). On a 4-core CPU the model loads in about a minute and each window takes a few seconds; a GPU is much faster. `ii run groot --tiny` runs a GR00T-shaped random network instead, with no download; it is for tests and is not GR00T. Closed-loop LIBERO rollouts for GR00T still go through `adapters/groot/v9/`.
 
+#### Import an existing GR00T capture
+
+```bash
+uv run ii import --format groot-v9 groot-1028-v9-n100.tar.xz runs/groot-1028
+uv run ii validate runs/groot-1028
+```
+
+`ii import` turns rollout logs captured outside `ii` into a run folder. `groot-v9` reads the v9 Colab capture layout (rollcap-v0), such as the task-1028 release: 100 episodes, block-5 activations, and the BatchTopK SAE trained on them. It takes the directory or the tarball and needs no GPU and no model download (about a minute on a laptop for 1028). The mapping is the one `ii run groot` uses: one clip per episode, one window per policy call, `w` = DiT token. The SAE keeps its feature ids. `split.json` is copied byte for byte. Failure labels are the pot-0 detector's (`fail_rule` `pot0-v1`), kept per clip in `manifest.import.clips`. Metrics that need the model in the loop (loss recovered, ablations, matched random features, the random-init control, effect rows) are `null`, each with a reason in `manifest.import.nulls`. So `usable` is null and every feature stays `real: false`. `SCHEMA.md` ("Imported runs") is the contract.
+
 #### Steering scorecard
 
 ```bash
@@ -223,6 +232,7 @@ The playground needs the model, so the export precomputes it: remove, scale, cla
 | `src/interpretableintelligence/contract_view.py` | Read-API payloads matched by `interpretableintelligence-server` |
 | `src/interpretableintelligence/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
 | `src/interpretableintelligence/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |
+| `src/interpretableintelligence/importers/` | `ii import`: rollout logs captured elsewhere to a run folder (`groot-v9` first) |
 | `SCHEMA.md` | Run-folder contract |
 | `ARCHITECTURE.md` | What this lane owns, and the next lanes |
 | `server/` | Rust read API (`interpretableintelligence-server`) over the run folder |

@@ -287,22 +287,21 @@ def test_product_page_commands_exist_or_are_coming():
     useful = {"try", "run", "view", "rollouts", "validate"}
     named = set(re.findall(r'data-cmd="([^"]+)"', rest))
     coming_named = set(re.findall(r'data-cmd="([^"]+)"', coming))
-    assert named == useful
+    assert named == useful | {"import"}
     assert named <= cli
-    assert coming_named == {"import"}
-    assert coming_named.isdisjoint(cli)
+    assert coming_named == set()
 
     def command_tokens(fragment: str) -> set[str]:
         tokens = set(re.findall(r"\bii\s+([a-z][a-z0-9-]*)", _text(fragment)))
         return {token for token in tokens if token in cli or token in {"import", "probe"} or "-" in token}
 
-    assert command_tokens(rest) == useful
-    assert command_tokens(coming) == {"import"}
+    assert command_tokens(rest) == useful | {"import"}
+    assert command_tokens(coming) == set()
     assert "random-weights SAE control" in _text(coming)
     assert "a feature has to beat an untrained SAE before it counts" in _text(coming)
     assert "Closed-loop rollouts at scale" in coming
     assert "Live GR00T rollouts through" in _text(coming) and re.search(r"through <code>ii</code>\.", coming)
-    assert "ii import" not in _text(rest)
+    assert "ii import" in _text(rest) and "ii import" not in _text(coming)
     assert "ii probe" not in page
 
 

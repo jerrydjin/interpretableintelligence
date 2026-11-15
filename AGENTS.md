@@ -43,6 +43,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
 | `compare` | Match SAE features across runs on the same clips (activation correlation, shuffle null): which concepts models share and which are unique. Writes `compare.json` and a static page. |
+| `import` | Turn rollout logs captured elsewhere into a run folder (`--format groot-v9`: the v9 rollcap-v0 capture, directory or tarball). Copies `split.json` byte for byte; uncomputable metrics are `null` with a reason in `manifest.import.nulls` (`SCHEMA.md`, "Imported runs"). |
 | `validate` | Check a run folder against `SCHEMA.md`. |
 | `cache` | Show or clear the shared activation cache (keyed by model, layer, clip hash, window, preprocessing) that lets reruns and the playground skip forward passes. Not part of the run contract. |
 | `view` | Local browser viewer for a finished run. `--steer` adds the playground (steer SAE features, see the prediction move; exploration only, never evidence). |
@@ -123,3 +124,4 @@ Offline world-model acceptance remains `ii run fake` → exactly three `real` fe
 | Pipeline stages | `ARCHITECTURE.md`, `src/interpretableintelligence/pipeline.py` |
 | GR00T v9 ablation / SPRT | `src/interpretableintelligence/adapters/groot/v9/ablate_v9.py` |
 | Demo bundles | `demo-data/`, `ii export-site` |
+| Import a capture (`ii import`) | `SCHEMA.md` ("Imported runs"), `src/interpretableintelligence/importers/` |
