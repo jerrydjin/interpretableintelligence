@@ -19,6 +19,28 @@ InterventionKind = Literal["ablate", "scale", "clamp"]
 KINDS: tuple[str, ...] = ("ablate", "scale", "clamp")
 
 
+TRAINED_DICTIONARY = "trained"
+_RANDOM_PREFIX = "random:"
+
+
+def random_dictionary(seed: int) -> str:
+    """Name of the untrained SAE drawn with ``seed``."""
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError(f"random dictionary seed must be a non-negative integer, got {seed!r}")
+    return f"{_RANDOM_PREFIX}{int(seed)}"
+
+
+def dictionary_seed(name: str) -> int | None:
+    """``None`` for the trained SAE, else the seed of a ``random:<seed>`` dictionary."""
+    if name == TRAINED_DICTIONARY:
+        return None
+    if isinstance(name, str) and name.startswith(_RANDOM_PREFIX):
+        digits = name[len(_RANDOM_PREFIX) :]
+        if digits.isdigit():
+            return int(digits)
+    raise ValueError(f"dictionary must be {TRAINED_DICTIONARY!r} or 'random:<seed>', got {name!r}")
+
+
 @dataclass(frozen=True)
 class Intervention:
     """Edit SAE latents at one layer.
@@ -26,14 +48,21 @@ class Intervention:
     ``ablate`` sets each listed feature to 0 (``value`` is recorded as 0).
     ``scale`` multiplies each listed feature by ``value``.
     ``clamp`` sets each listed feature to the constant ``value``.
+
+    ``dictionary`` names the SAE whose latents are edited: ``trained`` (the
+    policy's own SAE) or ``random:<seed>``, an untrained SAE of the same shape
+    (:func:`interpretableintelligence.sae.untrained_sae`). That one is the
+    random-weights SAE control.
     """
 
     feature_ids: tuple[int, ...]
     layer: int
     kind: str
     value: float
+    dictionary: str = TRAINED_DICTIONARY
 
     def __post_init__(self) -> None:
+        dictionary_seed(self.dictionary)  # validates the name
         if self.kind not in KINDS:
             raise ValueError(f"intervention kind must be ablate|scale|clamp, got {self.kind!r}")
         if isinstance(self.layer, bool) or not isinstance(self.layer, int) or self.layer < 0:
@@ -74,6 +103,25 @@ def apply_latent_intervention(latents: np.ndarray, intervention: Intervention | 
     return out
 
 
+def edit_through_dictionary(activation: np.ndarray, sae, intervention: Intervention) -> np.ndarray:
+    """Apply ``intervention`` to ``sae``'s latents of ``activation`` and keep the SAE's error.
+
+    ``x' = x + W_dec (z' - z)`` with ``z = encode(x)``: only the edited features'
+    decoder contributions change, and an edit that leaves the latents alone returns
+    ``x`` exactly. GR00T's v9 hook and the picker's offline prune edit this way. An
+    untrained SAE reconstructs badly, so replacing ``x`` with its reconstruction
+    would measure the reconstruction, not the edit.
+    """
+    import torch
+
+    x = np.asarray(activation, dtype=np.float64)
+    with torch.no_grad():
+        latents = sae.encode(torch.as_tensor(x, dtype=torch.float32)).double().numpy()
+    edited = apply_latent_intervention(latents, intervention)
+    decoder = sae.W_dec.detach().double().numpy()  # [d_model, n_features]
+    return x + (edited - latents) @ decoder.T
+
+
 class PolicyEnv(Protocol):
     """Closed loop the rollout runner drives.
 
@@ -83,6 +131,15 @@ class PolicyEnv(Protocol):
     returns an action.
     ``step`` is the simulator. It returns ``(observation, reward, done, info)``
     and puts ``info["success"]`` on the terminal step.
+
+    Optional capabilities, found with ``getattr``:
+
+    - ``random_dictionaries = True``: ``intervene`` accepts
+      ``Intervention.dictionary = "random:<seed>"`` and edits an untrained SAE of
+      the trained one's shape. ``ii rollouts --random-sae`` needs it.
+    - ``pick_features(dictionary, n, *, kind, value, seed) -> list[int]``: the
+      policy's own candidate picker. Without it ``ii rollouts --pick`` screens
+      every feature offline (:mod:`interpretableintelligence.rollout_pick`).
     """
 
     name: str

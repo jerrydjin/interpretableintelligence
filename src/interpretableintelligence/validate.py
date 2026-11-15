@@ -29,6 +29,7 @@ from interpretableintelligence.rollout import (
     summarize,
 )
 from interpretableintelligence.attribute import PREDICTION_LOSS, METHOD, rank_feature_ids
+from interpretableintelligence.policies.base import dictionary_seed
 from interpretableintelligence.sae import load_sae
 from interpretableintelligence.split import assign_split, split_sha
 from interpretableintelligence.stats import feature_is_real, is_usable
@@ -726,7 +727,7 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
             errors.append(f"{where}.feature_ids must be a list of integers")
             return
         if condition == "baseline":
-            if feature_ids or row["kind"] is not None or row["value"] is not None or row["layer"] is not None:
+            if feature_ids or row["kind"] is not None or row["value"] is not None or row["layer"] is not None or row["dictionary"] is not None:
                 errors.append(f"{where} baseline rows have an empty intervention spec")
                 return
         elif condition == "intervention":
@@ -741,6 +742,11 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
                 return
             if not _is_number(row["value"]):
                 errors.append(f"{where}.value must be finite")
+                return
+            try:
+                dictionary_seed(row["dictionary"])
+            except ValueError:
+                errors.append(f"{where}.dictionary must be trained or random:<seed>")
                 return
         else:
             errors.append(f"{where}.condition must be baseline or intervention")
@@ -764,6 +770,7 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
                 layer=row["layer"],
                 kind=row["kind"],
                 value=row["value"],
+                dictionary=row["dictionary"],
             )
             if episode_id != expected_id:
                 errors.append(f"{where}.episode_id does not match the intervention spec")

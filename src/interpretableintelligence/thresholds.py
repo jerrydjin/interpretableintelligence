@@ -107,3 +107,12 @@ DEFAULT_ROLLOUT_WORKERS = 1
 # There is no futility boundary.
 SPRT_LAMBDA = 0.5
 SPRT_FAMILY_POWER = 0.8
+
+# Random-weights SAE control (AGENTS.md research rule 4, `ii rollouts --pick --random-sae`).
+# The default picker screens every feature on this many discovery episodes. Their seeds
+# start PICK_SEED_OFFSET above the run seed, so no rollout arm reuses them.
+PICK_DISCOVERY_EPISODES = 16
+PICK_SEED_OFFSET = 1_000_000
+# Untrained dictionaries drawn by default. 0 keeps existing runs and their cost unchanged;
+# without at least one, no candidate can be a finding.
+DEFAULT_RANDOM_SAE = 0

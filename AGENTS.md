@@ -85,7 +85,7 @@ These override intuition, offline plots, and demo-site copy.
 1. The **Sobel–Wald SPRT** stop rule calls a **rise** (not merely a fall or cap).
 2. The rise over the measured baseline on those seeds has **McNemar p < 0.05**.
 3. The effect **beats every matched random control** arm in the plan.
-4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. **Not implemented in the repo yet** (no `ii` command; known gap).
+4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. On `ii`: `ii rollouts --pick N --random-sae K` picks the candidates and each untrained SAE's features with the same picker and marks a candidate `finding: true` only when it is `causal` and strictly above every random-SAE arm (`SCHEMA.md`, "Random-weights SAE control"). It runs on any policy that sets `random_dictionaries`; the `fake` policies do. **GR00T does not yet** (known gap): its policy has to edit an untrained SAE and bring its picker as `pick_features`.
 
 **`recon_only` (groot ablation plans):** sanity check only—the hook applies SAE reconstruction with **no latent ablation** (empty edit set). On task 1028 it was **8/8 bit-identical to baseline**. This verifies the hook path; it is **not** the random-weights SAE control and does not satisfy rule 4.
 
@@ -93,7 +93,7 @@ These override intuition, offline plots, and demo-site copy.
 
 **How to run work:**
 
-- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. Until GR00T rollouts and the random-weights SAE control land on `ii`, the v9 adapter path above is the documented exception (known gap).
+- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. Until GR00T rollouts land on `ii` with the random-weights SAE control, the v9 adapter path above is the documented exception (known gap).
 - **Never edit `split.json` or held-out labels** in an existing run.
 - **No paid compute** on behalf of this repo (no cloud GPU rental, etc.). GR00T rollouts use existing Colab/box paths under `adapters/groot/`.
 
