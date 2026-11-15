@@ -61,12 +61,14 @@ MIN_HELDOUT_POSITIVES = 4
 # Without a prefilter shortlist, label at most this many features (the highest attribution).
 MAX_FEATURES = 32
 IMAGE_PX = 320
+# Reasoning models spend tokens before answering; too few and the answer comes back empty.
+MAX_TOKENS = 4000
 
 PROVIDERS = {
     "anthropic": {"key": "ANTHROPIC_API_KEY", "model": "claude-haiku-5-5", "url": "https://api.anthropic.com/v1/messages"},
     "fireworks": {
         "key": "FIREWORKS_API_KEY",
-        "model": "accounts/fireworks/models/qwen2p5-vl-32b-instruct",
+        "model": "accounts/fireworks/models/glm-5p3-flash",
         "url": "https://api.fireworks.ai/inference/v1",
     },
     "openai": {"key": "OPENAI_API_KEY", "model": "gpt-4o-mini", "url": "https://api.openai.com/v1"},
@@ -140,9 +142,9 @@ class OpenAICompatibleClient:
             data = base64.b64encode(image).decode()
             content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}})
         reply = self._http.post(
-            {"model": self.model, "messages": [{"role": "user", "content": content}], "temperature": 0, "max_tokens": 400}
+            {"model": self.model, "messages": [{"role": "user", "content": content}], "temperature": 0, "max_tokens": MAX_TOKENS}
         )
-        return str(reply["choices"][0]["message"]["content"])
+        return str(reply["choices"][0]["message"].get("content") or "")
 
 
 class AnthropicClient:
@@ -160,7 +162,7 @@ class AnthropicClient:
         ]
         content.append({"type": "text", "text": prompt})
         reply = self._http.post(
-            {"model": self.model, "max_tokens": 400, "temperature": 0, "messages": [{"role": "user", "content": content}]}
+            {"model": self.model, "max_tokens": MAX_TOKENS, "temperature": 0, "messages": [{"role": "user", "content": content}]}
         )
         return "".join(part.get("text", "") for part in reply.get("content", []) if part.get("type") == "text")
 
@@ -184,6 +186,8 @@ class CachedClient:
         except (OSError, ValueError, KeyError):
             pass
         text = self.inner.complete(prompt, images)
+        if not text.strip():
+            return text  # an empty reply is a failure, not an answer: never cache it
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
