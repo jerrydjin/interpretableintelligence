@@ -380,7 +380,7 @@ class HFAdapter:
         self.raw_activations(clip, window)
         full = self._cache[("full", clip.clip_id, window.index)]
         pixels = self.pixel_values(clip, window)
-        per = max(1, MANY_BATCH_ITEMS // int(full.shape[0]))
+        per = self.edits_per_batch(window)
         out: list[torch.Tensor] = []
         for start in range(0, len(edits), per):
             chunk = edits[start : start + per]
@@ -398,6 +398,12 @@ class HFAdapter:
             for index in range(len(chunk)):
                 out.append(self._final_tokens(final[index * full.shape[0] : (index + 1) * full.shape[0]]))
         return out
+
+    def edits_per_batch(self, window: Window) -> int:
+        """Edits per forward in :meth:`predict_masked_many` (batch items are edits x frames)."""
+        del window
+        items = 1 if self.is_video else self.n_frames
+        return max(1, MANY_BATCH_ITEMS // items)
 
     def visible_mean_baseline(self, clip: Clip, window: Window) -> torch.Tensor:
         """Every token predicted as the model's average output token for this window."""
