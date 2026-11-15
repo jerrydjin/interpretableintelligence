@@ -54,6 +54,7 @@ python_files = ["test_*.py", "*_test.py", "check_*.py", "mock_*.py"]
 addopts = ["-q", "-m", "not slow"]
 markers = [
     "slow: large synthetic runs, or a V-JEPA 2 weight download; skipped unless pytest is run with -m slow",
+    "real_model: downloads real Hugging Face weights and runs ii end to end; CI runs these with -m real_model (.github/workflows/real-model.yml)",
 ]
 filterwarnings = [
     "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
