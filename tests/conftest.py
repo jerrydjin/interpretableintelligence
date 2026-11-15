@@ -19,8 +19,15 @@ class Demo(NamedTuple):
     clips: Path
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _activation_cache(tmp_path_factory):
+    """Keep the shared activation cache inside the test session, never in the user's home."""
+    os.environ["II_ACTS_CACHE"] = str(tmp_path_factory.mktemp("acts-cache"))
+    yield
+
+
 @pytest.fixture(scope="session")
-def demo(tmp_path_factory) -> Demo:
+def demo(tmp_path_factory, _activation_cache) -> Demo:
     os.environ.setdefault("II_DEVICE", "cpu")
     root = tmp_path_factory.mktemp("interpretableintelligence")
     clips = root / "clips"

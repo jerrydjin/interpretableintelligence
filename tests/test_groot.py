@@ -166,6 +166,24 @@ def test_ii_run_groot_tiny_end_to_end_then_steer(tmp_path):
 
     viewer = load_view_model(out, clips)
     assert viewer._build_clip(clip_id)["layout"] == "actions"
+    assert viewer.run_payload["steering"] is None
+
+    # Steering scorecard on the planned action chunk. The random stand-in has no verified
+    # features, so the default refuses; named features are measured and stay unverified.
+    scoreboard_before = (out / "scoreboard.json").read_bytes()
+    refused = CliRunner().invoke(app, ["steer-scorecard", str(out), "--clips", str(clips)])
+    assert refused.exit_code == 1 and "--features" in refused.output
+    scored = CliRunner().invoke(
+        app, ["steer-scorecard", str(out), "--clips", str(clips), "--features", "0,1", "--controls", "19", "--bootstrap", "100"]
+    )
+    assert scored.exit_code == 0, scored.output
+    assert "planned actions" in scored.output
+    card = json.loads((out / "steering" / "scorecard.json").read_text(encoding="utf-8"))
+    assert card["target"] == "action_chunk" and card["adapter"] == "groot:tiny"
+    assert card["selection"] == "requested" and card["rollout_finding"] is False
+    assert all(row["real"] is False for row in card["rows"])
+    assert (out / "scoreboard.json").read_bytes() == scoreboard_before
+    assert validate_run(out) == []
 
 
 def test_cli_rejects_blocks_for_groot(tmp_path):

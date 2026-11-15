@@ -8,6 +8,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -930,28 +931,28 @@ def _encode_video(
     fps: int = 8,
     codec: str = "libx264",
 ) -> None:
+    """Write a solid-colour test video with PyAV (a core dependency), so no ffmpeg CLI is needed."""
+    import av
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        "ffmpeg",
-        "-y",
-        "-v",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        f"color=c={color}:s={size}:r={fps}:d={frames / fps + 1}",
-        "-frames:v",
-        str(frames),
-        "-an",
-        "-c:v",
-        codec,
-        "-pix_fmt",
-        "yuv420p",
-    ]
-    if path.suffix.lower() in {".mp4", ".m4v", ".mov"}:
-        command.extend(["-movflags", "+faststart"])
-    command.append(str(path))
-    subprocess.run(command, check=True, timeout=60)
+    width, height = (int(part) for part in size.split("x"))
+    image = np.empty((height, width, 3), dtype=np.uint8)
+    image[...] = _rgb(color)
+    options = {"movflags": "+faststart"} if path.suffix.lower() in {".mp4", ".m4v", ".mov"} else {}
+    with av.open(str(path), mode="w", options=options) as container:
+        stream = container.add_stream(codec, rate=fps)
+        stream.width, stream.height, stream.pix_fmt = width, height, "yuv420p"
+        for _ in range(frames):
+            for packet in stream.encode(av.VideoFrame.from_ndarray(image, format="rgb24")):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    named = {"red": "ff0000", "green": "008000", "blue": "0000ff", "white": "ffffff", "black": "000000"}
+    value = named.get(color.lower(), color.lower().removeprefix("0x").removeprefix("#"))
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
 
 
 def _run_for_media(run: Path, clips: list[tuple[str, str]]) -> Path:
@@ -1092,10 +1093,12 @@ def _wait_http(url: str) -> None:
 
 
 def _chrome() -> str:
-    for candidate in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/local/bin/google-chrome", "/usr/bin/google-chrome", "/usr/bin/chromium"):
-        if Path(candidate).is_file():
-            return candidate
-    raise FileNotFoundError("Chrome is not installed; the viewer browser test cannot run")
+    from test_steer import _chrome as find_chrome
+
+    found = find_chrome()
+    if found is None:
+        pytest.skip("no Chrome or Chromium found (set II_CHROME, or run `uv run playwright install chromium`)")
+    return found
 
 
 def _moment(run_dir: Path) -> dict:
@@ -1196,45 +1199,12 @@ def fresh_fake_run(tmp_path_factory) -> tuple[Path, Path]:
 @pytest.fixture(scope="module")
 def viewer_url(fresh_fake_run: tuple[Path, Path]):
     clips, out = fresh_fake_run
-    err_path = out.parent / "viewer.err"
-    err = err_path.open("w", encoding="utf-8")
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "interpretableintelligence",
-            "view",
-            str(out),
-            "--clips",
-            str(clips),
-            "--no-open",
-            "--port",
-            "0",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=err,
-        text=True,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-    )
+    proc, url = _start_viewer(out, clips, out.parent / "viewer.err")
     try:
-        assert proc.stdout is not None
-        ready, _, _ = select.select([proc.stdout], [], [], 30)
-        err.flush()
-        if not ready or proc.poll() not in (None, 0):
-            raise RuntimeError(err_path.read_text(encoding="utf-8") or "viewer exited before printing a url")
-        line = proc.stdout.readline().strip()
-        match = re.search(r"http://127\.0\.0\.1:\d+/", line)
-        assert match, line
-        url = match.group(0)
         _wait_http(url)
         yield url
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        err.close()
+        _stop_viewer(proc)
 
 
 def test_playwright_scrub_shows_real_ablation_and_unverified_decoy(fresh_fake_run, viewer_url: str, tmp_path: Path):
@@ -1339,13 +1309,74 @@ def test_playwright_scrub_shows_real_ablation_and_unverified_decoy(fresh_fake_ru
         browser.close()
 
 
-@contextmanager
-def _view_server(run: Path, clips: Path):
-    err_path = run.parent / f"viewer-{run.name}.err"
+def test_playwright_plain_view_numbers_switch_and_phone_width(fresh_fake_run, viewer_url: str):
+    """Learner-first layout: verified feature first, raw numbers behind a switch, no sideways scroll."""
+    from playwright.sync_api import expect, sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=_chrome(),
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        page = browser.new_page(viewport={"width": 1280, "height": 860})
+        page.set_default_timeout(15000)
+        page.goto(viewer_url + "#/clips/clip-000", wait_until="domcontentloaded")
+        page.wait_for_selector("[data-testid=frame-feature]")
+        expect(page.locator("[data-testid=run-status]")).to_contain_text("dictionary usable")
+        expect(page.locator("[data-testid=frame-count]")).to_have_text("Frame 1 of 16")
+
+        # With no feature in the URL, a verified feature on the frame is selected first.
+        if page.locator("[data-testid=frame-feature][data-badge=real]").count():
+            expect(page.locator("[data-testid=frame-feature][data-selected=true]")).to_have_attribute("data-badge", "real")
+
+        # Raw numbers are off by default, the ablation chip stays, the switch reveals the rest.
+        expect(page.locator("[data-testid=frame-readout]")).to_be_hidden()
+        expect(page.locator("[data-testid=sae-summary]")).to_be_hidden()
+        expect(page.locator("[data-testid=effect][data-kind=ablation]").first).to_be_visible()
+        toggle = page.locator("[data-testid=numbers-toggle]")
+        toggle.click()
+        expect(toggle).to_have_attribute("aria-pressed", "true")
+        expect(page.locator("[data-testid=frame-readout]")).to_be_visible()
+        expect(page.locator("[data-testid=sae-summary]")).to_be_visible()
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("[data-testid=frame-feature]")
+        expect(page.locator("[data-testid=numbers-toggle]")).to_have_attribute("aria-pressed", "true")
+        page.locator("[data-testid=numbers-toggle]").click()
+        expect(page.locator("[data-testid=frame-readout]")).to_be_hidden()
+
+        # The index splits verified features from the rest.
+        page.goto(viewer_url + "#/features", wait_until="domcontentloaded")
+        verified = page.locator("[data-testid=index-group-verified] [data-testid=feature-index-link]")
+        expect(verified).to_have_count(3)
+        for label in verified.evaluate_all("nodes => nodes.map((node) => node.dataset.label)"):
+            assert label in {"stripe", "pulse", "corner"}
+        expect(page.locator("[data-testid=index-group-exploring] [data-testid=badge][data-kind=real]")).to_have_count(0)
+
+        phone = browser.new_page(viewport={"width": 390, "height": 844})
+        phone.set_default_timeout(15000)
+        for hash_ in ("#/clips/clip-000", "#/features", "#/features/9"):
+            phone.goto(viewer_url + hash_, wait_until="domcontentloaded")
+            phone.wait_for_selector("#app > *")
+            phone.wait_for_timeout(300)
+            width = phone.evaluate("() => document.documentElement.scrollWidth")
+            assert width <= 390, f"{hash_} scrolls sideways at phone width ({width}px)"
+        browser.close()
+
+
+def _start_viewer(run: Path, clips: Path, err_path: Path, timeout: float = 90.0) -> tuple[subprocess.Popen, str]:
+    """Start ``ii view`` in a subprocess and return it with the URL it printed.
+
+    It runs with ``-X faulthandler``. If no URL arrives in ``timeout`` seconds the process gets
+    SIGABRT, so faulthandler writes every thread's Python stack to stderr, and the error says
+    whether it hung or died (with the exit code), not just that it printed nothing.
+    """
     err = err_path.open("w", encoding="utf-8")
     proc = subprocess.Popen(
         [
             sys.executable,
+            "-X",
+            "faulthandler",
             "-m",
             "interpretableintelligence",
             "view",
@@ -1361,25 +1392,47 @@ def _view_server(run: Path, clips: Path):
         text=True,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
+    err.close()
+    assert proc.stdout is not None
+    started = time.monotonic()
+    ready, _, _ = select.select([proc.stdout], [], [], timeout)
+    line = proc.stdout.readline().strip() if ready else ""
+    match = re.search(r"http://127\.0\.0\.1:\d+/", line)
+    if match and proc.poll() is None:
+        return proc, match.group(0)
+    if proc.poll() is None:
+        state = f"printed nothing in {time.monotonic() - started:.0f}s (hung; stacks below)"
+        if hasattr(signal, "SIGABRT"):
+            proc.send_signal(signal.SIGABRT)
+    else:
+        state = f"exited with code {proc.returncode} after {time.monotonic() - started:.1f}s"
     try:
-        assert proc.stdout is not None
-        ready, _, _ = select.select([proc.stdout], [], [], 30)
-        err.flush()
-        if not ready or proc.poll() not in (None, 0):
-            raise RuntimeError(err_path.read_text(encoding="utf-8") or "viewer exited before printing a url")
-        line = proc.stdout.readline().strip()
-        match = re.search(r"http://127\.0\.0\.1:\d+/", line)
-        assert match, line
-        url = match.group(0)
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    rest = proc.stdout.read() if proc.stdout else ""
+    raise RuntimeError(
+        f"ii view {state}\nstdout: {(line + rest).strip()!r}\nstderr:\n{err_path.read_text(encoding='utf-8')}"
+    )
+
+
+def _stop_viewer(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+@contextmanager
+def _view_server(run: Path, clips: Path):
+    proc, url = _start_viewer(run, clips, run.parent / f"viewer-{run.name}.err")
+    try:
         _wait_http(url)
         yield url
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        err.close()
+        _stop_viewer(proc)
 
 
 def _scrub(page, frame: int) -> None:

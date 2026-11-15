@@ -26,6 +26,7 @@ import pyarrow.parquet as pq
 import torch
 
 from interpretableintelligence import __version__
+from interpretableintelligence.act_cache import ActivationCache, captured_layer
 from interpretableintelligence.adapters import get_adapter
 from interpretableintelligence.adapters.fake import CUE_NAMES, cue_volume
 from interpretableintelligence.artifacts import (
@@ -37,7 +38,6 @@ from interpretableintelligence.artifacts import (
     write_json,
 )
 from interpretableintelligence.attribute import (
-    PREDICTION_LOSS,
     candidates_document,
     rank_feature_ids,
     summarize_attribution,
@@ -50,6 +50,7 @@ from interpretableintelligence.score import (
     ablate_edit,
     check_extra_effects,
     cosine_distance,
+    default_objective,
     estimate_effects,
     extra_effect_rows,
     predictor_sse,
@@ -207,11 +208,18 @@ def execute_pipeline(
     port: int = 0,
     open_browser: bool = False,
     steer: bool = False,
+    use_cache: bool = True,
+    cache_dir: Path | None = None,
     log=print,
 ) -> dict:
     """Run every missing stage and, unless ``serve`` is false, block on the viewer.
 
-    ``steer`` turns on the viewer's playground (it loads the model and SAE once more)."""
+    ``steer`` turns on the viewer's playground (it loads the model and SAE once more).
+
+    Captured layers go through the shared activation cache (``act_cache``) unless
+    ``use_cache`` is false, so a rerun into a new folder, a new seed or split, or a
+    new SAE size reads them from disk instead of running the model again.
+    """
     if gpu_cost_per_hour is not None and (not math.isfinite(gpu_cost_per_hour) or gpu_cost_per_hour < 0):
         raise ValueError("gpu_cost_per_hour must be a non-negative finite number")
     if not 0.0 < float(heldout_frac) < 1.0:
@@ -234,6 +242,7 @@ def execute_pipeline(
     if len(meta) < MIN_CLIPS:
         raise ValueError(f"need at least {MIN_CLIPS} clips, found {len(meta)} in {clips_dir}")
 
+    cache = ActivationCache.open(cache_dir, enabled=use_cache)
     adapter_cls = get_adapter(adapter_name)
     adapter = adapter_cls(layer=layer, device=device, tiny=tiny)
     adapter.load(random_init=False)
@@ -268,7 +277,7 @@ def execute_pipeline(
         _invalidate(out, "capture")
         with _measure(device) as measured:
             rows = _capture(
-                adapter, meta, out, layer, seed, heldout_frac, model_sha, capture_inputs, clips_dir, log=log
+                adapter, meta, out, layer, seed, heldout_frac, model_sha, capture_inputs, clips_dir, cache, log=log
             )
             measured["rows"] = rows
             measured["tokens"] = rows
@@ -336,6 +345,7 @@ def execute_pipeline(
                 prefilter=prefilter,
                 extra_effects=extra_effects,
                 concepts_file=concepts_file,
+                cache=cache,
             )
             measured["rows"] = effect_rows
             measured["tokens"] = int(read_json(out / "acts" / "stream" / "meta.json")["n"])
@@ -362,6 +372,8 @@ def execute_pipeline(
         _record_stage(out, "view", measured["metrics"])
         _write_complete(out / "view.complete.json", view_inputs, measured["metrics"])
 
+    if cache.hits or cache.stored:
+        log(cache.summary())
     manifest = read_json(out / "manifest.json")
     report = _report(manifest, gpu_cost_per_hour)
     for line in format_report(report).splitlines():
@@ -424,7 +436,11 @@ def _duration(seconds: float) -> str:
     return f"{seconds / 60:.0f} min"
 
 
-def _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, clips_dir: Path, log=None) -> int:
+def _capture(
+    adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, clips_dir: Path,
+    cache: ActivationCache | None = None, log=None,
+) -> int:
+    cache = cache if cache is not None else ActivationCache(None)
     split = assign_split([item["clip_id"] for item in meta], int(seed), float(heldout_frac))
     membership = split.membership()
     grid = adapter.grid()
@@ -444,11 +460,7 @@ def _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, c
                     raise RuntimeError("every clip must yield the same windows")
                 code = 0 if membership[clip.clip_id] == "train" else 1
                 for window in windows:
-                    with adapter.hook(adapter.layer, mode="capture") as handle:
-                        adapter.encode(clip, window)
-                    if len(handle.captured) != 1:
-                        raise RuntimeError(f"expected one captured tensor for {clip.clip_id}")
-                    acts = handle.captured[0].detach().to(dtype=torch.float32, device="cpu").numpy()
+                    acts = captured_layer(adapter, clip, window, cache=cache, model_sha=model_sha).numpy()
                     if tuple(int(dim) for dim in acts.shape[:3]) != (grid.t, grid.h, grid.w):
                         raise RuntimeError(f"{clip.clip_id} activation grid {acts.shape} != {grid.as_dict()}")
                     if int(acts.shape[-1]) != int(adapter.d_model):
@@ -642,6 +654,7 @@ def _score(
     prefilter: int | None = None,
     extra_effects: tuple[str, ...] = (),
     concepts_file: Path | None = None,
+    cache: ActivationCache | None = None,
 ) -> tuple[dict, int]:
     stats = json.loads((out / "features" / "stats.json").read_text(encoding="utf-8"))
     manifest = read_json(out / "manifest.json")
@@ -658,7 +671,7 @@ def _score(
         _rm(control_dir)
         control = adapter_cls(layer=layer, device=device, tiny=tiny)
         control.load(random_init=True)
-        _capture_control(control, meta, control_dir / "acts", manifest)
+        _capture_control(control, meta, control_dir / "acts", manifest, cache)
         _write_complete(control_dir / "acts" / "complete.json", control_inputs, {})
         _clear_cache(control)
         del control
@@ -716,7 +729,8 @@ def _score(
         # One backward pass per window gives both the per-cell effect estimates and the
         # prediction-loss attribution that picks which features to ablate.
         attribution_started = time.perf_counter()
-        rank, by_clip = _estimate_rows(adapter, model, meta, effect_writer, n_features, log=log)
+        objective = default_objective(adapter)
+        rank, by_clip = _estimate_rows(adapter, model, meta, effect_writer, n_features, objective=objective, log=log)
         attribution_seconds = time.perf_counter() - attribution_started
         _clear_cache(adapter)
         attr_rows, mean_scores = summarize_attribution(by_clip)
@@ -878,13 +892,13 @@ def _score(
     }
     write_json(out / "scoreboard.json", scoreboard)
     _write_jsonl(out / "features" / "features.jsonl", jsonl)
-    write_attribution(out / "features" / "attribution.parquet", attr_rows, objective=PREDICTION_LOSS)
+    write_attribution(out / "features" / "attribution.parquet", attr_rows, objective=objective)
     write_json(
         out / "features" / "candidates.json",
         candidates_document(
             mean_scores,
             reported_k,
-            objective=PREDICTION_LOSS,
+            objective=objective,
             labels=[row["label"] for row in labels],
             seconds={
                 "attribution": attribution_seconds,
@@ -901,7 +915,9 @@ def _score(
     return scoreboard, int(effects)
 
 
-def _capture_control(adapter, meta, acts_dir: Path, manifest: dict) -> None:
+def _capture_control(adapter, meta, acts_dir: Path, manifest: dict, cache: ActivationCache | None = None) -> None:
+    cache = cache if cache is not None else ActivationCache(None)
+    control_sha = adapter.model_sha() if cache.enabled else ""
     grid = adapter.grid()
     manifest_grid = manifest["grid"]
     with ActivationWriter(acts_dir, int(adapter.d_model)) as writer:
@@ -913,9 +929,7 @@ def _capture_control(adapter, meta, acts_dir: Path, manifest: dict) -> None:
                     raise RuntimeError("control capture clip order does not match the manifest")
                 code = 0 if recorded["split"] == "train" else 1
                 for window in adapter.windows(clip):
-                    with adapter.hook(adapter.layer, mode="capture") as handle:
-                        adapter.encode(clip, window)
-                    acts = handle.captured[0].detach().to(dtype=torch.float32, device="cpu").numpy()
+                    acts = captured_layer(adapter, clip, window, cache=cache, model_sha=control_sha).numpy()
                     if tuple(int(dim) for dim in acts.shape[:3]) != (
                         int(manifest_grid["t"]),
                         int(manifest_grid["h"]),
@@ -1073,10 +1087,11 @@ def _correlate(
 
 
 def _estimate_rows(
-    adapter, sae, meta, writer: "_ColumnBatch", n_features: int, log=None
+    adapter, sae, meta, writer: "_ColumnBatch", n_features: int, objective: str | None = None, log=None
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     """Write per-cell effect estimates. Returns per-clip ranking scores (mean |effect|) and the
-    per-clip prediction-loss attribution (summed effect), from the same backward passes."""
+    per-clip attribution (summed effect, as ``attribute.attribution_by_clip``), from the same
+    backward passes. ``objective=None`` takes the adapter's default (``score.default_objective``)."""
     scores: dict[str, np.ndarray] = {}
     attribution: dict[str, np.ndarray] = {}
     started = time.perf_counter()
@@ -1089,7 +1104,7 @@ def _estimate_rows(
             if not windows:
                 raise RuntimeError(f"{clip.clip_id} has no windows")
             for window in windows:
-                effect = estimate_effects(adapter, sae, clip, window, objective=PREDICTION_LOSS).detach().cpu()
+                effect = estimate_effects(adapter, sae, clip, window, objective=objective).detach().cpu()
                 acc += effect.abs().mean(dim=(0, 1, 2)).numpy()
                 total += np.asarray(effect.numpy(), dtype=np.float64).reshape(-1, n_features).sum(axis=0)
                 frame = effect.mean(dim=(1, 2)).numpy()

@@ -20,6 +20,10 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_MIN_EPISODES,
     DEFAULT_ROLLOUT_WORKERS,
     DEFAULT_SEED,
+    STEER_BOOST_FACTOR,
+    STEER_BOOTSTRAP,
+    STEER_CONTROLS,
+    STEER_TOP_FEATURES,
 )
 
 if TYPE_CHECKING:
@@ -241,6 +245,13 @@ def run(
         bool,
         typer.Option("--steer", help="Turn on the playground in the viewer: edit features and watch the prediction move."),
     ] = False,
+    no_cache: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache",
+            help="Run every forward pass even when the activation cache has it (see `ii cache`). Nothing is read from or written to the cache.",
+        ),
+    ] = False,
 ) -> None:
     """Capture, train, extract features, score what is missing, then serve the viewer.
 
@@ -274,6 +285,7 @@ def run(
             port=port,
             open_browser=not no_open,
             steer=steer,
+            use_cache=not no_cache,
             log=typer.echo,
         )
     except (ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
@@ -281,6 +293,43 @@ def run(
         raise typer.Exit(code=1) from exc
 
 
+@app.command("cache")
+def cache_cmd(
+    clear: Annotated[bool, typer.Option("--clear", help="Delete every cached activation.")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the summary as JSON.")] = False,
+) -> None:
+    """Show (or clear) the activation cache that lets reruns and the playground skip forward passes.
+
+    Entries are keyed by model weights, layer, clip hash, window and preprocessing, so a stale
+    entry is never read. Set II_ACTS_CACHE to move the cache, or II_ACTS_CACHE=off to disable it.
+    The size is capped at II_ACTS_CACHE_MAX_GB (default 20, 0 for no cap); the least recently
+    used windows are deleted first.
+    """
+    from interpretableintelligence.act_cache import cache_usage, clear_cache, resolve_max_bytes, resolve_root
+
+    root = resolve_root()
+    try:
+        cap = resolve_max_bytes()
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if clear:
+        removed = clear_cache(root)
+        typer.echo(f"removed {removed} cached window(s) from {root}" if root is not None else "activation cache off")
+        return
+    usage = cache_usage(root)
+    usage["max_bytes"] = cap
+    if as_json:
+        typer.echo(json.dumps(usage, indent=2))
+        return
+    if root is None:
+        typer.echo("activation cache off (II_ACTS_CACHE=off)")
+        return
+    typer.echo(f"activation cache: {root}")
+    for kind, info in usage["kinds"].items():
+        typer.echo(f"  {kind:<6} {info['entries']:>7} window(s)  {info['bytes'] / 1e6:10.1f} MB")
+    typer.echo(f"  total  {usage['entries']:>7} window(s)  {usage['bytes'] / 1e6:10.1f} MB")
+    typer.echo(f"  cap    {'none' if cap is None else f'{cap / 1e9:g} GB'} (II_ACTS_CACHE_MAX_GB; least recently used windows go first)")
 
 
 @app.command()
@@ -312,12 +361,16 @@ def rank(
         ),
     ] = None,
     objective: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--objective",
-            help="prediction_loss, action_loglik, or activation (magnitude baseline). The result is a shortlist.",
+            help=(
+                "prediction_loss, output_sensitivity, action_loglik, or activation (magnitude baseline). "
+                "Default: the adapter's own (output_sensitivity for hf and groot, else prediction_loss). "
+                "The result is a shortlist."
+            ),
         ),
-    ] = "prediction_loss",
+    ] = None,
 ) -> None:
     """Rank SAE features. Does not ablate; every pick still needs a real ablation."""
     from interpretableintelligence.run import execute_rank
@@ -492,6 +545,58 @@ def rollouts(
         raise typer.Exit(code=1) from exc
     typer.echo(format_report(summary))
     typer.echo(f"wrote {run_dir / 'rollouts'}")
+
+
+@app.command("steer-scorecard")
+def steer_scorecard_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder. The scorecard is written under steering/.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Directory of clip files. Overrides a clip path recorded in the manifest."),
+    ] = None,
+    features: Annotated[
+        str,
+        typer.Option(
+            "--features",
+            help="Comma-separated feature ids. Default: the top verified (real) features. Unverified ids are measured and recorded as unverified.",
+        ),
+    ] = "",
+    top: Annotated[int, typer.Option("--top", min=1, help="How many verified features to score when --features is omitted.")] = STEER_TOP_FEATURES,
+    boost: Annotated[float, typer.Option("--boost", help="Scale factor for the boost edit. Remove is always scale 0.")] = STEER_BOOST_FACTOR,
+    controls: Annotated[int, typer.Option("--controls", min=1, help="Matched random-feature controls per edit.")] = STEER_CONTROLS,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for control directions, placements and the bootstrap.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Bootstrap resamples of held-out episodes for the intervals.")] = STEER_BOOTSTRAP,
+    max_episodes: Annotated[
+        int | None,
+        typer.Option("--max-episodes", min=1, help="Score only the first N held-out clips (sorted by id)."),
+    ] = None,
+) -> None:
+    """Steering scorecard: remove and boost top features on held-out clips, against matched random controls.
+
+    For GR00T this measures how much, and how reliably, the planned action chunk moves. It never changes
+    scoreboard.json or a badge, and it is not a rollout finding.
+    """
+    from interpretableintelligence.explain import ExplainError
+    from interpretableintelligence.steer_scorecard import execute_steer_scorecard, format_report, parse_feature_ids
+
+    try:
+        card = execute_steer_scorecard(
+            run_dir,
+            clips_dir=clips,
+            features=parse_feature_ids(features) or None,
+            top=top,
+            boost=boost,
+            controls=controls,
+            seed=seed,
+            bootstrap=bootstrap,
+            max_episodes=max_episodes,
+            log=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ExplainError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(format_report(card))
+    typer.echo(f"wrote {run_dir / 'steering'}")
 
 
 @app.command("export")
