@@ -52,7 +52,6 @@ import json
 import math
 import re
 import struct
-import subprocess
 import tempfile
 import threading
 import webbrowser
@@ -498,6 +497,52 @@ def enable_steering(model: RunModel, clips_dir: Path | None = None) -> None:
     model.run_payload = {**model.run_payload, "steer": {"enabled": True, "sae_usable": model.steerer.sae_usable}}
 
 
+def viewer_ready(run_dir: Path) -> bool:
+    """True once ``run_dir`` has the files ``load_run`` needs."""
+    return all((Path(run_dir) / rel).is_file() for rel in _REQUIRED)
+
+
+class LiveRun:
+    """A run folder that is still filling in, served as if it were a finished one.
+
+    ``ii run --remote`` writes stages into the folder while the viewer is up. ``reload`` loads the
+    folder again and swaps it in; every other attribute is the current ``RunModel``'s. ``/api/run``
+    gains a ``live`` object (remote status plus a ``generation`` that goes up on each reload) so the
+    page can show progress and refresh itself when new results land.
+    """
+
+    def __init__(self, run_dir: Path, clips_dir: Path | None, live: dict) -> None:
+        self._lock = threading.Lock()
+        self._run_dir = Path(run_dir)
+        self._clips_dir = None if clips_dir is None else Path(clips_dir)
+        self._live = dict(live)
+        self._generation = 0
+        self._current = load_run(self._run_dir, self._clips_dir)
+
+    def __getattr__(self, name: str):
+        return getattr(object.__getattribute__(self, "_current"), name)
+
+    @property
+    def run_payload(self) -> dict:
+        with self._lock:
+            current, live, generation = self._current, dict(self._live), self._generation
+        return {**current.run_payload, "live": {**live, "generation": generation}}
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def reload(self) -> None:
+        fresh = load_run(self._run_dir, self._clips_dir)
+        with self._lock:
+            self._current = fresh
+            self._generation += 1
+
+    def update(self, **fields) -> None:
+        with self._lock:
+            self._live.update(fields)
+
+
 def bind_server(model: RunModel, host: str, port: int) -> ThreadingHTTPServer:
     httpd = _Server((host, port), _handler(model))
     return httpd
@@ -694,6 +739,7 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
     extra = manifest.get("extra") if isinstance(manifest.get("extra"), dict) else None
     features, viz = _feature_index(scoreboard, labels, candidates, run_dir)
     moments = _read_moments(run_dir / "heldout_loss.json")
+    steering = _read_optional_json(run_dir / "steering" / "scorecard.json")
     pixels = _resolve_pixels(manifest, run_dir, None if clips_dir is None else Path(clips_dir))
     manifest_clips: dict[str, dict] = {}
     loaded: dict[str, LoadedClip] = {}
@@ -744,6 +790,7 @@ def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
         "clips": list(meta.values()),
         "features": features,
         "moments": moments,
+        "steering": steering if isinstance(steering, dict) and isinstance(steering.get("rows"), list) else None,
     }
     model = RunModel(
         run_payload=run_payload,
@@ -1701,84 +1748,100 @@ def _transcode_cache(path: Path) -> Path:
 
 
 def _transcode_to_mp4(src: Path, dest: Path) -> None:
+    """Re-encode ``src`` to an H.264 mp4 a browser plays, with PyAV (a core dependency; no ffmpeg CLI).
+
+    Display rotation is applied, audio is dropped, and the moov atom goes first so the browser can
+    start playing before the whole file arrives.
+    """
+    import av  # noqa: PLC0415 (only video clips need it)
+
     temporary = dest.with_suffix(".part.mp4")
-    command = [
-        "ffmpeg",
-        "-y",
-        "-v",
-        "error",
-        "-i",
-        str(src),
-        "-an",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
-        str(temporary),
-    ]
     try:
-        subprocess.run(command, check=True, capture_output=True, timeout=120)
-    except (OSError, subprocess.SubprocessError) as exc:
+        with av.open(str(src)) as source, av.open(
+            str(temporary), mode="w", format="mp4", options={"movflags": "+faststart"}
+        ) as sink:
+            stream = source.streams.video[0]
+            stream.thread_type = "AUTO"
+            rate = stream.average_rate or 30
+            out = None
+            for frame in source.decode(stream):
+                image = _rotated(frame.to_ndarray(format="rgb24"), frame)
+                # yuv420p needs even dimensions; drop a trailing odd row or column.
+                image = image[: image.shape[0] // 2 * 2, : image.shape[1] // 2 * 2]
+                if out is None:
+                    out = sink.add_stream("libx264", rate=rate)
+                    out.pix_fmt = "yuv420p"
+                    out.height, out.width = int(image.shape[0]), int(image.shape[1])
+                encoded = av.VideoFrame.from_ndarray(np.ascontiguousarray(image), format="rgb24")
+                for packet in out.encode(encoded):
+                    sink.mux(packet)
+            if out is None:
+                raise ValueError("no video frames")
+            for packet in out.encode():
+                sink.mux(packet)
+    except Exception as exc:  # noqa: BLE001 (any decode or encode failure is reported the same way)
         temporary.unlink(missing_ok=True)
-        detail = exc.stderr.decode("utf-8", "replace") if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-        raise RuntimeError(f"ffmpeg could not transcode {src.name}: {detail.strip()}") from exc
+        raise RuntimeError(f"could not transcode {src.name}: {exc}") from exc
     temporary.replace(dest)
 
 
+def _rotated(image: np.ndarray, frame) -> np.ndarray:
+    """Apply a frame's display rotation, as ``clips.decode_video`` does."""
+    rotation = getattr(frame, "rotation", 0) or 0
+    if rotation:
+        image = np.rot90(image, k=int(round(rotation / 90)) % 4)
+    return np.ascontiguousarray(image)
+
+
 def _probe_video(path: Path) -> tuple[int | None, int | None]:
-    command = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=width,height",
-        "-of",
-        "csv=p=0:s=x",
-        str(path),
-    ]
+    """Stored width and height of the first video stream, or ``(None, None)`` if it cannot be read."""
     try:
-        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
+        import av  # noqa: PLC0415
+
+        with av.open(str(path)) as container:
+            stream = container.streams.video[0]
+            width, height = int(stream.width), int(stream.height)
+    except Exception:  # noqa: BLE001
         return None, None
-    text = result.stdout.strip()
-    if result.returncode != 0 or "x" not in text:
-        return None, None
-    width, _, height = text.partition("x")
-    if width.isdigit() and height.isdigit():
-        return int(width), int(height)
+    if width > 0 and height > 0:
+        return width, height
     return None, None
 
 
 def _video_frame_png(path: Path, frame: int, fps: float) -> bytes | None:
+    """PNG of the first decoded frame at or after ``frame / fps`` seconds, or ``None`` past the end.
+
+    It is that exact frame, not the previous keyframe: decoding seeks to the keyframe before the
+    timestamp and then runs forward.
+    """
     timestamp = max(frame, 0) / fps if fps else 0.0
-    # -ss after -i so the thumbnail is that frame, not the previous keyframe.
-    command = [
-        "ffmpeg",
-        "-v",
-        "error",
-        "-i",
-        str(path),
-        "-ss",
-        f"{timestamp:.4f}",
-        "-frames:v",
-        "1",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "png",
-        "pipe:1",
-    ]
     try:
-        result = subprocess.run(command, check=False, capture_output=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
+        import av  # noqa: PLC0415
+
+        with av.open(str(path)) as container:
+            stream = container.streams.video[0]
+            base = stream.time_base
+            start = float(stream.start_time * base) if stream.start_time is not None and base else 0.0
+            for seek in (True, False):
+                if seek:
+                    if not base or timestamp <= 0:
+                        continue
+                    container.seek(int((start + timestamp) / base), stream=stream, backward=True)
+                else:
+                    container.seek(0)
+                for index, decoded in enumerate(container.decode(stream)):
+                    at = float(decoded.time) - start if decoded.time is not None else None
+                    if at is None:
+                        at = index / fps if fps else 0.0
+                    if seek and index == 0 and at > timestamp + 1e-6:
+                        break  # landed past the target; decode from the start instead
+                    if at + 1e-6 >= timestamp:
+                        return encode_png(_rotated(decoded.to_ndarray(format="rgb24"), decoded))
+                else:
+                    return None
+    except Exception:  # noqa: BLE001
         return None
-    if result.returncode != 0 or not result.stdout.startswith(b"\x89PNG"):
-        return None
-    return result.stdout
+    return None
 
 
 def _file_sha256(path: Path) -> str:

@@ -159,16 +159,49 @@ def test_viewer_route_is_off_by_default_and_answers_when_enabled(demo):
 
 
 def _chrome() -> str | None:
+    """A Chrome or Chromium binary for the browser tests, or ``None`` (the test then skips).
+
+    ``II_CHROME`` wins. Otherwise: an installed Chrome or Chromium (macOS or Linux), then a
+    Chromium that ``playwright install chromium`` downloaded (``PLAYWRIGHT_BROWSERS_PATH``, else
+    Playwright's default cache directory).
+    """
+    import os
+    import sys
     from pathlib import Path
 
-    for candidate in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/local/bin/google-chrome", "/usr/bin/google-chrome", "/usr/bin/chromium", "/opt/pw-browsers/chromium"):
-        path = Path(candidate)
-        if path.is_file():
-            return str(path)
-        if path.is_dir():
-            found = sorted(path.glob("chrome-linux*/chrome"))
+    forced = os.environ.get("II_CHROME")
+    if forced:
+        return forced if Path(forced).is_file() else None
+    for candidate in (
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/usr/local/bin/google-chrome",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "/opt/pw-browsers"]
+    if sys.platform == "darwin":
+        roots.append(str(Path.home() / "Library" / "Caches" / "ms-playwright"))
+    else:
+        roots.append(str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "ms-playwright"))
+    patterns = (
+        "chromium-*/chrome-linux*/chrome",
+        "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
+        "chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        "chromium/chrome-linux*/chrome",
+        "chrome-linux*/chrome",
+    )
+    for root in roots:
+        if not root or not Path(root).is_dir():
+            continue
+        for pattern in patterns:
+            found = sorted(Path(root).glob(pattern))
             if found:
-                return str(found[0])
+                return str(found[-1])
     return None
 
 

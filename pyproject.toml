@@ -7,6 +7,7 @@ name = "interpretableintelligence"
 version = "0.2.0"
 description = "Mechanistic interpretability for physical AI models: shared run format, scoring core, and causal rollouts."
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "av>=18.1.0",
@@ -27,6 +28,8 @@ dependencies = [
 # install and this extra both stay free of simulators and GPU packages.
 # The adapters are stubs until that lane lands.
 robots = []
+# `ii run --remote`: the Modal client. Runs bill to your own Modal account (docs/REMOTE.md).
+remote = ["modal>=1.0"]
 
 [project.scripts]
 interpretableintelligence = "interpretableintelligence.cli:app"
@@ -53,6 +56,7 @@ python_files = ["test_*.py", "*_test.py", "check_*.py", "mock_*.py"]
 addopts = ["-q", "-m", "not slow"]
 markers = [
     "slow: large synthetic runs, or a V-JEPA 2 weight download; skipped unless pytest is run with -m slow",
+    "real_model: downloads real Hugging Face weights and runs ii end to end; CI runs these with -m real_model (.github/workflows/real-model.yml)",
 ]
 filterwarnings = [
     "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",

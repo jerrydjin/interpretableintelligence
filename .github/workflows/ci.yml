@@ -7,13 +7,15 @@ on:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: pytest (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Install ffmpeg
-        # The viewer transcodes avi, mov and mkv clips with ffmpeg; tests/test_view.py exercises that path.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -22,4 +24,42 @@ jobs:
       - name: Test
         env:
           II_DEVICE: cpu
-        run: uv run pytest
+        run: uv run pytest -rs
+
+  quickstart:
+    # A newcomer's first run: a fresh runner, every cache empty, and the README Quickstart verbatim
+    # (`git clone` is the checkout; then `uv sync` and `uv run ii try`, inside the script).
+    # tests/test_quickstart_docs.py keeps the README, this job and the script in step.
+    name: README quickstart (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start from empty caches
+        # uv's package cache, uv-managed Pythons (only-managed: uv fetches its own Python, as on a
+        # Mac whose system Python is 3.9), Hugging Face, and the activation cache all point at new,
+        # empty directories. No II_* or HF_* setting is carried in.
+        run: |
+          fresh="$RUNNER_TEMP/fresh"
+          rm -rf "$fresh" && mkdir -p "$fresh"
+          {
+            echo "UV_CACHE_DIR=$fresh/uv-cache"
+            echo "UV_PYTHON_INSTALL_DIR=$fresh/uv-python"
+            echo "UV_PYTHON_PREFERENCE=only-managed"
+            echo "HF_HOME=$fresh/huggingface"
+            echo "XDG_CACHE_HOME=$fresh/xdg-cache"
+          } >> "$GITHUB_ENV"
+          env | grep -E '^(II_|HF_|HUGGINGFACE_|TRANSFORMERS_)' && exit 1 || true
+          test ! -e .venv
+      - name: Install uv the way the README says
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: uv sync && uv run ii try
+        run: |
+          uv --version
+          bash scripts/quickstart_smoke.sh
