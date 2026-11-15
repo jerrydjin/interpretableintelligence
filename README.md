@@ -4,7 +4,7 @@
 
 A feature is marked `real` only when the SAE is good enough to splice back into the predictor and the feature passes four checks: it fires across clips, its label holds on held-out clips, its ablation effect beats matched random features, and a randomly initialised copy of the model does not reproduce its firing pattern. A missing check is `null`, and `null` never counts as a pass.
 
-`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings any ViT-style Hugging Face image or video model by name (see below). `groot` is NVIDIA's GR00T N1.7 robot policy through LeRobot. pi0.5 is still a later lane.
+`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings a Hugging Face vision model by name: ViT-style and video encoders, CNNs, the vision tower of CLIP, SigLIP and VLMs, and SmolVLA-style robot policies (see below). `groot` is NVIDIA's GR00T N1.7 robot policy through LeRobot. pi0.5 is still a later lane.
 
 `interpretableintelligence rollouts` is the causal check on a policy. It runs paired baseline and intervention episodes, plus matched random-feature controls, and writes `rollouts/` into the run folder (schema version 1). The fake policy is a reacher whose planted feature drops success from about 0.80 to about 0.30 when ablated; other features do not move it. LIBERO, OpenVLA, and pi0.5 sit behind the optional `robots` extra as stubs. That extra installs no simulator and no GPU package.
 
@@ -25,7 +25,18 @@ You need git and [uv](https://docs.astral.sh/uv/getting-started/installation/) (
 
 `ii try` writes 30 practice clips to `clips/try`, runs the whole pipeline on the `fake` model into `runs/try` (about 15 seconds on a laptop), and opens the viewer with the playground on. The page starts on the verified feature with the biggest effect, at the held-out moment where it fires hardest, and the terminal suggests what to try first: remove that feature, then remove a decoy and compare. The practice model has three features planted on purpose, so you can check what the tool finds against the truth before you point it at a real model. A second `ii try` reuses the run and opens in a couple of seconds. `--no-open` skips the browser and `--verbose` prints the full pipeline log.
 
-The rest of this section is the same pipeline step by step.
+Then try a real model on real video. You do not need clips of your own:
+
+```bash
+uv run ii get-clips --out clips/droid          # 100 short robot clips from DROID (MIT), one 175 MB download
+uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid --no-score --steer
+```
+
+`--no-score --steer` gets you to the playground fastest (about 10 minutes on a laptop CPU): every feature is explorable, but none is verified yet. Run the same command without `--no-score` to add the checks; it reuses what is done. Scoring a real model is the slow part, up to an hour on a CPU, and it now prints progress with a time estimate as it goes.
+
+`ii get-clips` cuts a 4-second mp4 from the middle of each of the 100 episodes in [`lerobot/droid_100`](https://huggingface.co/datasets/lerobot/droid_100), real robot arms in real kitchens and offices, and keeps each episode's instruction in `clips/droid/clips.json`. `--n` and `--seconds` take fewer or longer clips. Any folder of your own mp4s works in its place.
+
+The rest of this section is the fake pipeline step by step.
 
 ```bash
 uv sync
@@ -93,7 +104,16 @@ uv run ii run hf --model facebook/dinov2-small --clips clips/mine --out runs/din
 uv run ii view runs/dinov2 --clips clips/mine --steer
 ```
 
-`--model` is a Hub id or a local directory (anything `AutoModel` loads that takes `pixel_values` or `pixel_values_videos`: ViT, DINOv2, VideoMAE, V-JEPA 2 and similar). The run records the adapter as `hf:<model>`, so `explain` and the playground reload the same model later. `--layer` is the 1-indexed block output (`hidden_states[layer]`) and defaults to the middle block. The block list is detected from `config.num_hidden_layers`; `--blocks encoder.layer` picks it by hand.
+`--model` is a Hub id or a local directory. What works:
+
+| Kind | Examples | What gets hooked |
+| --- | --- | --- |
+| ViT-style image or video encoder | `facebook/dinov2-small`, `WinKawaks/vit-tiny-patch16-224`, `MCG-NJU/videomae-base` | Patch tokens of a transformer block |
+| Image-text model or VLM | `openai/clip-vit-base-patch32`, `google/siglip-base-patch16-224`, `HuggingFaceTB/SmolVLM-256M-Instruct` | The vision tower only; the text side is dropped |
+| Convolutional model | `microsoft/resnet-18`, `facebook/convnext-tiny-224` | A stage's feature map, one token per map cell; the readout is the final map resized to that grid |
+| LeRobot policy with a frozen VLM vision encoder | `lerobot/smolvla_base` | The vision tower of its backbone (`vlm_model_name`), which is exactly what the policy sees |
+
+Anything else stops before downloading weights with the reason and what to try: text-only models, wrong ids, gated repos (accept the licence, then `hf auth login`), and other LeRobot policies (use `ii run groot`, or point `--model` at the policy's vision backbone). The run records the adapter as `hf:<model>`, so `explain` and the playground reload the same model later. `--layer` is the 1-indexed block output (`hidden_states[layer]`) and defaults to the middle block (for CNNs, the second-to-last stage, 14x14 at 224 px). The block list is detected from the vision config's depth; `--blocks encoder.layer` picks it by hand.
 
 A generic encoder has no masked-prediction head, so for `hf` the "prediction" is the model's own final patch tokens. Every token is scored, the target is the clean output, and the visible-mean baseline replaces every token with the average token. An ablation effect therefore reads as "how far does removing this feature move the model's output". Image models see each sampled frame (8 by default) as its own image; video models see the window at once. Frames are resized to the model's square input without cropping, so the heatmap covers the whole frame. The input side comes from the model's preprocessor config when the model accepts it (DINOv2: 224 px, although its config says 518), else from the model config. Prefix tokens (CLS, registers) pass through unedited.
 
@@ -140,6 +160,28 @@ uv run pytest
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
 
 `uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust read-API parity tests need `cargo` (https://rustup.rs); and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
+
+### Compare models on the same clips
+
+```bash
+uv run python scripts/make_libero_clips.py --out clips/libero-moments   # 148 LIBERO moments with GR00T sidecars
+uv run ii run hf --model facebook/dinov2-small --clips clips/libero-moments --out runs/cmp-dinov2 --no-serve
+uv run ii run groot --clips clips/libero-moments --out runs/cmp-groot --sae-features 512 --no-serve
+uv run ii compare runs/cmp-dinov2 runs/cmp-groot --out site/compare
+```
+
+Each LIBERO clip is 16 frames, so a vision model and GR00T read it as exactly one window and see the same moment. `ii compare` takes each feature's largest activation in each shared clip (clips are matched by file hash), pairs features across models that are each other's best partner by Pearson r, and keeps a pair only if r beats the 99th percentile of the best r after shuffling clip order. It writes `compare.json` and a static `index.html`. A match is correlational. Only scoreboard-`real` features are marked verified; a run that has not been scored can still be compared, and all its features show as exploratory. When clips carry GR00T sidecars, each shared concept is described by the instruction most of its top moments come from; otherwise by a CLIP hint, which is a reading aid and never a label.
+
+`vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. `II_THREADS=N` lets a CPU-only run use N threads at the cost of bit-reproducibility.
+
+### No GPU? Run on a hosted one
+
+```bash
+uv sync --extra remote && uv run modal setup     # once
+uv run ii run hf --model facebook/dinov2-small --clips clips/mine --out runs/dinov2 --remote
+```
+
+`--remote` runs the same pipeline on a [Modal](https://modal.com) GPU on your own account (default `--gpu L4`, about $1.12/h with its CPU and memory) and mirrors each finished stage into `--out`. The local viewer opens once features exist and refreshes itself when scores land, with a status pill showing the GPU, the stage, and the spend so far. `--max-cost` (default $2.00) becomes the container's timeout, so the cap holds on Modal's side even if this machine disconnects. The estimate and the run's details are written to `runs/<run_id>/remote.json`. Clips upload once, weights are cached, and a rerun resumes remotely. Setup, prices, and limits: [docs/REMOTE.md](docs/REMOTE.md).
 
 ### Share a run as a static page
 

@@ -109,6 +109,30 @@ def _loss(mse: torch.Tensor, features: torch.Tensor, model: SAE, config: SAEConf
     return loss
 
 
+def untrained_sae(config: SAEConfig, mean: torch.Tensor, device: torch.device) -> SAE:
+    """The SAE that training starts from, seeded by ``config.seed``, with no optimiser step.
+
+    A unit-norm Gaussian decoder, the encoder tied to its transpose, a zero encoder bias, and
+    ``b_dec`` at ``mean`` (the train-row mean). :func:`train_sae` and
+    :func:`train_sae_fetched` start here, so an untrained SAE is the trained one's own
+    initialisation, not a lookalike. The rollout lane's random-weights SAE control
+    (``ii rollouts --random-sae``) edits with these weights. It leaves torch's global RNG
+    at the same point the training loop then continues from.
+    """
+    if int(mean.shape[0]) != config.d_model:
+        raise ValueError(f"d_model {config.d_model} != mean {tuple(mean.shape)}")
+    torch.manual_seed(config.seed)
+    model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
+    with torch.no_grad():
+        decoder = torch.randn(config.d_model, config.n_features, device=device)
+        decoder = decoder / decoder.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        model.W_dec.copy_(decoder)
+        model.W_enc.copy_(decoder.T)
+        model.b_enc.zero_()
+        model.b_dec.copy_(mean.detach().to(device=device, dtype=torch.float32))
+    return model
+
+
 def train_sae(
     activations: torch.Tensor,
     config: SAEConfig,
@@ -123,16 +147,8 @@ def train_sae(
     if activations.shape[0] < 2:
         raise ValueError("need at least 2 activation rows to train an SAE")
 
-    torch.manual_seed(config.seed)
     data = activations.detach().to(device=device, dtype=torch.float32)
-    model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
-    with torch.no_grad():
-        decoder = torch.randn(config.d_model, config.n_features, device=device)
-        decoder = decoder / decoder.norm(dim=0, keepdim=True).clamp(min=1e-8)
-        model.W_dec.copy_(decoder)
-        model.W_enc.copy_(decoder.T)
-        model.b_enc.zero_()
-        model.b_dec.copy_(data.mean(dim=0))
+    model = untrained_sae(config, data.mean(dim=0), device)
 
     opt = torch.optim.Adam(model.parameters(), lr=config.lr)
     n = data.shape[0]
@@ -182,15 +198,7 @@ def train_sae_fetched(
     if int(mean.shape[0]) != config.d_model:
         raise ValueError(f"d_model {config.d_model} != mean {tuple(mean.shape)}")
 
-    torch.manual_seed(config.seed)
-    model = SAE(config.d_model, config.n_features, config.activation, config.k).to(device)
-    with torch.no_grad():
-        decoder = torch.randn(config.d_model, config.n_features, device=device)
-        decoder = decoder / decoder.norm(dim=0, keepdim=True).clamp(min=1e-8)
-        model.W_dec.copy_(decoder)
-        model.W_enc.copy_(decoder.T)
-        model.b_enc.zero_()
-        model.b_dec.copy_(mean.detach().to(device=device, dtype=torch.float32))
+    model = untrained_sae(config, mean, device)
 
     opt = torch.optim.Adam(model.parameters(), lr=config.lr)
     batch = min(config.batch_size, n_rows)

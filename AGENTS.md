@@ -6,7 +6,7 @@ Shared rules for Claude Code, Codex, and other coding agents working in this rep
 
 **interpretableintelligence** (`ii`) is infrastructure for mechanistic interpretability on video world models and robot / VLA policies: a shared **run folder** format, SAE training, offline scoreboard gates, local viewers, and causal rollouts.
 
-The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, the generic `hf:<model>` adapter (any ViT-style Hugging Face vision model, `ii run hf --model <id>`), and `groot:<checkpoint>` (NVIDIA GR00T N1.7 through LeRobot, `ii run groot`; needs `lerobot[groot]==0.7.0`, and `--tiny` is a random-weights stand-in for tests). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
+The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, the generic `hf:<model>` adapter (any Hugging Face vision model: ViT-style, CNN, the vision tower of CLIP/SigLIP/VLMs, or a SmolVLA-style policy's frozen encoder; `ii run hf --model <id>`), and `groot:<checkpoint>` (NVIDIA GR00T N1.7 through LeRobot, `ii run groot`; needs `lerobot[groot]==0.7.0`, and `--tiny` is a random-weights stand-in for tests). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
 
 Contract details: `SCHEMA.md`, `ARCHITECTURE.md`, `README.md`. Do not drift from them in agent docs.
 
@@ -32,7 +32,8 @@ All experiments that belong in this repo should be reachable through these comma
 | --- | --- |
 | `try` | Guided first run for newcomers: practice clips, a `fake` run under `runs/try`, then the playground opened on the strongest verified feature. |
 | `generate-clips` | Write deterministic synthetic clips for the `fake` adapter. |
-| `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). |
+| `get-clips` | Download short real robot clips (DROID, MIT licence) to run a real model on, for learners with no video of their own. |
+| `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). `--remote` runs it on a Modal GPU billed to the invoking user's account and streams results back (`docs/REMOTE.md`). |
 | `rank` | Attribution prefilter shortlist; does not replace ablation. |
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
 | `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
@@ -40,6 +41,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls; effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
+| `compare` | Match SAE features across runs on the same clips (activation correlation, shuffle null): which concepts models share and which are unique. Writes `compare.json` and a static page. |
 | `validate` | Check a run folder against `SCHEMA.md`. |
 | `cache` | Show or clear the shared activation cache (keyed by model, layer, clip hash, window, preprocessing) that lets reruns and the playground skip forward passes. Not part of the run contract. |
 | `view` | Local browser viewer for a finished run. `--steer` adds the playground (steer SAE features, see the prediction move; exploration only, never evidence). |
@@ -86,7 +88,7 @@ These override intuition, offline plots, and demo-site copy.
 1. The **Sobel–Wald SPRT** stop rule calls a **rise** (not merely a fall or cap).
 2. The rise over the measured baseline on those seeds has **McNemar p < 0.05**.
 3. The effect **beats every matched random control** arm in the plan.
-4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. **Not implemented in the repo yet** (no `ii` command; known gap).
+4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. On `ii`: `ii rollouts --pick N` (with `--random-sae K`, default 5 with `--pick`) picks the candidates and each untrained SAE's features with the same picker and marks a candidate `finding: true` only when it is `causal` and strictly above every random-SAE arm (`SCHEMA.md`, "Random-weights SAE control"). It runs on any policy that sets `random_dictionaries`; the `fake` policies do. **GR00T does not yet** (known gap): its policy has to edit an untrained SAE and bring its picker as `pick_features`.
 
 **`recon_only` (groot ablation plans):** sanity check only—the hook applies SAE reconstruction with **no latent ablation** (empty edit set). On task 1028 it was **8/8 bit-identical to baseline**. This verifies the hook path; it is **not** the random-weights SAE control and does not satisfy rule 4.
 
@@ -94,15 +96,15 @@ These override intuition, offline plots, and demo-site copy.
 
 **How to run work:**
 
-- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. Until GR00T rollouts and the random-weights SAE control land on `ii`, the v9 adapter path above is the documented exception (known gap).
+- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. Until GR00T rollouts land on `ii` with the random-weights SAE control, the v9 adapter path above is the documented exception (known gap).
 - **Never edit `split.json` or held-out labels** in an existing run.
-- **No paid compute** on behalf of this repo (no cloud GPU rental, etc.). GR00T rollouts use existing Colab/box paths under `adapters/groot/`.
+- **No paid compute** on behalf of this repo (no cloud GPU rental, etc.). GR00T rollouts use existing Colab/box paths under `adapters/groot/`. `ii run --remote` is a user feature that bills the user's own Modal account; agents do not run it unless the user asks for that run. Its tests use the in-process `LocalBackend` and never reach Modal.
 
 ## Git workflow
 
 - **Never push to `main`.** Branch from latest `main`, one topic per branch (for example `claude/<topic>`).
 - Open a PR against `main`; the repo owner (**@jerrydjin**) reviews and merges.
-- Keep PRs small; **`uv run pytest` must stay green** before you push. CI (`.github/workflows/ci.yml`) runs the same suite on every PR.
+- Keep PRs small; **`uv run pytest` must stay green** before you push. CI (`.github/workflows/ci.yml`) runs the same suite on every PR. `.github/workflows/real-model.yml` also runs one real Hugging Face model (DeiT-tiny) through `ii run hf` end to end on every PR (`uv run pytest -m real_model`; downloads weights, so it is not in the default suite).
 
 Docs-only PRs are fine; do not touch `scoreboard.json`, `split.json`, held-out labels, or committed run artifacts.
 

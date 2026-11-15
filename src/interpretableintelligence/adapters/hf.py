@@ -34,6 +34,18 @@ What "prediction" means here
 
 Frames are resized to the model's square input with no crop, so the token
 grid covers the whole frame and the viewer overlay lines up with the clip.
+
+What else it accepts
+    - Image-text models and VLMs (CLIP, SigLIP, SmolVLM, PaliGemma): only the
+      vision tower is hooked, so ``--model openai/clip-vit-base-patch32``
+      just works.
+    - Convolutional models (ResNet, ConvNeXt): a "block" is a stage, its
+      ``[batch, channels, h, w]`` map is the token grid, and the readout is
+      the final map resized to that grid.
+    - LeRobot policies with a frozen VLM vision encoder (SmolVLA): the
+      encoder is the backbone's, so the backbone's vision tower is used.
+
+Anything else fails early with a message saying why and what to try.
 """
 
 from __future__ import annotations
@@ -41,6 +53,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -84,11 +97,17 @@ def make_spec(model: str, blocks: str | None = None) -> str:
 
 
 def middle_block(spec: str) -> int:
-    """The middle transformer block, 1-indexed. Mid-depth features tend to be the most legible."""
-    from transformers import AutoConfig
+    """A sensible default layer, 1-indexed.
 
+    Transformers: the middle block (mid-depth features tend to be the most
+    legible). Convolutional models: the second-to-last stage, the deepest map
+    that still keeps a usable spatial grid (14x14 at 224 pixels).
+    """
     model, _blocks = parse_spec(spec)
-    depth = int(getattr(AutoConfig.from_pretrained(model), "num_hidden_layers", 2) or 2)
+    vision = _vision_config(load_config(model)[0])
+    depth = _depth(vision)
+    if _is_conv(vision):
+        return max(1, depth - 1)
     return max(1, depth // 2)
 
 
@@ -150,35 +169,55 @@ class HFAdapter:
         return Grid(t=self._t, h=self._h, w=self._w, tubelet=self._tubelet, patch_px=self._patch)
 
     def load(self, random_init: bool = False) -> None:
-        from transformers import AutoConfig, AutoModel
+        from transformers import AutoModel
 
-        config = AutoConfig.from_pretrained(self.model_name)
+        config, source = load_config(self.model_name)
         if random_init:
             torch.manual_seed(0)
             model = _with_fast_attention(lambda attn: AutoModel.from_config(config, attn_implementation=attn))
         else:
-            model = _with_fast_attention(
-                lambda attn: AutoModel.from_pretrained(self.model_name, attn_implementation=attn, dtype=torch.float32)
-            )
+            # A checkpoint can lack some of the backbone's weights: an ImageNet
+            # classifier (DeiT, ViT) loaded as AutoModel has a classifier head but
+            # no pooler. transformers initialises what is missing at random, so
+            # without a fixed seed every load gets a different model_sha and the
+            # playground and explain refuse the run. Fork the RNG so this does
+            # not reseed the caller.
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(0)
+                model = _with_fast_attention(
+                    lambda attn: AutoModel.from_pretrained(source, attn_implementation=attn, dtype=torch.float32)
+                )
+        vision = _vision_config(config)
+        if vision is not config:
+            model = _vision_tower(model, source)
         model = model.to(device=self.device, dtype=torch.float32).eval()
         model.requires_grad_(False)
         self.model = model
+        self._source = source
         self._random_init = bool(random_init)
         self._cache.clear()
-        self._bind(config)
+        self._bind(vision)
 
     def _bind(self, config) -> None:
         assert self.model is not None
         self._blocks = _find_blocks(self.model, config, self.blocks_path)
         if self.layer > len(self._blocks):
             raise ValueError(f"{self.model_name} has {len(self._blocks)} blocks; layer {self.layer} does not exist")
-        size = _pair(getattr(config, "image_size", None) or getattr(config, "crop_size", None))
-        patch = _pair(getattr(config, "patch_size", None))
-        if size is None or patch is None:
-            raise ValueError(f"{self.model_name} config has no image_size/crop_size and patch_size; is it a ViT-style vision model?")
-        if size[0] != size[1] or patch[0] != patch[1]:
-            raise ValueError(f"{self.model_name} needs square images and patches, got {size} and {patch}")
-        self._patch = int(patch[0])
+        self._conv = _is_conv(config)
+        preprocessor = _preprocessor_config(self._source)
+        native = _pair(getattr(config, "image_size", None) or getattr(config, "crop_size", None))
+        preferred = _input_size(preprocessor)
+        if native is None and self._conv:
+            native = (preferred or 224, preferred or 224)
+        patch = (1, 1) if self._conv else _pair(getattr(config, "patch_size", None))  # a stage's map sets its own grid
+        if native is None or patch is None:
+            raise ValueError(
+                f"{self.model_name} ({type(config).__name__}) has no image_size and patch_size, so it is not a "
+                "ViT-style or convolutional vision model; ii's hf adapter cannot read it"
+            )
+        if native[0] != native[1] or (not self._conv and patch[0] != patch[1]):
+            raise ValueError(f"{self.model_name} needs square images and patches, got {native} and {patch}")
+        self._patch = 1 if self._conv else int(patch[0])
         params = inspect.signature(self.model.forward).parameters
         self._input_key = "pixel_values_videos" if "pixel_values_videos" in params else "pixel_values"
         if self._input_key not in params:
@@ -194,23 +233,21 @@ class HFAdapter:
             self.n_frames = self.image_frames
             self._tubelet = 1
             self._t = self.n_frames
-        preprocessor = _preprocessor_config(self.model_name)
         self._mean, self._std = _norm_stats(preprocessor)
-        native = int(size[0])
-        preferred = _input_size(preprocessor)
+        native_px = int(native[0])
         # The model card's preprocessor size is what the model was trained and is
         # meant to be fed at (DINOv2: config 518, preprocessor 224). Use it when
         # the model accepts it; otherwise fall back to the config size.
-        candidates = [preferred] if preferred and preferred != native and preferred % self._patch == 0 else []
+        candidates = [preferred] if preferred and preferred != native_px and preferred % self._patch == 0 else []
         if candidates and "interpolate_pos_encoding" in params:
             self._extra = {**self._extra, "interpolate_pos_encoding": True}
-        for size_px in [*candidates, native]:
+        for size_px in [*candidates, native_px]:
             self._set_size(size_px)
             try:
                 self._probe()
                 break
             except Exception:  # noqa: BLE001 (a model that cannot take this size falls back to its config size)
-                if size_px == native:
+                if size_px == native_px:
                     raise
                 self._extra.pop("interpolate_pos_encoding", None)
 
@@ -229,6 +266,21 @@ class HFAdapter:
 
         with torch.no_grad():
             self._forward(pixels, raw=grab)
+        if "shape" not in seen:
+            raise RuntimeError(f"{self.model_name}: block {self.layer} never ran; pass hf:<model>#<blocks path>")
+        if len(seen["shape"]) == 4:
+            # Convolutional stage: [batch, channels, h, w]. The map is the grid.
+            batch, width, height, across = seen["shape"]
+            if height != across or self._size % height:
+                raise RuntimeError(f"{self.model_name} stage {self.layer} map {seen['shape']} is not a square grid of {self._size}px")
+            self._layout = "map"
+            self._h = self._w = int(height)
+            self._patch = self._size // int(height)
+            self._prefix = 0
+            self._d_model = int(width)
+            return
+        if len(seen["shape"]) != 3:
+            raise RuntimeError(f"{self.model_name} block output {seen['shape']} is neither tokens nor a feature map")
         batch, n_tokens, width = seen["shape"]
         per_item = (self._t * self._h * self._w) // batch
         prefix = n_tokens - per_item
@@ -236,6 +288,7 @@ class HFAdapter:
             raise RuntimeError(
                 f"{self.model_name} block output {seen['shape']} does not fit a {self._t}x{self._h}x{self._w} patch grid"
             )
+        self._layout = "tokens"
         self._prefix = int(prefix)
         self._d_model = int(width)
 
@@ -337,15 +390,13 @@ class HFAdapter:
                 edited = edit(grid)
                 if tuple(edited.shape) != tuple(grid.shape):
                     raise ValueError(f"edit must return {tuple(grid.shape)}, got {tuple(edited.shape)}")
-                patches = edited.reshape(full.shape[0], -1, full.shape[-1]).to(full.dtype)
-                spliced.append(torch.cat([full[:, : self._prefix], patches], dim=1))
+                spliced.append(self._from_grid(full, edited))
             hidden = torch.cat(spliced, dim=0)
             repeat = [len(chunk)] + [1] * (pixels.dim() - 1)
             outputs = self._forward_after(pixels.repeat(*repeat), hidden)
-            final = outputs.last_hidden_state[:, self._prefix :]
+            final = outputs.last_hidden_state
             for index in range(len(chunk)):
-                rows = final[index * full.shape[0] : (index + 1) * full.shape[0]]
-                out.append(rows.reshape(-1, final.shape[-1]))
+                out.append(self._final_tokens(final[index * full.shape[0] : (index + 1) * full.shape[0]]))
         return out
 
     def visible_mean_baseline(self, clip: Clip, window: Window) -> torch.Tensor:
@@ -438,8 +489,7 @@ class HFAdapter:
             edited = transform(grid)
             if tuple(edited.shape) != tuple(grid.shape):
                 raise ValueError(f"edit must return {tuple(grid.shape)}, got {tuple(edited.shape)}")
-            patches = edited.reshape(hidden.shape[0], -1, hidden.shape[-1]).to(hidden.dtype)
-            new = torch.cat([hidden[:, : self._prefix], patches], dim=1)
+            new = self._from_grid(hidden, edited)
             return (new, *output[1:]) if isinstance(output, tuple) else new
 
         handle = self._blocks[self.layer - 1].register_forward_hook(block_hook)
@@ -466,16 +516,31 @@ class HFAdapter:
                 blocks[index] = module
 
     def _final_tokens(self, outputs) -> torch.Tensor:
-        hidden = getattr(outputs, "last_hidden_state", None)
+        hidden = outputs if isinstance(outputs, torch.Tensor) else getattr(outputs, "last_hidden_state", None)
         if hidden is None:
             raise RuntimeError(f"{type(self.model).__name__} returned no last_hidden_state")
+        if hidden.dim() == 4:
+            # Final feature map, resized to the hooked stage's grid so token i of
+            # the readout sits over token i of the layer.
+            if tuple(hidden.shape[-2:]) != (self._h, self._w):
+                hidden = F.interpolate(hidden, size=(self._h, self._w), mode="bilinear", align_corners=False)
+            return hidden.permute(0, 2, 3, 1).reshape(-1, hidden.shape[1])
         patches = hidden[:, self._prefix :]
         if patches.shape[0] * patches.shape[1] != self._t * self._h * self._w:
             raise RuntimeError(f"final output {tuple(hidden.shape)} does not match the patch grid")
         return patches.reshape(-1, hidden.shape[-1])
 
     def _to_grid(self, hidden: torch.Tensor) -> torch.Tensor:
+        if hidden.dim() == 4:
+            return hidden.permute(0, 2, 3, 1).reshape(self._t, self._h, self._w, hidden.shape[1])
         return hidden[:, self._prefix :].reshape(self._t, self._h, self._w, hidden.shape[-1])
+
+    def _from_grid(self, hidden: torch.Tensor, edited: torch.Tensor) -> torch.Tensor:
+        """``hidden`` with its patch tokens (or map) replaced by the ``[t, h, w, d]`` grid ``edited``."""
+        if hidden.dim() == 4:
+            return edited.reshape(hidden.shape[0], self._h, self._w, -1).permute(0, 3, 1, 2).contiguous().to(hidden.dtype)
+        patches = edited.reshape(hidden.shape[0], -1, hidden.shape[-1]).to(hidden.dtype)
+        return torch.cat([hidden[:, : self._prefix], patches], dim=1)
 
     def _apply_hooks(self, acts: torch.Tensor) -> torch.Tensor:
         edited = acts
@@ -540,6 +605,116 @@ class _Emit(torch.nn.Module):
         return (self.hidden,) if self.tuple_out else self.hidden
 
 
+_NOTED: set[str] = set()
+_TOWER_NAMES = ("vision_model", "vision_tower", "vision_encoder", "visual", "image_encoder")
+
+
+def load_config(model: str):
+    """``(config, source)`` for a model id or directory, with errors a newcomer can act on.
+
+    ``source`` is where weights load from. It differs from ``model`` only for a
+    LeRobot policy whose frozen vision encoder is its VLM backbone's (SmolVLA).
+    """
+    from transformers import AutoConfig
+
+    local = Path(model).expanduser()
+    if not local.exists() and model.count("/") > 1:
+        raise ValueError(f"{model!r} is not a folder on this machine or a Hugging Face model id (owner/name)")
+    try:
+        config = AutoConfig.from_pretrained(model)
+    except OSError as exc:
+        text = str(exc)
+        if "gated" in text.lower() or "401" in text or "403" in text:
+            raise ValueError(
+                f"{model} is gated or private on Hugging Face. Accept its licence on huggingface.co, "
+                "then run `hf auth login` (or set HF_TOKEN) and try again."
+            ) from exc
+        raise ValueError(
+            f"could not find {model!r}: check the id on huggingface.co (owner/name) or the folder path. "
+            "If the id is right, this machine may not reach huggingface.co."
+        ) from exc
+    except ValueError as exc:
+        policy = _raw_config(model)
+        backbone = policy.get("vlm_model_name")
+        if backbone and policy.get("freeze_vision_encoder", False):
+            if model not in _NOTED:
+                _NOTED.add(model)
+                print(f"{model} is a LeRobot policy with a frozen vision encoder; reading it from its backbone {backbone}", file=sys.stderr)
+            return load_config(backbone)[0], backbone
+        if backbone:
+            raise ValueError(
+                f"{model} is a LeRobot policy that fine-tunes its vision encoder, which ii cannot load yet. "
+                f"Try its backbone, --model {backbone}, to see the pretrained features."
+            ) from exc
+        if policy.get("type") or "lerobot" in model.lower():
+            raise ValueError(
+                f"{model} is a LeRobot policy, not a transformers model. ii runs GR00T policies with "
+                "`ii run groot`; for others, point --model at the policy's vision backbone."
+            ) from exc
+        raise ValueError(f"{model} has no transformers model type, so ii cannot load it ({exc})") from exc
+    vision = _vision_config(config)
+    if not _is_vision(vision):
+        raise ValueError(
+            f"{model} is a {type(config).__name__.removesuffix('Config')} model with no vision tower. "
+            "The hf adapter reads image and video models (ViT, DINOv2, VideoMAE, ResNet, ConvNeXt), "
+            "image-text models (CLIP, SigLIP) and VLMs through their vision tower."
+        )
+    return config, model
+
+
+def _raw_config(model: str) -> dict:
+    """config.json as a plain dict, or ``{}``."""
+    try:
+        local = Path(model).expanduser() / "config.json"
+        if local.is_file():
+            path = local
+        else:
+            from huggingface_hub import hf_hub_download
+
+            path = Path(hf_hub_download(model, "config.json"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 (no readable config means nothing to suggest)
+        return {}
+
+
+def _vision_config(config):
+    """The vision part of a composite config (CLIP, SigLIP, VLMs), else the config itself."""
+    vision = getattr(config, "vision_config", None)
+    return vision if vision is not None else config
+
+
+def _is_conv(config) -> bool:
+    return getattr(config, "patch_size", None) is None and bool(getattr(config, "depths", None) or getattr(config, "num_stages", None)) or (
+        type(config).__name__.startswith("ConvNext")
+    )
+
+
+def _is_vision(config) -> bool:
+    has_pixels = any(getattr(config, key, None) is not None for key in ("num_channels", "image_size", "crop_size"))
+    return has_pixels and (getattr(config, "patch_size", None) is not None or _is_conv(config))
+
+
+def _depth(config) -> int:
+    for value in (getattr(config, "num_hidden_layers", None), getattr(config, "num_stages", None)):
+        if isinstance(value, int) and value > 0:
+            return value
+    depths = getattr(config, "depths", None)
+    return len(depths) if depths else 2
+
+
+def _vision_tower(model: torch.nn.Module, model_name: str) -> torch.nn.Module:
+    """The vision tower of an image-text model or VLM; the rest is dropped."""
+    found = [
+        (name.count("."), name, module)
+        for name, module in model.named_modules()
+        if name and name.rsplit(".", 1)[-1] in _TOWER_NAMES and name.count(".") < 3
+    ]
+    if not found:
+        raise ValueError(f"{model_name} has a vision config but no vision tower ii can find; pass hf:<model>#<blocks path>")
+    return min(found, key=lambda item: (item[0], _TOWER_NAMES.index(item[1].rsplit(".", 1)[-1])))[2]
+
+
 def _with_fast_attention(build):
     """Prefer PyTorch SDPA kernels; fall back to eager for models without them."""
     try:
@@ -560,7 +735,7 @@ def _find_blocks(model: torch.nn.Module, config, path: str | None) -> torch.nn.M
     lists = [(name, module) for name, module in model.named_modules() if isinstance(module, torch.nn.ModuleList) and len(module)]
     if not lists:
         raise ValueError(f"{type(model).__name__} has no block list; pass hf:<model>#<blocks path>")
-    depth = getattr(config, "num_hidden_layers", None)
+    depth = _depth(config)
     ranked = sorted(
         lists,
         key=lambda item: (
@@ -589,6 +764,8 @@ def _input_size(preprocessor: dict) -> int | None:
             return value if key == "crop_size" else None
         if isinstance(value, dict) and "height" in value and "width" in value and value["height"] == value["width"]:
             return int(value["height"])
+        if isinstance(value, dict) and set(value) == {"shortest_edge"} and key == "size":
+            return int(value["shortest_edge"])  # frames are resized square with no crop, so this is the side
     return None
 
 

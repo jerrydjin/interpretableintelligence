@@ -150,6 +150,61 @@ async function boot() {
   renderHeader();
   window.addEventListener("hashchange", route);
   route();
+  watchLive();
+}
+
+// A run still filling in (ii run --remote) carries `live` on /api/run. Show where it runs and
+// what it has cost so far, and redraw when a newer stage lands (`live.generation` goes up).
+const LIVE_POLL_MS = 3000;
+
+function liveText(live) {
+  const end = typeof live.finished_at === "number" ? live.finished_at : Date.now() / 1000;
+  const cost = (Math.max(0, end - live.started_at) * Number(live.usd_per_hour || 0)) / 3600;
+  const money = (value) => (value < 1 ? `$${value.toFixed(3)}` : `$${value.toFixed(2)}`);
+  const where = [live.provider, live.gpu].filter(Boolean).join(" ");
+  let what = live.state;
+  if (live.state === "running") what = live.stage ? `${live.stage} ready, running` : "running";
+  const cap = typeof live.max_cost_usd === "number" ? ` of ${money(live.max_cost_usd)}` : "";
+  return `${where} · ${what} · ~${money(cost)}${cap}`;
+}
+
+function watchLive() {
+  const node = document.getElementById("live-status");
+  if (!node || !state.run || !state.run.live) return;
+  let generation = state.run.live.generation;
+  const paint = () => {
+    const live = state.run.live;
+    node.hidden = !live;
+    if (!live) return;
+    node.dataset.state = live.state;
+    node.textContent = liveText(live);
+    node.title = "Estimated from the container's list price. The provider's usage page has the exact bill.";
+  };
+  paint();
+  const tick = setInterval(paint, 1000);
+  const poll = setInterval(async () => {
+    let fresh;
+    try {
+      const response = await fetch(apiUrl("/api/run"), { cache: "no-store" });
+      if (!response.ok) return;
+      fresh = await response.json();
+    } catch (error) {
+      return;
+    }
+    if (fresh.live && fresh.live.generation !== generation) {
+      generation = fresh.live.generation;
+      state.run = fresh;
+      renderHeader();
+      route();
+    } else {
+      state.run.live = fresh.live;
+    }
+    paint();
+    if (!fresh.live || fresh.live.state !== "running") {
+      clearInterval(poll);
+      clearInterval(tick);
+    }
+  }, LIVE_POLL_MS);
 }
 
 function renderHeader() {
