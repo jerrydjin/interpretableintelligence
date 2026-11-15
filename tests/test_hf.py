@@ -1,7 +1,8 @@
 """Generic Hugging Face adapter on tiny random configs saved to disk. No network.
 
 ``test_real_dinov2_small_end_to_end`` downloads facebook/dinov2-small and is
-marked ``slow``.
+marked ``slow``. ``test_real_deit_tiny_smoke`` is the real-model check CI runs on
+every PR (``-m real_model``).
 """
 
 from __future__ import annotations
@@ -26,10 +27,35 @@ CPU = torch.device("cpu")
 _SMALL = dict(hidden_size=32, num_hidden_layers=2, num_attention_heads=2, intermediate_size=64)
 
 
+# Models whose patch size or width differ from 8 and 32: (patch_px, d_model).
+_PATCH_AND_WIDTH = {"convnext": (4, 16), "resnet": (4, 8)}
+
+
 def _configs() -> dict:
-    from transformers import Dinov2WithRegistersConfig, VideoMAEConfig, ViTConfig, VJEPA2Config
+    from transformers import (
+        ConvNextConfig,
+        Dinov2WithRegistersConfig,
+        ResNetConfig,
+        SiglipConfig,
+        VideoMAEConfig,
+        ViTConfig,
+        VJEPA2Config,
+    )
 
     return {
+        # Image-text model: only the vision tower is hooked.
+        "siglip": (
+            SiglipConfig(
+                vision_config=dict(image_size=32, patch_size=8, **_SMALL),
+                text_config=dict(vocab_size=64, **_SMALL),
+            ),
+            (8, 4, 4, 1),
+            0,
+        ),
+        # Convolutional stages: stage 1 of a 32 px ConvNeXt is an 8x8 map of 16 channels.
+        "convnext": (ConvNextConfig(image_size=32, num_stages=2, hidden_sizes=[16, 32], depths=[1, 1]), (8, 8, 8, 1), 0),
+        # ResNet has no image_size; the 224 px default gives a 56x56 map after the stem.
+        "resnet": (ResNetConfig(embedding_size=8, hidden_sizes=[8, 16], depths=[1, 1], layer_type="basic"), (8, 56, 56, 1), 0),
         "vit": (ViTConfig(image_size=32, patch_size=8, **_SMALL), (8, 4, 4, 1), 1),
         "dinov2-registers": (Dinov2WithRegistersConfig(image_size=32, patch_size=8, num_register_tokens=4, **_SMALL), (8, 4, 4, 1), 5),
         "videomae": (VideoMAEConfig(image_size=32, patch_size=8, num_frames=4, tubelet_size=2, **_SMALL), (2, 4, 4, 2), 0),
@@ -76,6 +102,24 @@ def _adapter(path: Path, layer: int = 1, random_init: bool = False):
     return adapter
 
 
+def test_model_sha_is_stable_when_the_checkpoint_lacks_backbone_weights(tmp_path):
+    """An ImageNet classifier loaded as AutoModel has no pooler, so transformers fills it in at random.
+
+    facebook/deit-tiny-patch16-224 got a different model_sha on every load, and the playground
+    refused its own run. The real-model CI job found it.
+    """
+    from transformers import ViTConfig, ViTForImageClassification
+
+    torch.manual_seed(0)
+    path = tmp_path / "vit-classifier"
+    ViTForImageClassification(ViTConfig(image_size=32, patch_size=8, num_labels=3, **_SMALL)).save_pretrained(path)
+    first = _adapter(path)
+    state = torch.random.get_rng_state()
+    second = _adapter(path)
+    assert torch.equal(torch.random.get_rng_state(), state)  # loading does not reseed the caller
+    assert first.model_sha() == second.model_sha()
+
+
 def test_spec_round_trips_and_rejects_bad_names():
     assert parse_spec("hf:facebook/dinov2-small") == ("facebook/dinov2-small", None)
     assert parse_spec(make_spec("org/m", "encoder.layer")) == ("org/m", "encoder.layer")
@@ -94,19 +138,20 @@ def test_grid_prefix_and_edits(tiny_models, name):
     _config, (t, h, w, tubelet), prefix = _configs()[name]
     adapter = _adapter(tiny_models[name])
     grid = adapter.grid()
-    assert (grid.t, grid.h, grid.w, grid.tubelet, grid.patch_px) == (t, h, w, tubelet, 8)
+    patch, width = _PATCH_AND_WIDTH.get(name, (8, 32))
+    assert (grid.t, grid.h, grid.w, grid.tubelet, grid.patch_px) == (t, h, w, tubelet, patch)
     assert adapter._prefix == prefix
     clip = _clip()
     window = adapter.windows(clip)[0]
 
     with adapter.hook(1, mode="capture") as handle:
         acts = adapter.encode(clip, window)
-    assert tuple(acts.shape) == (t, h, w, 32)
+    assert tuple(acts.shape) == (t, h, w, width)
     assert torch.equal(handle.captured[0], acts)
     assert bool(adapter.mask(window).all())
 
     pred, target = adapter.predict_masked(clip, window)
-    assert tuple(target.shape) == (t * h * w, 32)
+    assert target.shape[0] == t * h * w
     identity, _ = adapter.predict_masked(clip, window, edit=lambda x: x)
     assert torch.allclose(identity, target, atol=1e-5)
     with adapter.hook(1, mode="zero"):
@@ -243,7 +288,11 @@ def test_ii_run_hf_end_to_end_then_steer(tiny_models, tmp_path, monkeypatch):
 def test_concept_maps_follow_the_token_grid(tiny_models):
     from transformers import CLIPConfig, CLIPModel
 
-    from interpretableintelligence.labelers import ClipConceptSource, clip_text_embeddings, load_concepts
+    from interpretableintelligence.labelers import (
+        ClipConceptSource,
+        clip_text_embeddings,
+        load_concepts,
+    )
 
     assert len(load_concepts()) > 50
     for name, frames in (("vit", 8), ("videomae", 4)):
@@ -268,6 +317,46 @@ def test_concept_maps_follow_the_token_grid(tiny_models):
         assert np.isfinite(maps).all()
 
 
+def test_default_layer_is_mid_depth_for_transformers_and_second_to_last_stage_for_cnns(tiny_models):
+    from interpretableintelligence.adapters.hf import middle_block
+
+    assert middle_block(make_spec(str(tiny_models["siglip"]))) == 1  # 2 vision blocks, not the text tower's
+    assert middle_block(make_spec(str(tiny_models["convnext"]))) == 1
+
+
+def test_lerobot_policy_with_a_frozen_vision_encoder_reads_its_backbone(tiny_models, tmp_path):
+    from interpretableintelligence.adapters.hf import load_config
+
+    policy = tmp_path / "smolvla"
+    policy.mkdir()
+    (policy / "config.json").write_text(
+        json.dumps({"type": "smolvla", "vlm_model_name": str(tiny_models["siglip"]), "freeze_vision_encoder": True})
+    )
+    _config, source = load_config(str(policy))
+    assert source == str(tiny_models["siglip"])
+    adapter = _adapter(policy)
+    assert adapter.grid().h == 4
+
+    (policy / "config.json").write_text(json.dumps({"type": "smolvla", "vlm_model_name": "x/y", "freeze_vision_encoder": False}))
+    with pytest.raises(ValueError, match="fine-tunes its vision encoder"):
+        load_config(str(policy))
+    (policy / "config.json").write_text(json.dumps({"type": "act"}))
+    with pytest.raises(ValueError, match="LeRobot policy"):
+        load_config(str(policy))
+
+
+def test_unsupported_models_fail_early_with_a_reason(tmp_path):
+    from transformers import BertConfig, BertModel
+
+    from interpretableintelligence.adapters.hf import load_config
+
+    BertModel(BertConfig(vocab_size=64, **_SMALL)).save_pretrained(tmp_path / "bert")
+    with pytest.raises(ValueError, match="no vision tower"):
+        load_config(str(tmp_path / "bert"))
+    with pytest.raises(ValueError, match="not a folder on this machine"):
+        load_config("not/a/real/path")
+
+
 def test_cli_rejects_hf_without_model_and_model_without_hf(tmp_path):
     clips = tmp_path / "clips"
     clips.mkdir()
@@ -289,6 +378,58 @@ def test_real_dinov2_small_end_to_end(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert validate_run(out) == []
+
+
+# The real-model smoke check CI runs on every PR (.github/workflows/real-model.yml).
+# DeiT-tiny (5.7M parameters, real ImageNet weights) is the smallest well-known ViT on the
+# Hub. The pipeline pins torch to one thread, so on a free CPU runner the budget goes to the
+# 100 matched random-feature controls and the CLIP ViT-B/16 labeller. Hooking block 10 of 12
+# keeps the edited forwards short, a 64-feature SAE keeps both SAE trainings short, and
+# holding out 2 clips instead of 4 halves the ablations and random controls. It still
+# exercises every stage on real weights: Hub download, preprocessor, capture, SAE, CLIP
+# labels, scoring with its random-init control, the schema, and one playground edit.
+REAL_SMOKE_MODEL = "facebook/deit-tiny-patch16-224"
+
+
+@pytest.mark.slow
+@pytest.mark.real_model
+def test_real_deit_tiny_smoke(tmp_path):
+    import math
+
+    from interpretableintelligence.labelers import CLIP_LABEL_MODEL
+
+    clips = tmp_path / "clips"
+    generate_tiny_clips(clips, 20)
+    out = tmp_path / "runs" / "deit-tiny"
+    result = CliRunner().invoke(
+        app,
+        [
+            "run", "hf", "--model", REAL_SMOKE_MODEL, "--clips", str(clips), "--out", str(out),
+            "--layer", "10", "--sae-features", "64", "--prefilter", "4", "--heldout-frac", "0.1", "--no-serve",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert validate_run(out) == []
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["model"]["adapter"] == make_spec(REAL_SMOKE_MODEL)
+    assert manifest["layer"] == 10
+    sae = json.loads((out / "scoreboard.json").read_text(encoding="utf-8"))["sae"]
+    numbers = [value for value in sae.values() if isinstance(value, float)]
+    assert numbers and all(math.isfinite(value) for value in numbers), sae
+    # Real weights: the SAE splice must keep most of the model's output, unlike zeroing the layer.
+    assert sae["loss_recovered"] > 0.5, sae
+    assert json.loads((out / "sae" / "config.json").read_text(encoding="utf-8"))["n_features"] == 64
+    features = [json.loads(line) for line in (out / "features" / "features.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(features) == 64
+    assert {feature.get("label_model") for feature in features} == {CLIP_LABEL_MODEL}
+
+    steerer = Steerer(out, clips)
+    clip_id = manifest["clips"][0]["clip_id"]
+    same = steerer.steer({"clip_id": clip_id, "features": [0], "kind": "scale", "value": 1.0})
+    moved = steerer.steer({"clip_id": clip_id, "features": [0], "kind": "clamp", "value": 5.0})
+    assert same["summary"]["mean_shift"] < 1e-4
+    assert moved["summary"]["mean_shift"] > same["summary"]["mean_shift"]
 
 
 def test_auroc_labels_a_sparse_feature_that_pearson_would_miss(monkeypatch):

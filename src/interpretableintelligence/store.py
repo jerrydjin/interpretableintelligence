@@ -131,6 +131,40 @@ class ActivationWriter:
         self._handles["split"].write(np.full(n, int(split_code), dtype=np.uint8).tobytes())  # type: ignore[attr-defined]
         self.n += n
 
+    def append_rows(
+        self,
+        acts: np.ndarray,
+        clip_index: int,
+        window: int,
+        cells: np.ndarray,
+        split_code: int,
+    ) -> None:
+        """Write rows ``[n, d]`` at explicit grid ``cells`` ``[n, 3]`` (t, h, w).
+
+        For captures that recorded only part of the grid (an imported run lists
+        those cells in ``manifest.import.cells``). ``append`` is the full-window form.
+        """
+        array = np.asarray(acts, dtype=np.float32)
+        coords = np.asarray(cells, dtype=np.int64)
+        if array.ndim != 2 or int(array.shape[1]) != self.d_model:
+            raise ValueError(f"expected [n, {self.d_model}], got {array.shape}")
+        n = int(array.shape[0])
+        if n <= 0:
+            raise ValueError("empty window")
+        if coords.shape != (n, 3):
+            raise ValueError(f"expected cells [{n}, 3], got {coords.shape}")
+        if coords.min() < 0 or coords.max() > 32767 or window > 32767 or window < 0:
+            raise ValueError("token coordinates do not fit in int16")
+        if split_code not in (_SPLIT_TRAIN, _SPLIT_HELD):
+            raise ValueError(f"split_code must be 0 or 1, got {split_code}")
+        self._handles["rows"].write(np.ascontiguousarray(array).tobytes())  # type: ignore[attr-defined]
+        self._handles["clip_idx"].write(np.full(n, int(clip_index), dtype=np.int32).tobytes())  # type: ignore[attr-defined]
+        self._handles["window"].write(np.full(n, int(window), dtype=np.int16).tobytes())  # type: ignore[attr-defined]
+        for column, name in enumerate(("t", "h", "w")):
+            self._handles[name].write(np.ascontiguousarray(coords[:, column], dtype=np.int16).tobytes())  # type: ignore[attr-defined]
+        self._handles["split"].write(np.full(n, int(split_code), dtype=np.uint8).tobytes())  # type: ignore[attr-defined]
+        self.n += n
+
     def finish(self) -> dict:
         """Flush shards and the train/held index. Returns ``{n, d_model, n_train, n_heldout}``."""
         if self.n <= 0:

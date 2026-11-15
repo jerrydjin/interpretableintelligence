@@ -191,7 +191,8 @@ class ClipConceptSource:
         self._index: int | None = None
         self._maps: np.ndarray | None = None
 
-    def rows(self, meta, clip_index, t, h, w) -> np.ndarray:
+    def rows(self, meta, clip_index, t, h, w, window=None) -> np.ndarray:
+        del window
         out = np.zeros((int(clip_index.shape[0]), len(self.names)), dtype=np.float64)
         for chosen in np.unique(clip_index):
             mask = clip_index == chosen
@@ -218,6 +219,9 @@ class ClipConceptSource:
         import torch.nn.functional as F
 
         grid = self.adapter.grid()
+        view = getattr(self.adapter, "view_frames", None)
+        if view is not None:
+            frames = view(frames)
         sims = self._dense_similarity(frames)  # [frames, concepts, P, P]
         sims = F.interpolate(sims, size=(grid.h, grid.w), mode="bilinear", align_corners=False)
         n_frames = int(sims.shape[0])
@@ -269,3 +273,60 @@ class ClipConceptSource:
             self._model = model
             self._text = F.normalize(text, dim=-1)
         return self._model, self._text
+
+
+class WindowConceptSource(ClipConceptSource):
+    """Concept strength for a model whose tokens are not image patches (GR00T's DiT).
+
+    Each window's observation frame (the image the policy acts on) goes through
+    CLIP once, and its whole-image similarity to each concept is given to every
+    token of that window. The labelling rule is the same as for dense maps
+    (ROC AUC at least 0.80 on train clips, and again on held-out clips), so a
+    label says "this feature fires in windows whose scene shows the concept".
+    It is correlational, like every label, and says nothing about which action
+    token carries it.
+    """
+
+    def rows(self, meta, clip_index, t, h, w, window=None) -> np.ndarray:
+        del t, h, w
+        if window is None:
+            raise ValueError("window-level concepts need each token's window index")
+        out = np.zeros((int(clip_index.shape[0]), len(self.names)), dtype=np.float64)
+        for chosen in np.unique(clip_index):
+            mask = clip_index == chosen
+            scores = self._window_scores(int(chosen), meta[int(chosen)])
+            out[mask] = scores[np.asarray(window)[mask]]
+        return out
+
+    def _window_scores(self, clip_index: int, item: dict) -> np.ndarray:
+        if self._index != clip_index or self._maps is None:
+            from interpretableintelligence.clips import load_clip
+
+            clip = load_clip(item)
+            try:
+                firsts = np.stack([window.frames[0] for window in self.adapter.windows(clip)])
+                self._maps = self.frame_scores(firsts)
+            finally:
+                del clip
+            self._index = clip_index
+        return self._maps
+
+    def frame_scores(self, frames: np.ndarray) -> np.ndarray:
+        """``[frames, concepts]`` cosine similarity of each whole frame to each concept."""
+        import torch
+        import torch.nn.functional as F
+
+        model, text = self._ensure()
+        pixels = torch.from_numpy(np.ascontiguousarray(frames)).to(self.device).float()
+        if float(pixels.max()) > 1.5:
+            pixels = pixels / 255.0
+        pixels = pixels.permute(0, 3, 1, 2)
+        if pixels.shape[1] == 1:
+            pixels = pixels.expand(-1, 3, -1, -1)
+        size = int(model.config.vision_config.image_size)
+        pixels = F.interpolate(pixels, size=(size, size), mode="bilinear", align_corners=False, antialias=True)
+        pixels = (pixels - pixels.new_tensor(CLIP_MEAN).view(1, 3, 1, 1)) / pixels.new_tensor(CLIP_STD).view(1, 3, 1, 1)
+        with torch.no_grad():
+            pooled = model.vision_model(pixel_values=pixels).pooler_output
+            image = F.normalize(model.visual_projection(pooled), dim=-1)
+        return (image @ text.T).detach().cpu().numpy().astype(np.float64)

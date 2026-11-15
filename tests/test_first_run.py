@@ -84,3 +84,51 @@ def test_try_is_listed_first_in_help() -> None:
     out = CliRunner().invoke(app, ["--help"]).output
     assert "try" in out
     assert out.index("try") < out.index("generate-clips")
+
+
+def test_try_points_learners_at_real_clips() -> None:
+    import inspect
+
+    from interpretableintelligence import first_run
+
+    source = inspect.getsource(first_run.guided_run)
+    assert "ii get-clips" in source
+    assert "--steer" in source
+
+
+def test_run_steer_opens_the_playground(demo) -> None:
+    import json
+    import urllib.request
+
+    from interpretableintelligence.pipeline import _open_viewer
+
+    lines: list[str] = []
+    _model, httpd, thread, url = _open_viewer(
+        demo.run, demo.clips, "127.0.0.1", 0, False, lines.append, steer=True
+    )
+    try:
+        with urllib.request.urlopen(url + "api/run") as response:
+            payload = json.loads(response.read())
+        assert payload["steer"]["enabled"] is True
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_playground_works_before_scoring(demo, tmp_path: Path) -> None:
+    """--no-score --steer: the playground loads with every feature unverified; explain still refuses."""
+    import pytest
+
+    from interpretableintelligence.explain import ExplainError, load_run
+    from interpretableintelligence.steer import Steerer
+
+    out = tmp_path / "demo"
+    shutil.copytree(demo.run, out)
+    (out / "scoreboard.json").unlink()
+    with pytest.raises(ExplainError):
+        load_run(out)
+    steerer = Steerer(out, demo.clips)
+    assert steerer.sae_usable is False
+    assert all(record["real"] is False for record in steerer.ctx.scoreboard["features"])
+    assert not (out / "scoreboard.json").exists()

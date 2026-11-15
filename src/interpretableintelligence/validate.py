@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from pathlib import Path
@@ -28,7 +29,8 @@ from interpretableintelligence.rollout import (
     make_episode_id,
     summarize,
 )
-from interpretableintelligence.attribute import PREDICTION_LOSS, METHOD, rank_feature_ids
+from interpretableintelligence.attribute import METHOD, RANK_OBJECTIVES, SCORED_OBJECTIVES, rank_feature_ids
+from interpretableintelligence.policies.base import dictionary_seed
 from interpretableintelligence.sae import load_sae
 from interpretableintelligence.split import assign_split, split_sha
 from interpretableintelligence.stats import feature_is_real, is_usable
@@ -46,7 +48,27 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 _MANIFEST_KEYS = {"run_id", "tool_version", "model", "layer", "d_model", "grid", "split", "clips"}
 # Resume metadata. Readers that only need the contract can ignore both.
-_MANIFEST_OPTIONAL = {"stages", "clips_dir"}
+# ``import`` marks a run written by ``ii import`` (SCHEMA.md, "Imported runs").
+_MANIFEST_OPTIONAL = {"stages", "clips_dir", "import"}
+_IMPORT_KEYS = {"format", "cells", "clips", "nulls", "source", "notes"}
+_IMPORT_OPTIONAL = {"wall_s"}
+_IMPORT_CLIP_KEYS = {"clip_id", "source_id", "n_windows"}
+# Fields an imported run may leave null, each with a reason in manifest.import.nulls.
+_IMPORT_NULL_KEYS = {
+    "manifest.split.seed",
+    "manifest.split.heldout_frac",
+    "scoreboard.run.seed",
+    "scoreboard.sae.ev_heldout",
+    "scoreboard.sae.loss_recovered",
+    "scoreboard.sae.loss_sae",
+    "scoreboard.sae.loss_visible_mean",
+    "scoreboard.sae.usable",
+    "scoreboard.features.label_holds_heldout",
+    "scoreboard.features.ablation_effect",
+    "scoreboard.features.random_percentile",
+    "scoreboard.features.absent_in_random_init",
+    "features/clip_effects.parquet",
+}
 _STAGE_FIELDS = {"wall_s", "peak_ram_bytes", "device", "rows", "tokens"}
 _MODEL_KEYS = {"adapter", "name", "sha", "random_init"}
 _GRID_KEYS = {"t", "h", "w", "tubelet", "patch_px"}
@@ -113,11 +135,17 @@ def validate_run(run_dir: Path) -> list[str]:
     if "schema_version" in manifest:
         expected_manifest.add("schema_version")
     _allow_keys(manifest, expected_manifest, _MANIFEST_OPTIONAL, "manifest", errors)
-    _exact_keys(split, _SPLIT_FILE_KEYS, "split.json", errors)
+    imported = "import" in manifest
+    if not imported:
+        _exact_keys(split, _SPLIT_FILE_KEYS, "split.json", errors)
     _exact_keys(scoreboard, _SCOREBOARD_KEYS, "scoreboard", errors)
     if errors:
         return errors
     _check_manifest_extras(manifest, errors)
+    if imported:
+        _check_import_block(manifest, errors)
+        if errors:
+            return errors
 
     model = manifest.get("model")
     grid = manifest.get("grid")
@@ -155,26 +183,38 @@ def validate_run(run_dir: Path) -> list[str]:
         errors.append("manifest.model.random_init must be a boolean")
     _hex_field(model.get("sha"), "manifest.model.sha", errors)
 
-    if not _is_int(split.get("seed")):
-        errors.append("split.json seed must be an integer")
-    if not _is_number(split.get("heldout_frac")) or not 0.0 < float(split["heldout_frac"]) < 1.0:
-        errors.append("split.json heldout_frac must be in (0, 1)")
     if not isinstance(split.get("train"), list) or not isinstance(split.get("heldout"), list):
         errors.append("split.json train and heldout must be lists")
         return errors
-
-    _check_split_consistency(manifest, split, split_ref, clips, errors)
+    if imported:
+        _check_imported_split(run_dir, manifest, split, split_ref, clips, errors)
+    else:
+        if not _is_int(split.get("seed")):
+            errors.append("split.json seed must be an integer")
+        if not _is_number(split.get("heldout_frac")) or not 0.0 < float(split["heldout_frac"]) < 1.0:
+            errors.append("split.json heldout_frac must be in (0, 1)")
+        if errors:
+            return errors
+        _check_split_consistency(manifest, split, split_ref, clips, errors)
     _check_scoreboard_shape(scoreboard, manifest, errors)
     if errors:
         return errors
+    if imported:
+        _check_null_reasons(run_dir, manifest, scoreboard, errors)
 
     _check_sae(run_dir, manifest, scoreboard, errors)
-    _check_shards(run_dir, manifest, errors)
+    if imported:
+        _check_imported_shards(run_dir, manifest, errors)
+    else:
+        _check_shards(run_dir, manifest, errors)
     _check_feature_files(run_dir, manifest, scoreboard, errors)
     _check_rollouts(run_dir, schema_version, errors)
     from interpretableintelligence.steer_scorecard import check_steering  # noqa: PLC0415
 
     errors.extend(check_steering(run_dir, manifest, scoreboard))
+    from interpretableintelligence.probe import check_probe  # noqa: PLC0415
+
+    errors.extend(check_probe(run_dir, manifest))
     return errors
 
 
@@ -232,6 +272,196 @@ def _check_split_consistency(manifest: dict, split: dict, split_ref: dict, clips
             errors.append(f"{clip.get('clip_id')} split field does not match split.json")
 
 
+def _check_import_block(manifest: dict, errors: list[str]) -> None:
+    """``manifest.import`` from ``ii import``: format, captured cells, per-clip windows, null reasons."""
+    block = manifest["import"]
+    if not isinstance(block, dict):
+        errors.append("manifest.import must be an object")
+        return
+    _allow_keys(block, _IMPORT_KEYS, _IMPORT_OPTIONAL, "manifest.import", errors)
+    if not isinstance(block.get("format"), str) or not block["format"]:
+        errors.append("manifest.import.format must be a non-empty string")
+    for key in ("source", "notes"):
+        if not isinstance(block.get(key), dict):
+            errors.append(f"manifest.import.{key} must be an object")
+    cells = block.get("cells")
+    grid = manifest.get("grid")
+    if not isinstance(cells, dict) or set(cells) != {"t", "h", "w"} or not isinstance(grid, dict):
+        errors.append("manifest.import.cells must be an object with t, h and w lists")
+    else:
+        for axis in ("t", "h", "w"):
+            values = cells[axis]
+            ok = isinstance(values, list) and values and all(_is_int(value) for value in values)
+            if not ok or values != sorted(set(values)) or values[0] < 0 or not _is_int(grid.get(axis)) or values[-1] >= grid[axis]:
+                errors.append(f"manifest.import.cells.{axis} must be sorted unique integers inside the grid")
+    nulls = block.get("nulls")
+    if not isinstance(nulls, dict):
+        errors.append("manifest.import.nulls must be an object")
+    else:
+        for key, reason in nulls.items():
+            if key not in _IMPORT_NULL_KEYS:
+                errors.append(f"manifest.import.nulls has unknown key {key!r}")
+            if not isinstance(reason, str) or not reason.strip():
+                errors.append(f"manifest.import.nulls[{key!r}] must be a non-empty reason")
+    rows = block.get("clips")
+    clips = manifest.get("clips")
+    if not isinstance(rows, list) or not isinstance(clips, list) or len(rows) != len(clips):
+        errors.append("manifest.import.clips must list one entry per manifest clip")
+        return
+    for index, (row, clip) in enumerate(zip(rows, clips, strict=True)):
+        where = f"manifest.import.clips[{index}]"
+        if not isinstance(row, dict) or not isinstance(clip, dict):
+            errors.append(f"{where} must be an object")
+            continue
+        missing = sorted(_IMPORT_CLIP_KEYS - set(row))
+        if missing:
+            errors.append(f"{where} is missing {missing}")
+            continue
+        if row["clip_id"] != clip.get("clip_id"):
+            errors.append(f"{where}.clip_id does not match manifest.clips[{index}]")
+        if not (_is_int(row["source_id"]) or (isinstance(row["source_id"], str) and row["source_id"])):
+            errors.append(f"{where}.source_id must be an integer or a non-empty string")
+        if not _is_int(row["n_windows"]) or row["n_windows"] < 1:
+            errors.append(f"{where}.n_windows must be a positive integer")
+
+
+def _check_imported_split(
+    run_dir: Path, manifest: dict, split: dict, split_ref: dict, clips: list, errors: list[str]
+) -> None:
+    """The source split.json, copied byte for byte: its lists name ``manifest.import.clips[].source_id``."""
+    for index, clip in enumerate(clips):
+        if not isinstance(clip, dict):
+            errors.append(f"manifest.clips[{index}] must be an object")
+            continue
+        _exact_keys(clip, _CLIP_KEYS, f"manifest.clips[{index}]", errors)
+        clip_id = clip.get("clip_id")
+        if not isinstance(clip_id, str) or not clip_id:
+            errors.append(f"manifest.clips[{index}].clip_id must be a non-empty string")
+            continue
+        _hex_field(clip.get("sha256"), f"manifest.clips[{index}].sha256", errors)
+        if not _is_number(clip.get("fps")) or float(clip["fps"]) <= 0:
+            errors.append(f"{clip_id} fps must be positive")
+        if not _is_int(clip.get("n_frames")) or clip["n_frames"] <= 0:
+            errors.append(f"{clip_id} n_frames must be a positive integer")
+        if clip.get("split") not in {"train", "heldout"}:
+            errors.append(f"{clip_id} split must be train or heldout")
+    ids = [clip.get("clip_id") for clip in clips if isinstance(clip, dict)]
+    if len(ids) != len(set(ids)):
+        errors.append("manifest clip ids repeat")
+    digest = hashlib.sha256((run_dir / "split.json").read_bytes()).hexdigest()
+    if split_ref.get("sha") != digest:
+        errors.append("manifest.split.sha must be the sha256 of the split.json bytes on an imported run")
+    for key in ("seed", "heldout_frac"):
+        value = split_ref.get(key)
+        if value is not None and not _is_number(value):
+            errors.append(f"manifest.split.{key} must be a number or null")
+    train = split["train"]
+    heldout = split["heldout"]
+    hashable = all(isinstance(item, (int, str)) and not isinstance(item, bool) for item in train + heldout)
+    if not hashable:
+        errors.append("split.json lists must hold source ids (integers or strings)")
+        return
+    if len(train) + len(heldout) != len(set(train) | set(heldout)):
+        errors.append("split.json lists overlap or repeat a clip")
+    source_ids = [row["source_id"] for row in manifest["import"]["clips"]]
+    if len(source_ids) != len(set(source_ids)):
+        errors.append("manifest.import.clips source ids repeat")
+    if set(train) | set(heldout) != set(source_ids):
+        errors.append("split.json ids do not match manifest.import.clips source_id")
+        return
+    membership = {item: "train" for item in train}
+    membership.update({item: "heldout" for item in heldout})
+    for row, clip in zip(manifest["import"]["clips"], clips, strict=True):
+        if isinstance(clip, dict) and clip.get("split") != membership.get(row["source_id"]):
+            errors.append(f"{clip.get('clip_id')} split field does not match split.json")
+
+
+def _check_null_reasons(run_dir: Path, manifest: dict, scoreboard: dict, errors: list[str]) -> None:
+    """Every null an imported run writes has a reason, and every reason names a field that is null."""
+    null_now: set[str] = set()
+    for key in ("seed", "heldout_frac"):
+        if manifest["split"].get(key) is None:
+            null_now.add(f"manifest.split.{key}")
+    if scoreboard["run"].get("seed") is None:
+        null_now.add("scoreboard.run.seed")
+    for key in ("ev_heldout", "loss_recovered", "loss_sae", "loss_visible_mean", "usable"):
+        if scoreboard["sae"].get(key) is None:
+            null_now.add(f"scoreboard.sae.{key}")
+    for feature in scoreboard["features"]:
+        if not isinstance(feature, dict):
+            continue
+        for key in ("label_holds_heldout", "ablation_effect", "random_percentile", "absent_in_random_init"):
+            if key in feature and feature[key] is None:
+                null_now.add(f"scoreboard.features.{key}")
+    effects = run_dir / "features" / "clip_effects.parquet"
+    if effects.is_file():
+        try:
+            if pq.read_metadata(effects).num_rows == 0:
+                null_now.add("features/clip_effects.parquet")
+        except Exception:  # noqa: BLE001 - reported by _check_effects
+            pass
+    reasons = manifest["import"]["nulls"]
+    for key in sorted(null_now - set(reasons)):
+        errors.append(f"{key} is null on an imported run but manifest.import.nulls gives no reason")
+    for key in sorted(set(reasons) - null_now):
+        errors.append(f"manifest.import.nulls gives a reason for {key}, which is not null")
+
+
+def _check_imported_shards(run_dir: Path, manifest: dict, errors: list[str]) -> None:
+    """Rows cover each clip's own windows 0..n_windows-1 and exactly the captured cells, once each."""
+    directory = run_dir / "acts"
+    paths = sorted(directory.glob("shard-*.safetensors")) if directory.is_dir() else []
+    if not paths:
+        errors.append("acts/ has no shards")
+        return
+    expected_names = [f"shard-{index:05d}.safetensors" for index in range(len(paths))]
+    if [path.name for path in paths] != expected_names:
+        errors.append("activation shards must be contiguous shard-00000.safetensors, shard-00001.safetensors, ...")
+    try:
+        data = load_activation_shards(directory)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"activation shards could not be loaded: {exc}")
+        return
+    acts = data["acts"]
+    if acts.dtype != np.float16 or acts.ndim != 2 or acts.shape[1] != manifest["d_model"]:
+        errors.append(f"acts must be float16 [N, d_model={manifest['d_model']}]")
+        return
+    n = acts.shape[0]
+    for key, dtype in (("clip_idx", np.int32), ("window", np.int16), ("t", np.int16), ("h", np.int16), ("w", np.int16)):
+        if data[key].dtype != dtype or data[key].shape != (n,):
+            errors.append(f"{key} must be {dtype.__name__} [N]")
+            return
+    if not np.isfinite(acts.astype(np.float32)).all():
+        errors.append("activation shard has non-finite values")
+    cells = manifest["import"]["cells"]
+    width = len(cells["t"]) * len(cells["h"]) * len(cells["w"])
+    clip_rows = manifest["import"]["clips"]
+    expected_rows = width * sum(int(row["n_windows"]) for row in clip_rows)
+    if n != expected_rows:
+        errors.append(f"activation rows must cover each clip's windows and the captured cells once (got {n}, expected {expected_rows})")
+        return
+    cell_t = np.repeat(np.asarray(cells["t"]), len(cells["h"]) * len(cells["w"]))
+    cell_h = np.tile(np.repeat(np.asarray(cells["h"]), len(cells["w"])), len(cells["t"]))
+    cell_w = np.tile(np.asarray(cells["w"]), len(cells["t"]) * len(cells["h"]))
+    want_clip = np.concatenate(
+        [np.full(width * int(row["n_windows"]), index, dtype=np.int64) for index, row in enumerate(clip_rows)]
+    )
+    want_window = np.concatenate([np.repeat(np.arange(int(row["n_windows"])), width) for row in clip_rows])
+    reps = expected_rows // width
+    order_ok = (
+        np.array_equal(data["clip_idx"].astype(np.int64), want_clip)
+        and np.array_equal(data["window"].astype(np.int64), want_window)
+        and np.array_equal(data["t"].astype(np.int64), np.tile(cell_t, reps))
+        and np.array_equal(data["h"].astype(np.int64), np.tile(cell_h, reps))
+        and np.array_equal(data["w"].astype(np.int64), np.tile(cell_w, reps))
+    )
+    if not order_ok:
+        errors.append(
+            "activation rows must be in manifest clip order, then window, then row-major captured cell, "
+            "covering windows 0..n_windows-1 of each clip once"
+        )
+
+
 def _check_scoreboard_shape(scoreboard: dict, manifest: dict, errors: list[str]) -> None:
     run = scoreboard.get("run")
     sae = scoreboard.get("sae")
@@ -253,9 +483,19 @@ def _check_scoreboard_shape(scoreboard: dict, manifest: dict, errors: list[str])
     n_held = sum(1 for clip in manifest["clips"] if clip.get("split") == "heldout")
     if run.get("n_train_clips") != n_train or run.get("n_heldout_clips") != n_held:
         errors.append("scoreboard clip counts do not match manifest")
-    if not _is_number(sae.get("ev_heldout")) or float(sae["ev_heldout"]) > 1.01:
+    imported = "import" in manifest
+    if imported and sae.get("ev_heldout") is None:
+        pass  # null with a reason (checked in _check_null_reasons)
+    elif not _is_number(sae.get("ev_heldout")) or float(sae["ev_heldout"]) > 1.01:
         errors.append("scoreboard.sae.ev_heldout must be a finite number <= 1")
-    if not _is_number(sae.get("loss_recovered")):
+    loss_keys = ("loss_recovered", "loss_sae", "loss_visible_mean")
+    if imported and any(sae.get(key) is None for key in loss_keys):
+        if sae.get("usable") is not None:
+            errors.append("scoreboard.sae.usable must be null when loss_recovered, loss_sae or loss_visible_mean is null")
+        for key in loss_keys:
+            if sae.get(key) is not None and not _is_number(sae.get(key)):
+                errors.append(f"scoreboard.sae.{key} must be finite or null")
+    elif not _is_number(sae.get("loss_recovered")):
         errors.append("scoreboard.sae.loss_recovered must be finite")
     elif not _is_number(sae.get("loss_sae")) or not _is_number(sae.get("loss_visible_mean")):
         errors.append("scoreboard.sae.loss_sae and loss_visible_mean must be finite")
@@ -343,13 +583,17 @@ def _check_sae(run_dir: Path, manifest: dict, scoreboard: dict, errors: list[str
         errors.append(f"sae/config.json: {exc}")
         return
     topk = config.get("activation") == "topk"
-    _exact_keys(config, _SAE_CONFIG_KEYS | ({"k"} if topk else set()), "sae/config.json", errors)
+    jumprelu = config.get("activation") == "jumprelu"
+    extra = {"k"} if topk else ({"threshold"} if jumprelu else set())
+    _exact_keys(config, _SAE_CONFIG_KEYS | extra, "sae/config.json", errors)
     if config.get("d_model") != manifest.get("d_model"):
         errors.append("sae config d_model does not match manifest")
-    if config.get("activation") not in ("relu", "topk"):
-        errors.append("sae config activation must be relu or topk")
+    if config.get("activation") not in ("relu", "topk", "jumprelu"):
+        errors.append("sae config activation must be relu, topk or jumprelu")
     if topk and (not _is_int(config.get("k")) or config["k"] <= 0):
         errors.append("topk sae config k must be a positive integer")
+    if jumprelu and (not _is_number(config.get("threshold")) or float(config["threshold"]) < 0):
+        errors.append("jumprelu sae config threshold must be a finite number >= 0")
     n_features = config.get("n_features")
     if not _is_int(n_features) or n_features <= 0:
         errors.append("sae config n_features must be a positive integer")
@@ -546,6 +790,9 @@ def _check_effects(path: Path, manifest: dict, n_features: int, measured: list[i
     if tuple(table.column_names) != CLIP_EFFECT_COLUMNS:
         errors.append(f"clip_effects columns must be {CLIP_EFFECT_COLUMNS}")
         return
+    if table.num_rows == 0 and "import" in manifest:
+        # An imported run with no model in the loop; the reason is checked in _check_null_reasons.
+        return
     frame = table.to_pydict()
     grid = manifest["grid"]
     try:
@@ -691,7 +938,9 @@ def _check_rollouts(run_dir: Path, schema_version: int, errors: list[str]) -> No
         return
     try:
         config = config_from_summary(summary)
-        rebuilt = summarize(rows, config)
+        from interpretableintelligence.rollout_groot import summarize_rollout_rows
+
+        rebuilt = summarize_rollout_rows(rows, config)
     except (TypeError, ValueError, RuntimeError) as exc:
         errors.append(f"rollouts summary does not match the episode schedule: {exc}")
         return
@@ -729,7 +978,7 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
             errors.append(f"{where}.feature_ids must be a list of integers")
             return
         if condition == "baseline":
-            if feature_ids or row["kind"] is not None or row["value"] is not None or row["layer"] is not None:
+            if feature_ids or row["kind"] is not None or row["value"] is not None or row["layer"] is not None or row["dictionary"] is not None:
                 errors.append(f"{where} baseline rows have an empty intervention spec")
                 return
         elif condition == "intervention":
@@ -744,6 +993,11 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
                 return
             if not _is_number(row["value"]):
                 errors.append(f"{where}.value must be finite")
+                return
+            try:
+                dictionary_seed(row["dictionary"])
+            except ValueError:
+                errors.append(f"{where}.dictionary must be trained or random:<seed>")
                 return
         else:
             errors.append(f"{where}.condition must be baseline or intervention")
@@ -767,6 +1021,7 @@ def _check_rollout_rows(rows: list[dict], summary: dict, errors: list[str]) -> N
                 layer=row["layer"],
                 kind=row["kind"],
                 value=row["value"],
+                dictionary=row["dictionary"],
             )
             if episode_id != expected_id:
                 errors.append(f"{where}.episode_id does not match the intervention spec")
@@ -841,9 +1096,13 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
         errors.append(f"attribution columns must be {ATTRIBUTION_COLUMNS}")
         return
     recorded = read_attribution_objective(path)
-    if recorded != PREDICTION_LOSS:
+    imported = "import" in manifest
+    # A scored run ranks by the adapter's gradient objective. An import has no model to backprop
+    # through, so it may rank by any recorded objective (in practice ``activation``).
+    allowed = RANK_OBJECTIVES if imported else SCORED_OBJECTIVES
+    if recorded not in allowed:
         errors.append(
-            f"attribution.parquet objective metadata must be {PREDICTION_LOSS!r} on a scored run, got {recorded!r}"
+            f"attribution.parquet objective metadata must be one of {allowed}, got {recorded!r}"
         )
     frame = table.to_pydict()
     clip_ids = [clip["clip_id"] for clip in manifest["clips"] if isinstance(clip, dict)]
@@ -883,8 +1142,8 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
     _exact_keys(document, _CANDIDATE_KEYS, "candidates.json", errors)
     if document.get("method") != METHOD:
         errors.append(f"candidates.json method must be {METHOD}")
-    if document.get("objective") != PREDICTION_LOSS:
-        errors.append(f"candidates.json objective must be {PREDICTION_LOSS!r} on a scored run")
+    if document.get("objective") != recorded:
+        errors.append(f"candidates.json objective must match attribution.parquet ({recorded!r})")
     if document.get("shortlist_only") is not True:
         errors.append("candidates are a shortlist and must be confirmed by a real ablation")
     if not isinstance(document.get("rank_by"), str) or not document["rank_by"]:

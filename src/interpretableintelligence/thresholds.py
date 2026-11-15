@@ -108,6 +108,15 @@ DEFAULT_ROLLOUT_WORKERS = 1
 SPRT_LAMBDA = 0.5
 SPRT_FAMILY_POWER = 0.8
 
+# Random-weights SAE control (AGENTS.md research rule 4, `ii rollouts --pick --random-sae`).
+# The default picker screens every feature on this many discovery episodes. Their seeds
+# start PICK_SEED_OFFSET above the run seed, so no rollout arm reuses them.
+PICK_DISCOVERY_EPISODES = 16
+PICK_SEED_OFFSET = 1_000_000
+# Untrained dictionaries drawn when --pick is given and --random-sae is not. Without --pick
+# there is no picker to send them through, so the default is 0 and nothing is a finding.
+DEFAULT_RANDOM_SAE = 5
+
 # Steering scorecard (`ii steer-scorecard`, steering/). Independent of `real` and of
 # the rollout causal gate: it never rewrites scoreboard.json and is not a rollout
 # finding. Each top feature is removed (scale 0) and boosted (scale
@@ -124,3 +133,16 @@ STEER_ALPHA = 0.05
 # Relative changes at or below this are numerical dust when deciding whether the
 # feature moved the actions more than every control on a window.
 STEER_TIE_EPS = 1e-9
+
+# Failure probe (`ii probe`, probe/). Independent of `real` and of the rollout
+# causal gate: it never rewrites scoreboard.json and never sets real. The gate
+# (`sae_gate`) passes only when the trained SAE's held-out AUROC beats both the
+# random-weights SAE and raw activations, each with a one-sided paired bootstrap
+# p-value below PROBE_ALPHA, at a lead time of at least PROBE_MIN_LEAD_S seconds.
+# It is not run with fewer than PROBE_MIN_CLASS held-out episodes of either class.
+PROBE_MIN_LEAD_S = 1.0
+PROBE_ALPHA = 0.05
+PROBE_BOOTSTRAP = 2000
+PROBE_CONFIDENCE = 0.95
+PROBE_L2 = 1.0
+PROBE_MIN_CLASS = 2

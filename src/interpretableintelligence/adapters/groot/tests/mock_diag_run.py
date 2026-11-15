@@ -1,3 +1,4 @@
+from box_paths import COLAB, groot_snapshot  # noqa: E402 (box roots; see box_paths.py)
 def _skip_if_unavailable():
     """Sim script: skip unless LIBERO and the groot-colab checkout are present."""
     import importlib.util
@@ -8,7 +9,7 @@ def _skip_if_unavailable():
         reasons.append("LIBERO")
     if importlib.util.find_spec("lerobot") is None:
         reasons.append("lerobot")
-    if not Path("/workspace/groot-colab/LIBERO-plus").exists():
+    if not Path(f"{COLAB}/LIBERO-plus").exists():
         reasons.append("LIBERO-plus checkout")
     if not reasons:
         return
@@ -23,7 +24,7 @@ _skip_if_unavailable()
 import os, sys, json, glob, collections, types
 os.environ.setdefault("MUJOCO_GL", "egl")
 sys.path.insert(0, "/tmp/wandstub")  # box has no ImageMagick; LIBERO-plus only needs it for blur perturbations
-sys.path.insert(0, "/workspace/groot-colab/v8")
+sys.path.insert(0, f"{COLAB}/v8")
 import torch
 import inproc_v8 as v8
 from lerobot.policies.groot.configuration_groot import GrootConfig
@@ -31,7 +32,7 @@ from transformers import AutoConfig
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 
 CK = "nvidia/gr00t17-lerobot-libero_10-640"
-cfg = GrootConfig.from_pretrained(glob.glob("/home/box/.cache/huggingface/hub/models--nvidia--gr00t17-lerobot-libero_10-640/snapshots/*")[0])
+cfg = GrootConfig.from_pretrained(groot_snapshot())
 cfg.device = "cpu"
 tcfg = AutoConfig.from_pretrained("Qwen/Qwen3-VL-2B-Instruct").text_config
 
@@ -70,10 +71,10 @@ class Mock(torch.nn.Module):
             s._action_queue.extend(a[:, :16].transpose(0, 1))
         return s._action_queue.popleft()
 
-g = {"policy": Mock(), "CKPT": CK, "PLUS_DIR": "/workspace/groot-colab/LIBERO-plus", "v8": v8, "LAYER": 5,
+g = {"policy": Mock(), "CKPT": CK, "PLUS_DIR": f"{COLAB}/LIBERO-plus", "v8": v8, "LAYER": 5,
      "RUN": "/tmp/diag_mock_run"}
 g["__name__"] = "__main__"
-code = open("/workspace/groot-colab/v8_diag_cell.py").read()
+code = open(f"{COLAB}/v8_diag_cell.py").read()
 exec(compile(code, "v8_diag_cell.py", "exec"), g)
 d = json.load(open("/tmp/diag_mock_run/smoke/diag_v8.json"))
 assert d["rope_before"][0]["max_abs_diff"] > 0.1, d["rope_before"]

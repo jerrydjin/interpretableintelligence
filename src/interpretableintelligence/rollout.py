@@ -1,12 +1,20 @@
 """Baseline vs intervention rollouts, with early stopping on controls.
 
-Episodes are paired on seed: baseline, each candidate feature, and each
-matched random-feature control see the same tasks. After each batch, a
+Episodes are paired on seed: baseline, each candidate feature, each
+matched random-feature control, and each random-weights SAE arm see the same
+tasks. After each batch, a
 control stops only for efficacy: a one-sided SPRT on discordant pairs
 (control succeeds, candidate fails) crosses the family-wise boundary.
 A control that never crosses runs to the episode cap. Baseline and
 candidates always run the full ``--episodes`` budget. Reruns skip episode
 ids already in ``rollouts/episodes.parquet``.
+
+Random-weights SAE control (AGENTS.md research rule 4): with ``--pick N`` the
+candidates are the top ``N`` of the policy's picker on the trained SAE, and
+``--random-sae K`` sends ``K`` untrained SAEs of the same shape through the same
+picker. Each of their picks becomes an arm with the same edit. These arms join
+the controls' early-stopping family. A candidate is a ``finding`` only when it is
+``causal`` and its delta is above every random-SAE arm's.
 """
 
 from __future__ import annotations
@@ -20,7 +28,7 @@ import numpy as np
 
 from interpretableintelligence.artifacts import read_json, read_rollout_episodes, write_json, write_rollout_episodes
 from interpretableintelligence.policies import get_policy
-from interpretableintelligence.policies.base import Intervention
+from interpretableintelligence.policies.base import TRAINED_DICTIONARY, Intervention, dictionary_seed, random_dictionary
 from interpretableintelligence.rollout_stats import (
     binding_sprt,
     control_percentile,
@@ -36,9 +44,15 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_CONTROLS,
     DEFAULT_ROLLOUT_EPISODES,
     DEFAULT_ROLLOUT_MIN_EPISODES,
+    DEFAULT_RANDOM_SAE,
     DEFAULT_ROLLOUT_WORKERS,
+    PICK_DISCOVERY_EPISODES,
     SPRT_LAMBDA,
 )
+
+# Arms that are compared against, not tested: they share the early-stopping family.
+CONTROL_ROLES = ("control", "random_sae")
+CANDIDATE_SOURCES = ("features", "pick")
 
 SUMMARY_KEYS = {
     "schema_version",
@@ -59,10 +73,16 @@ SUMMARY_KEYS = {
     "ci_method",
     "candidate_feature_ids",
     "control_feature_ids",
+    "candidate_source",
+    "picker",
+    "pick_discovery_episodes",
+    "random_sae_seeds",
+    "random_sae_feature_ids",
     "fixed_budget_episodes",
     "total_episodes",
     "episodes_saved",
     "validated_feature_ids",
+    "finding_feature_ids",
     "rollouts_per_validated_feature",
     "conditions",
     "features",
@@ -70,6 +90,7 @@ SUMMARY_KEYS = {
 CONDITION_KEYS = {
     "role",
     "condition",
+    "dictionary",
     "feature_ids",
     "layer",
     "kind",
@@ -86,6 +107,7 @@ CONDITION_KEYS = {
 FEATURE_KEYS = {
     "feature_id",
     "role",
+    "dictionary",
     "baseline_success",
     "intervention_success",
     "delta",
@@ -98,6 +120,10 @@ FEATURE_KEYS = {
     "control_percentile",
     "n_controls",
     "causal",
+    "random_sae_percentile",
+    "n_random_sae",
+    "beats_random_sae",
+    "finding",
     "episodes_run",
     "stopped_early",
     "reason",
@@ -119,6 +145,13 @@ class RolloutConfig:
     workers: int
     candidate_feature_ids: tuple[int, ...]
     control_feature_ids: tuple[int, ...]
+    # "features": ids passed by hand. "pick": the policy's picker on the trained SAE.
+    candidate_source: str = "features"
+    picker: str | None = None
+    pick_discovery_episodes: int | None = None
+    # Untrained SAEs, and each one's picks (same picker, as many as there are candidates).
+    random_sae_seeds: tuple[int, ...] = ()
+    random_sae_feature_ids: tuple[tuple[int, ...], ...] = ()
 
     def as_dict(self) -> dict:
         return {
@@ -135,6 +168,11 @@ class RolloutConfig:
             "workers": self.workers,
             "candidate_feature_ids": list(self.candidate_feature_ids),
             "control_feature_ids": list(self.control_feature_ids),
+            "candidate_source": self.candidate_source,
+            "picker": self.picker,
+            "pick_discovery_episodes": self.pick_discovery_episodes,
+            "random_sae_seeds": list(self.random_sae_seeds),
+            "random_sae_feature_ids": [list(item) for item in self.random_sae_feature_ids],
         }
 
 
@@ -143,12 +181,15 @@ class Arm:
     role: str
     condition: str
     feature_ids: tuple[int, ...]
+    dictionary: str = TRAINED_DICTIONARY
 
     @property
     def name(self) -> str:
         if self.role == "baseline":
             return "baseline"
         ids = "+".join(str(item) for item in self.feature_ids)
+        if self.dictionary != TRAINED_DICTIONARY:
+            return f"{self.role}:{self.dictionary}:{ids}"
         return f"{self.role}:{ids}"
 
 
@@ -215,12 +256,17 @@ def make_episode_id(
     layer: int | None,
     kind: str | None,
     value: float | None,
+    dictionary: str | None = None,
 ) -> str:
+    """Episode identity. A trained-SAE (or baseline) id is unchanged from before random dictionaries."""
     feats = "-" if not feature_ids else "+".join(str(int(item)) for item in feature_ids)
     layer_s = "-" if layer is None else str(int(layer))
     kind_s = "-" if kind is None else str(kind)
     value_s = "-" if value is None else format(float(value), ".8g")
-    return f"p={policy}|c={condition}|t={task_id}|s={int(seed)}|f={feats}|L={layer_s}|k={kind_s}|v={value_s}"
+    episode_id = f"p={policy}|c={condition}|t={task_id}|s={int(seed)}|f={feats}|L={layer_s}|k={kind_s}|v={value_s}"
+    if dictionary is not None and dictionary != TRAINED_DICTIONARY:
+        episode_id += f"|d={dictionary}"
+    return episode_id
 
 
 def _check_config(config: RolloutConfig) -> None:
@@ -249,6 +295,26 @@ def _check_config(config: RolloutConfig) -> None:
     overlap = set(config.candidate_feature_ids) & set(config.control_feature_ids)
     if overlap:
         raise ValueError(f"controls overlap candidates: {sorted(overlap)}")
+    if config.candidate_source not in CANDIDATE_SOURCES:
+        raise ValueError(f"candidate_source must be one of {CANDIDATE_SOURCES}, got {config.candidate_source!r}")
+    if (config.candidate_source == "pick") != (config.picker is not None):
+        raise ValueError("picker is recorded exactly when candidates were picked")
+    if (config.picker == "action_divergence") != (config.pick_discovery_episodes is not None):
+        raise ValueError("pick_discovery_episodes is recorded exactly when the default picker ran")
+    if config.random_sae_seeds and config.candidate_source != "pick":
+        raise ValueError(
+            "the random-weights SAE control compares picker against picker: pass --pick instead of --features"
+        )
+    if len(set(config.random_sae_seeds)) != len(config.random_sae_seeds):
+        raise ValueError("duplicate random-sae seed")
+    if len(config.random_sae_feature_ids) != len(config.random_sae_seeds):
+        raise ValueError("random_sae_feature_ids needs one pick list per random-sae seed")
+    for seed, picks in zip(config.random_sae_seeds, config.random_sae_feature_ids, strict=True):
+        random_dictionary(int(seed))  # validates the seed
+        if len(picks) != len(config.candidate_feature_ids) or len(set(picks)) != len(picks):
+            raise ValueError(
+                f"random:{seed} needs {len(config.candidate_feature_ids)} distinct picks, one per candidate, got {list(picks)}"
+            )
 
 
 def arms_for(config: RolloutConfig) -> list[Arm]:
@@ -257,6 +323,9 @@ def arms_for(config: RolloutConfig) -> list[Arm]:
         arms.append(Arm("candidate", "intervention", (int(feature_id),)))
     for feature_id in config.control_feature_ids:
         arms.append(Arm("control", "intervention", (int(feature_id),)))
+    for seed, picks in zip(config.random_sae_seeds, config.random_sae_feature_ids, strict=True):
+        for feature_id in picks:
+            arms.append(Arm("random_sae", "intervention", (int(feature_id),), random_dictionary(int(seed))))
     return arms
 
 
@@ -285,6 +354,7 @@ def _arm_episode_id(config: RolloutConfig, arm: Arm, offset: int) -> str:
         layer=config.layer,
         kind=config.kind,
         value=config.value,
+        dictionary=arm.dictionary,
     )
 
 
@@ -295,11 +365,13 @@ def _spec(config: RolloutConfig, arm: Arm, offset: int, max_steps: int) -> dict:
         layer = None
         kind = None
         value = None
+        dictionary = None
     else:
         feature_ids = list(arm.feature_ids)
         layer = config.layer
         kind = config.kind
         value = config.value
+        dictionary = arm.dictionary
     return {
         "policy": config.policy,
         "task_id": config.task_id,
@@ -309,6 +381,7 @@ def _spec(config: RolloutConfig, arm: Arm, offset: int, max_steps: int) -> dict:
         "layer": layer,
         "kind": kind,
         "value": value,
+        "dictionary": dictionary,
         "max_steps": max_steps,
         "episode_id": _arm_episode_id(config, arm, offset),
     }
@@ -326,6 +399,7 @@ def run_episode_spec(spec: dict) -> dict:
             layer=int(spec["layer"]),
             kind=str(spec["kind"]),
             value=float(spec["value"]),
+            dictionary=str(spec["dictionary"]),
         )
     started = time.perf_counter()
     observation = env.reset(task_id=spec["task_id"], seed=int(spec["seed"]))
@@ -354,6 +428,7 @@ def run_episode_spec(spec: dict) -> dict:
         "success": bool(info.get("success", False)),
         "steps": int(steps),
         "wall_time_s": float(wall),
+        "dictionary": spec["dictionary"],
     }
 
 
@@ -448,7 +523,7 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
     arms = arms_for(config)
     baseline = arms[0]
     candidates = [arm for arm in arms if arm.role == "candidate"]
-    controls = [arm for arm in arms if arm.role == "control"]
+    controls = [arm for arm in arms if arm.role in CONTROL_ROLES]
     n = config.episodes_per_arm
 
     baseline_rows = _rows_for_arm(config, baseline, n, by_id)
@@ -495,13 +570,14 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
     if extra or missing:
         raise ValueError(f"episode set does not match the schedule, missing={len(missing)} extra={len(extra)}")
 
-    def score_arm(role: str, feature_id: int, flags: list[bool], episodes_run: int, reason: str) -> dict:
+    def score_arm(arm: Arm, flags: list[bool], episodes_run: int, reason: str) -> dict:
         paired_base = baseline_flags[: len(flags)]
         delta, ci_low, ci_high = paired_success_delta_ci(paired_base, flags, config.alpha)
         n10, n01 = discordant_counts(paired_base, flags)
         return {
-            "feature_id": feature_id,
-            "role": role,
+            "feature_id": arm.feature_ids[0],
+            "role": arm.role,
+            "dictionary": arm.dictionary,
             "baseline_success": float(sum(paired_base) / len(paired_base)),
             "intervention_success": float(sum(flags) / len(flags)),
             "delta": delta,
@@ -518,21 +594,22 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
 
     raw_features: list[dict] = []
     for arm, flags in zip(candidates, candidate_flags, strict=True):
-        raw_features.append(score_arm("candidate", arm.feature_ids[0], flags, n, "fixed_budget"))
-    control_deltas_all: list[float] = []
+        raw_features.append(score_arm(arm, flags, n, "fixed_budget"))
     for arm, length, reason, flags in control_plan:
-        scored = score_arm("control", arm.feature_ids[0], flags, length, reason)
-        raw_features.append(scored)
-        control_deltas_all.append(float(scored["delta"]))
+        raw_features.append(score_arm(arm, flags, length, reason))
+    # Matched random features of the trained SAE, and the random-weights SAE arms.
+    control_deltas = [float(item["delta"]) for item in raw_features if item["role"] == "control"]
+    random_deltas = [float(item["delta"]) for item in raw_features if item["role"] == "random_sae"]
 
     features: list[dict] = []
-    for index, scored in enumerate(raw_features):
-        if scored["role"] == "candidate":
-            others = control_deltas_all
+    control_index = 0
+    for scored in raw_features:
+        if scored["role"] == "control":
+            # Compared with the other controls: drop this control's own delta.
+            others = [delta for item, delta in enumerate(control_deltas) if item != control_index]
+            control_index += 1
         else:
-            # Drop this control's own delta. Controls are appended after candidates.
-            control_index = index - len(candidates)
-            others = [delta for item, delta in enumerate(control_deltas_all) if item != control_index]
+            others = control_deltas
         percentile = control_percentile(float(scored["delta"]), others)
         causal = feature_is_causal(
             delta=float(scored["delta"]),
@@ -540,12 +617,22 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
             control_percentile=percentile,
             alpha=config.alpha,
         )
+        random_percentile = None
+        beats_random = None
+        if scored["role"] == "candidate" and random_deltas:
+            random_percentile = control_percentile(float(scored["delta"]), random_deltas)
+            # Rule 4: above every random-SAE arm, not merely most of them. Ties do not beat.
+            beats_random = bool(random_percentile is not None and random_percentile >= 100.0)
         features.append(
             {
                 **scored,
                 "control_percentile": percentile,
                 "n_controls": len(others),
                 "causal": causal,
+                "random_sae_percentile": random_percentile,
+                "n_random_sae": len(random_deltas) if scored["role"] == "candidate" else 0,
+                "beats_random_sae": beats_random,
+                "finding": bool(scored["role"] == "candidate" and causal and beats_random is True),
             }
         )
 
@@ -553,7 +640,7 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
         gap = None
         log_lr = None
         threshold = None
-        if arm.role == "control":
+        if arm.role in CONTROL_ROLES:
             gap, log_lr, threshold = binding_sprt(
                 flags,
                 candidate_flags,
@@ -567,6 +654,7 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
         return {
             "role": arm.role,
             "condition": arm.condition,
+            "dictionary": None if arm.role == "baseline" else arm.dictionary,
             "feature_ids": list(arm.feature_ids),
             "layer": layer,
             "kind": kind,
@@ -592,7 +680,8 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
     n_arms = 1 + len(candidates) + len(controls)
     fixed_budget = n_arms * n
     total = len(rows)
-    validated = [int(feature["feature_id"]) for feature in features if feature["causal"]]
+    validated = [int(feature["feature_id"]) for feature in features if feature["causal"] and feature["role"] != "random_sae"]
+    findings = [int(feature["feature_id"]) for feature in features if feature["finding"]]
     per = None if not validated else float(total) / float(len(validated))
     summary = {
         "schema_version": 1,
@@ -605,6 +694,7 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
         "total_episodes": total,
         "episodes_saved": fixed_budget - total,
         "validated_feature_ids": validated,
+        "finding_feature_ids": findings,
         "rollouts_per_validated_feature": per,
         "conditions": conditions,
         "features": features,
@@ -616,13 +706,15 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
 
 def format_report(summary: dict) -> str:
     episodes = int(summary["episodes_per_arm"])
-    n_feature_arms = len(summary["candidate_feature_ids"]) + len(summary["control_feature_ids"])
+    n_random = sum(len(picks) for picks in summary["random_sae_feature_ids"])
+    n_feature_arms = len(summary["candidate_feature_ids"]) + len(summary["control_feature_ids"]) + n_random
     lines = [
         (
             f"policy={summary['policy']} task={summary['task_id']} kind={summary['kind']} "
             f"layer={summary['layer']} episodes={episodes} controls={len(summary['control_feature_ids'])} "
             f"alpha={summary['alpha']} min_episodes={summary['min_episodes']} "
-            f"sprt_lambda={summary['sprt_lambda']}"
+            f"sprt_lambda={summary['sprt_lambda']} candidates={summary['candidate_source']} "
+            f"random_sae={len(summary['random_sae_seeds'])}"
         )
     ]
     for feature in summary["features"]:
@@ -630,8 +722,14 @@ def format_report(summary: dict) -> str:
         stopped = "true" if feature["stopped_early"] else "false"
         percentile = feature["control_percentile"]
         percentile_s = "none" if percentile is None else f"{float(percentile):.1f}"
+        role = feature["role"] if feature["role"] != "random_sae" else f"random_sae[{feature['dictionary']}]"
+        extra = ""
+        if feature["role"] == "candidate":
+            random_pct = feature["random_sae_percentile"]
+            random_s = "none" if random_pct is None else f"{float(random_pct):.1f}"
+            extra = f" random_sae_pct={random_s} finding={'true' if feature['finding'] else 'false'}"
         lines.append(
-            f"feature {feature['feature_id']} {feature['role']} causal={causal} "
+            f"feature {feature['feature_id']} {role} causal={causal}{extra} "
             f"delta={float(feature['delta']):.3f} p={float(feature['p_value']):.4g} "
             f"ci=[{float(feature['ci_low']):.3f},{float(feature['ci_high']):.3f}] "
             f"pct={percentile_s} baseline={float(feature['baseline_success']):.3f} "
@@ -643,8 +741,11 @@ def format_report(summary: dict) -> str:
     lines.append(
         f"total_episodes={summary['total_episodes']} fixed_budget={summary['fixed_budget_episodes']} "
         f"episodes_saved={summary['episodes_saved']} feature_arms_x_N={n_feature_arms * episodes} "
-        f"validated={summary['validated_feature_ids']} rollouts_per_validated_feature={per_s}"
+        f"validated={summary['validated_feature_ids']} findings={summary['finding_feature_ids']} "
+        f"rollouts_per_validated_feature={per_s}"
     )
+    if not summary["random_sae_seeds"]:
+        lines.append("no finding is possible without the random-weights SAE control: rerun with --pick N --random-sae K")
     return "\n".join(lines)
 
 
@@ -663,6 +764,11 @@ def config_from_summary(summary: dict) -> RolloutConfig:
         workers=int(summary["workers"]),
         candidate_feature_ids=tuple(int(item) for item in summary["candidate_feature_ids"]),
         control_feature_ids=tuple(int(item) for item in summary["control_feature_ids"]),
+        candidate_source=str(summary["candidate_source"]),
+        picker=None if summary["picker"] is None else str(summary["picker"]),
+        pick_discovery_episodes=None if summary["pick_discovery_episodes"] is None else int(summary["pick_discovery_episodes"]),
+        random_sae_seeds=tuple(int(item) for item in summary["random_sae_seeds"]),
+        random_sae_feature_ids=tuple(tuple(int(item) for item in picks) for picks in summary["random_sae_feature_ids"]),
     )
 
 
@@ -682,15 +788,46 @@ def execute_rollouts(
     alpha: float = DEFAULT_ROLLOUT_ALPHA,
     min_episodes: int = DEFAULT_ROLLOUT_MIN_EPISODES,
     batch_size: int = DEFAULT_ROLLOUT_BATCH,
+    pick: int | None = None,
+    random_sae: int | None = None,
+    pick_episodes: int = PICK_DISCOVERY_EPISODES,
 ) -> dict:
-    """Run the paired design into ``run_dir/rollouts`` and return the summary."""
-    if features is None or not features:
-        raise ValueError("at least one feature id is required")
+    """Run the paired design into ``run_dir/rollouts`` and return the summary.
+
+    Pass ``features`` (ids chosen by hand) or ``pick`` (the top ``pick`` of the
+    policy's picker on the trained SAE), not both. ``random_sae`` untrained SAEs
+    go through the same picker and add one arm per pick; it needs ``pick``.
+    ``None`` means ``DEFAULT_RANDOM_SAE`` with ``pick`` and 0 without.
+    """
+    from interpretableintelligence.rollout_pick import pick_features, picker_name, random_sae_seeds
+
+    if features and pick is not None:
+        raise ValueError("pass --features or --pick, not both")
+    if not features and pick is None:
+        raise ValueError("at least one feature id is required: pass --features or --pick")
+    if random_sae is None:
+        random_sae = DEFAULT_RANDOM_SAE if pick is not None else 0
+    if random_sae < 0:
+        raise ValueError(f"--random-sae must be >= 0, got {random_sae}")
+    if random_sae and pick is None:
+        raise ValueError(
+            "the random-weights SAE control compares picker against picker: pass --pick instead of --features"
+        )
     env = get_policy(policy)
     if layer is None:
         layer = int(env.layer)
     elif int(layer) != int(env.layer):
         raise ValueError(f"policy {policy!r} is instrumented at layer {env.layer}, got --layer {layer}")
+    if random_sae and not getattr(env, "random_dictionaries", False):
+        raise ValueError(f"policy {policy!r} cannot edit an untrained SAE, so --random-sae is unavailable for it")
+    if pick_episodes < 1:
+        raise ValueError(f"--pick-episodes must be >= 1, got {pick_episodes}")
+    pick_args = {"kind": kind, "value": float(value), "layer": int(layer), "task_id": task_id, "seed": int(seed), "episodes": int(pick_episodes)}
+    if pick is not None:
+        features = pick_features(env, TRAINED_DICTIONARY, int(pick), **pick_args)
+    assert features is not None
+    random_seeds = random_sae_seeds(int(seed), int(random_sae))
+    random_picks = [tuple(pick_features(env, random_dictionary(item), len(features), **pick_args)) for item in random_seeds]
     for feature_id in features:
         if feature_id < 0 or feature_id >= int(env.n_features):
             raise ValueError(f"feature id {feature_id} is outside 0..{int(env.n_features) - 1} for policy {policy!r}")
@@ -709,6 +846,11 @@ def execute_rollouts(
         workers=int(workers),
         candidate_feature_ids=tuple(int(item) for item in features),
         control_feature_ids=tuple(control_ids),
+        candidate_source="features" if pick is None else "pick",
+        picker=None if pick is None else picker_name(env),
+        pick_discovery_episodes=None if pick is None or picker_name(env) == "policy" else int(pick_episodes),
+        random_sae_seeds=tuple(random_seeds),
+        random_sae_feature_ids=tuple(random_picks),
     )
     _check_config(config)
 
@@ -723,7 +865,7 @@ def execute_rollouts(
     arms = arms_for(config)
     baseline = arms[0]
     candidates = [arm for arm in arms if arm.role == "candidate"]
-    control_arms = [arm for arm in arms if arm.role == "control"]
+    control_arms = [arm for arm in arms if arm.role in CONTROL_ROLES]
     max_steps = int(getattr(env, "horizon", 10_000))
     control_stop = {arm.name: config.episodes_per_arm for arm in control_arms}
     pool = _Pool(config.workers)
@@ -734,7 +876,7 @@ def execute_rollouts(
             active = [baseline, *candidates]
             active.extend(arm for arm in control_arms if control_stop[arm.name] > previous)
             for arm in active:
-                limit = end if arm.role != "control" else min(end, control_stop[arm.name])
+                limit = end if arm.role not in CONTROL_ROLES else min(end, control_stop[arm.name])
                 for offset in range(previous, limit):
                     spec = _spec(config, arm, offset, max_steps)
                     if spec["episode_id"] not in by_id:

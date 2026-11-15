@@ -31,3 +31,18 @@ Top: `summary.json` (table), `plan.json`, `schedule.json`, `errors.jsonl`.
 The Colab output goes to `/content/physint/groot/groot-1028-v9-ablate` and `/content/ablate_snapshot.tar`
 (arcname `physint/groot/groot-1028-v9-ablate/...`). To bring it back: `tar xf ablate_snapshot.tar` and copy that folder over this one
 (`plan.json` must have the same sha as `ablate_plan.json`).
+
+
+## Early-stopping-valid statistics (added after the run, from the existing records)
+
+Wilson intervals assume a fixed n; the SPRT chose n. `ablate_v9.sequential_inference` enumerates every stopping point of
+the plan's SPRT exactly (same boundaries and stop rule as `default_plan` / `sequential_decision`) and inverts the exact
+tails under the sample-proportion ordering: `seq95` (equal-tailed 95% interval, >= 95% coverage at every p, checked
+exactly and by simulation in `tests/test_sequential_stats.py`) and `p_seq_rise` / `p_seq_fall` against p0. `arms` in the
+top-level summary gives, per candidate, how many matched controls fell, a permutation-style p-value
+`(1 + #controls with s/n <= candidate) / 11`, and Holm across the two candidates. None of it sets a verdict or `real`.
+
+Recompute without rollouts: `python -m interpretableintelligence.adapters.groot.v9.resummarize_v9 --logs <this folder> --write`
+(per-episode logs) or `--table <summary.json> --plan ablate_plan.json --write` (the vendored table; (n, successes) is
+sufficient for these statistics, and every row is checked against the plan first). Either way it refuses to write if
+anything points toward a rise.
