@@ -38,7 +38,6 @@ from interpretableintelligence.artifacts import (
     write_json,
 )
 from interpretableintelligence.attribute import (
-    attribution_by_clip,
     candidates_document,
     rank_feature_ids,
     summarize_attribution,
@@ -88,7 +87,7 @@ from interpretableintelligence.thresholds import (
     TOP_K_ABLATION_PER_CLIP,
     TOP_K_EXAMPLES,
 )
-from interpretableintelligence.view import bind_server, load_run
+from interpretableintelligence.view import bind_server, enable_steering, load_run
 
 STAGES = ("capture", "sae", "features", "score", "view")
 REPORT_BEGIN = "--- interpretableintelligence cost report ---"
@@ -208,11 +207,14 @@ def execute_pipeline(
     host: str = "127.0.0.1",
     port: int = 0,
     open_browser: bool = False,
+    steer: bool = False,
     use_cache: bool = True,
     cache_dir: Path | None = None,
     log=print,
 ) -> dict:
     """Run every missing stage and, unless ``serve`` is false, block on the viewer.
+
+    ``steer`` turns on the viewer's playground (it loads the model and SAE once more).
 
     Captured layers go through the shared activation cache (``act_cache``) unless
     ``use_cache`` is false, so a rerun into a new folder, a new seed or split, or a
@@ -274,7 +276,9 @@ def execute_pipeline(
         log("run capture")
         _invalidate(out, "capture")
         with _measure(device) as measured:
-            rows = _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, capture_inputs, clips_dir, cache)
+            rows = _capture(
+                adapter, meta, out, layer, seed, heldout_frac, model_sha, capture_inputs, clips_dir, cache, log=log
+            )
             measured["rows"] = rows
             measured["tokens"] = rows
         _record_stage(out, "capture", measured["metrics"])
@@ -356,11 +360,13 @@ def execute_pipeline(
     if _view_ready(out, view_inputs):
         log("skip view")
         if serve:
-            _model, httpd, thread, _url = _open_viewer(out, clips_dir, host, port, open_browser, log)
+            _model, httpd, thread, _url = _open_viewer(out, clips_dir, host, port, open_browser, log, steer=steer)
     else:
         log("run view")
         with _measure(device) as measured:
-            model, httpd, thread, _url = _open_viewer(out, clips_dir, host, port, open_browser, log, serve=serve)
+            model, httpd, thread, _url = _open_viewer(
+                out, clips_dir, host, port, open_browser, log, serve=serve, steer=steer
+            )
             measured["rows"] = len(model.run_payload["clips"])
             measured["tokens"] = 0
         _record_stage(out, "view", measured["metrics"])
@@ -410,12 +416,36 @@ def _report(manifest: dict, gpu_cost_per_hour: float | None) -> dict:
     return report
 
 
-def _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, clips_dir: Path, cache: ActivationCache | None = None) -> int:
+def _progress(log, stage: str, done: int, total: int, started: float) -> None:
+    """Log ``done/total`` about every tenth of the way (and at the end) with a time estimate."""
+    if log is None or total < 10:
+        return
+    step = max(total // 10, 1)
+    if done % step and done != total:
+        return
+    elapsed = time.perf_counter() - started
+    left = elapsed / done * (total - done)
+    tail = f", about {_duration(left)} left" if done < total else f" in {_duration(elapsed)}"
+    log(f"{stage}: {done}/{total} clips{tail}")
+
+
+def _duration(seconds: float) -> str:
+    seconds = max(float(seconds), 0.0)
+    if seconds < 90:
+        return f"{seconds:.0f}s"
+    return f"{seconds / 60:.0f} min"
+
+
+def _capture(
+    adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, clips_dir: Path,
+    cache: ActivationCache | None = None, log=None,
+) -> int:
     cache = cache if cache is not None else ActivationCache(None)
     split = assign_split([item["clip_id"] for item in meta], int(seed), float(heldout_frac))
     membership = split.membership()
     grid = adapter.grid()
     expected_windows: list[int] | None = None
+    started = time.perf_counter()
     with ActivationWriter(out / "acts", int(adapter.d_model)) as writer:
         for clip_index, item in enumerate(meta):
             clip = load_clip(item)
@@ -440,6 +470,7 @@ def _capture(adapter, meta, out, layer, seed, heldout_frac, model_sha, inputs, c
             finally:
                 _clear_cache(adapter)
                 del clip
+            _progress(log, "capture", clip_index + 1, len(meta), started)
         store_meta = writer.finish()
     if not cache_matches_layout(out / "acts", len(meta), grid.as_dict()):
         raise RuntimeError("captured rows are not a rectangular token grid")
@@ -691,27 +722,26 @@ def _score(
     )
 
     _clear_cache(adapter)
-    attribution_started = time.perf_counter()
-    # One decoded clip at a time: a long episode is hundreds of MB as float32 frames.
-    objective = default_objective(adapter)
-    by_clip = attribution_by_clip(adapter, model, (load_clip(item) for item in meta), objective=objective)
-    attribution_seconds = time.perf_counter() - attribution_started
-    _clear_cache(adapter)
-    attr_rows, mean_scores = summarize_attribution(by_clip)
-    ranked_ids = rank_feature_ids(mean_scores)
-    if prefilter is None:
-        selected = None
-        reported_k = min(DEFAULT_PREFILTER_K, n_features)
-    else:
-        reported_k = min(int(prefilter), n_features)
-        selected = set(ranked_ids[:reported_k])
-        log(f"prefilter K={reported_k}  candidates={ranked_ids[:reported_k]}")
-
     top_k = min(TOP_K_ABLATION_PER_CLIP, n_features)
     effects_path = out / "features" / "clip_effects.parquet"
     effect_writer = _ColumnBatch(effects_path, _EFFECT_SCHEMA)
     try:
-        rank = _estimate_rows(adapter, model, meta, effect_writer, n_features)
+        # One backward pass per window gives both the per-cell effect estimates and the
+        # prediction-loss attribution that picks which features to ablate.
+        attribution_started = time.perf_counter()
+        objective = default_objective(adapter)
+        rank, by_clip = _estimate_rows(adapter, model, meta, effect_writer, n_features, objective=objective, log=log)
+        attribution_seconds = time.perf_counter() - attribution_started
+        _clear_cache(adapter)
+        attr_rows, mean_scores = summarize_attribution(by_clip)
+        ranked_ids = rank_feature_ids(mean_scores)
+        if prefilter is None:
+            selected = None
+            reported_k = min(DEFAULT_PREFILTER_K, n_features)
+        else:
+            reported_k = min(int(prefilter), n_features)
+            selected = set(ranked_ids[:reported_k])
+            log(f"prefilter K={reported_k}  candidates={ranked_ids[:reported_k]}")
         chosen = {
             clip_id: [int(index) for index in np.argsort(-np.asarray(scores), kind="stable")[:top_k]]
             for clip_id, scores in rank.items()
@@ -726,6 +756,7 @@ def _score(
             n_features,
             effect_writer,
             only=selected,
+            log=log,
         )
         ablation_seconds = time.perf_counter() - ablation_started
         if extra_effects:
@@ -754,6 +785,7 @@ def _score(
         jsonl = []
         real_labels = []
         control_seconds = 0.0
+        controls_done = 0
         for feature_id in range(n_features):
             info = stats["features"][feature_id]
             labelled = labels[feature_id]
@@ -768,6 +800,12 @@ def _score(
                 else:
                     effect = float(held_total[feature_id] / held_count[feature_id])
                 started_controls = time.perf_counter()
+                controls_done += 1
+                if selected is not None:
+                    log(
+                        f"score: {N_RANDOM_FEATURES} random controls for feature {feature_id} "
+                        f"({controls_done}/{len(selected)})"
+                    )
                 fires = _fire_values(connection, fire_source, feature_id)
                 percentile = _random_percentile(
                     adapter=adapter,
@@ -819,6 +857,8 @@ def _score(
             )
             if real:
                 real_labels.append(labelled["label"])
+            if not measured and not real:
+                continue
             pct_text = f"{float(percentile):6.1f}" if percentile is not None else "     -"
             abl_text = f"{effect:.5f}" if effect is not None else "skipped"
             log(
@@ -1046,15 +1086,27 @@ def _correlate(
     return labels, absent
 
 
-def _estimate_rows(adapter, sae, meta, writer: "_ColumnBatch", n_features: int) -> dict[str, np.ndarray]:
+def _estimate_rows(
+    adapter, sae, meta, writer: "_ColumnBatch", n_features: int, objective: str | None = None, log=None
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Write per-cell effect estimates. Returns per-clip ranking scores (mean |effect|) and the
+    per-clip attribution (summed effect, as ``attribute.attribution_by_clip``), from the same
+    backward passes. ``objective=None`` takes the adapter's default (``score.default_objective``)."""
     scores: dict[str, np.ndarray] = {}
-    for item in meta:
+    attribution: dict[str, np.ndarray] = {}
+    started = time.perf_counter()
+    for done, item in enumerate(meta, start=1):
 
         def visit(clip, item=item):
             acc = np.zeros(n_features, dtype=np.float64)
-            for window in adapter.windows(clip):
-                effect = estimate_effects(adapter, sae, clip, window).detach().cpu()
+            total = np.zeros(n_features, dtype=np.float64)
+            windows = adapter.windows(clip)
+            if not windows:
+                raise RuntimeError(f"{clip.clip_id} has no windows")
+            for window in windows:
+                effect = estimate_effects(adapter, sae, clip, window, objective=objective).detach().cpu()
                 acc += effect.abs().mean(dim=(0, 1, 2)).numpy()
+                total += np.asarray(effect.numpy(), dtype=np.float64).reshape(-1, n_features).sum(axis=0)
                 frame = effect.mean(dim=(1, 2)).numpy()
                 for t_index in range(int(frame.shape[0])):
                     width = n_features
@@ -1067,9 +1119,11 @@ def _estimate_rows(adapter, sae, meta, writer: "_ColumnBatch", n_features: int) 
                         effect_kind=["estimate"] * width,
                     )
             scores[clip.clip_id] = acc
+            attribution[clip.clip_id] = total
 
         _with_clip(adapter, item, visit)
-    return scores
+        _progress(log, "score: attribution", done, len(meta), started)
+    return scores, attribution
 
 
 def _ablation_rows(
@@ -1081,10 +1135,12 @@ def _ablation_rows(
     n_features: int,
     writer: "_ColumnBatch",
     only: set[int] | None = None,
+    log=None,
 ):
     held_total = np.zeros(n_features, dtype=np.float64)
     held_count = np.zeros(n_features, dtype=np.int64)
-    for item in meta:
+    started = time.perf_counter()
+    for done, item in enumerate(meta, start=1):
         top = set(chosen[item["clip_id"]])
         heldout = membership[item["clip_id"]]["split"] == "heldout"
         if only is None:
@@ -1102,11 +1158,18 @@ def _ablation_rows(
                 baseline, _target = adapter.predict_masked(clip, window)
                 baselines.append(baseline.detach())
                 masks.append(adapter.mask(window).detach())
-            for feature_id in feature_ids:
-                edit = ablate_edit(sae, feature_id)
-                for window, baseline, mask in zip(windows, baselines, masks, strict=True):
-                    edited, _target = adapter.predict_masked(clip, window, edit=edit)
-                    dist = cosine_distance(baseline, edited).detach().cpu()
+            # Every feature's edit on a window runs as one batch when the adapter supports it.
+            edits = [ablate_edit(sae, feature_id) for feature_id in feature_ids]
+            dists_by_window = []
+            for window, baseline in zip(windows, baselines, strict=True):
+                with torch.no_grad():
+                    edited_all = _predict_many(adapter, clip, window, edits)
+                dists_by_window.append(
+                    [cosine_distance(baseline, edited).detach().cpu() for edited in edited_all]
+                )
+            for slot, feature_id in enumerate(feature_ids):
+                for window, mask, dists in zip(windows, masks, dists_by_window, strict=True):
+                    dist = dists[slot]
                     if heldout:
                         held_total[feature_id] += float(dist.sum())
                         held_count[feature_id] += int(dist.numel())
@@ -1126,6 +1189,7 @@ def _ablation_rows(
                         )
 
         _with_clip(adapter, item, visit)
+        _progress(log, "score: ablations", done, len(meta), started)
     return held_total, held_count
 
 
@@ -1302,10 +1366,12 @@ def _mean_rows(source: RowSource, ids: np.ndarray, n_rows: int) -> np.ndarray:
     return (acc / seen).astype(np.float32)
 
 
-def _open_viewer(out, clips_dir, host, port, open_browser, log, serve: bool = True):
+def _open_viewer(out, clips_dir, host, port, open_browser, log, serve: bool = True, steer: bool = False):
     model = load_run(Path(out), Path(clips_dir))
     if not serve:
         return model, None, None, None
+    if steer:
+        enable_steering(model, Path(clips_dir))
     httpd = bind_server(model, host, int(port))
     thread = threading.Thread(target=httpd.serve_forever, name="interpretableintelligence-view", daemon=False)
     thread.start()

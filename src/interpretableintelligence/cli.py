@@ -87,6 +87,33 @@ def generate_clips_cmd(
     typer.echo(f"wrote {n} clips to {out}")
 
 
+@app.command("get-clips")
+def get_clips_cmd(
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the clips into.")] = Path("clips/droid"),
+    n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode.")] = 100,
+    seconds: Annotated[float, typer.Option("--seconds", min=0.5, help="Length of each clip.")] = 4.0,
+) -> None:
+    """Download real robot video to try a real model on: short clips from DROID (MIT licence).
+
+    One 175 MB download, cached after the first time. Each clip is cut from the middle of a robot
+    episode in a real kitchen or office and saved as an mp4.
+    """
+    from interpretableintelligence.sample_clips import DATASET, LICENSE, fetch_droid_clips
+
+    try:
+        entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo)
+    except (ValueError, RuntimeError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {len(entries)} clips from {DATASET} ({LICENSE} licence) to {out}")
+    typer.echo("")
+    typer.echo("Next, find the features a real vision model uses on them, and open the playground:")
+    typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
+    typer.echo("That takes about 10 minutes on a laptop CPU. Every feature is explorable but none is verified yet.")
+    typer.echo("To run the checks that mark features verified, run the same command without --no-score.")
+    typer.echo("It reuses what is done and adds the scoring, which takes longer (up to an hour on a CPU).")
+
+
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
     """``hf`` plus ``--model``/``--blocks`` becomes the self-describing ``hf:<model>[#<blocks>]`` name.
 
@@ -214,6 +241,10 @@ def run(
     host: Annotated[str, typer.Option("--host", help="Viewer interface.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Viewer port. 0 chooses a free port.")] = 0,
     no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+    steer: Annotated[
+        bool,
+        typer.Option("--steer", help="Turn on the playground in the viewer: edit features and watch the prediction move."),
+    ] = False,
     no_cache: Annotated[
         bool,
         typer.Option(
@@ -253,6 +284,7 @@ def run(
             host=host,
             port=port,
             open_browser=not no_open,
+            steer=steer,
             use_cache=not no_cache,
             log=typer.echo,
         )
