@@ -134,7 +134,7 @@ def get_clips_cmd(
     typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
     typer.echo("That takes about 10 minutes on a laptop CPU. Every feature is explorable but none is verified yet.")
     typer.echo("To run the checks that mark features verified, run the same command without --no-score.")
-    typer.echo("It reuses what is done and adds the scoring, which takes longer (up to an hour on a CPU).")
+    typer.echo("It reuses what is done and adds the scoring, which takes longer (about 40 minutes on a 4-core CPU).")
 
 
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
