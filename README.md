@@ -4,7 +4,7 @@
 
 A feature is marked `real` only when the SAE is good enough to splice back into the predictor and the feature passes four checks: it fires across clips, its label holds on held-out clips, its ablation effect beats matched random features, and a randomly initialised copy of the model does not reproduce its firing pattern. A missing check is `null`, and `null` never counts as a pass.
 
-`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings any ViT-style Hugging Face image or video model by name (see below). `groot` is NVIDIA's GR00T N1.7 robot policy through LeRobot. pi0.5 is still a later lane.
+`fake` is a deterministic synthetic model with three planted causal features and three decoys. It is the acceptance test for the scorer. `vjepa2` is Facebook V-JEPA 2 through Hugging Face transformers. `hf` brings a Hugging Face vision model by name: ViT-style and video encoders, CNNs, the vision tower of CLIP, SigLIP and VLMs, and SmolVLA-style robot policies (see below). `groot` is NVIDIA's GR00T N1.7 robot policy through LeRobot. pi0.5 is still a later lane.
 
 `interpretableintelligence rollouts` is the causal check on a policy. It runs paired baseline and intervention episodes, plus matched random-feature controls, and writes `rollouts/` into the run folder (schema version 1). The fake policy is a reacher whose planted feature drops success from about 0.80 to about 0.30 when ablated; other features do not move it. LIBERO, OpenVLA, and pi0.5 sit behind the optional `robots` extra as stubs. That extra installs no simulator and no GPU package.
 
@@ -93,7 +93,16 @@ uv run ii run hf --model facebook/dinov2-small --clips clips/mine --out runs/din
 uv run ii view runs/dinov2 --clips clips/mine --steer
 ```
 
-`--model` is a Hub id or a local directory (anything `AutoModel` loads that takes `pixel_values` or `pixel_values_videos`: ViT, DINOv2, VideoMAE, V-JEPA 2 and similar). The run records the adapter as `hf:<model>`, so `explain` and the playground reload the same model later. `--layer` is the 1-indexed block output (`hidden_states[layer]`) and defaults to the middle block. The block list is detected from `config.num_hidden_layers`; `--blocks encoder.layer` picks it by hand.
+`--model` is a Hub id or a local directory. What works:
+
+| Kind | Examples | What gets hooked |
+| --- | --- | --- |
+| ViT-style image or video encoder | `facebook/dinov2-small`, `WinKawaks/vit-tiny-patch16-224`, `MCG-NJU/videomae-base` | Patch tokens of a transformer block |
+| Image-text model or VLM | `openai/clip-vit-base-patch32`, `google/siglip-base-patch16-224`, `HuggingFaceTB/SmolVLM-256M-Instruct` | The vision tower only; the text side is dropped |
+| Convolutional model | `microsoft/resnet-18`, `facebook/convnext-tiny-224` | A stage's feature map, one token per map cell; the readout is the final map resized to that grid |
+| LeRobot policy with a frozen VLM vision encoder | `lerobot/smolvla_base` | The vision tower of its backbone (`vlm_model_name`), which is exactly what the policy sees |
+
+Anything else stops before downloading weights with the reason and what to try: text-only models, wrong ids, gated repos (accept the licence, then `hf auth login`), and other LeRobot policies (use `ii run groot`, or point `--model` at the policy's vision backbone). The run records the adapter as `hf:<model>`, so `explain` and the playground reload the same model later. `--layer` is the 1-indexed block output (`hidden_states[layer]`) and defaults to the middle block (for CNNs, the second-to-last stage, 14x14 at 224 px). The block list is detected from the vision config's depth; `--blocks encoder.layer` picks it by hand.
 
 A generic encoder has no masked-prediction head, so for `hf` the "prediction" is the model's own final patch tokens. Every token is scored, the target is the clean output, and the visible-mean baseline replaces every token with the average token. An ablation effect therefore reads as "how far does removing this feature move the model's output". Image models see each sampled frame (8 by default) as its own image; video models see the window at once. Frames are resized to the model's square input without cropping, so the heatmap covers the whole frame. The input side comes from the model's preprocessor config when the model accepts it (DINOv2: 224 px, although its config says 518), else from the model config. Prefix tokens (CLS, registers) pass through unedited.
 
