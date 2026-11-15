@@ -1,0 +1,396 @@
+{
+ "phases": [
+  "subset"
+ ],
+ "n_features": 40,
+ "n_feature_windows": 227,
+ "n_live": 216,
+ "n_dead_windows": 11,
+ "correlations": {
+  "dL1 (signed) vs AtP_dL1 (signed)": {
+   "per_feature_window_all": {
+    "spearman": 0.7556442705947454,
+    "pearson": 0.6734324165242052,
+    "n": 227
+   },
+   "per_feature_window_live": {
+    "spearman": 0.750561449886281,
+    "pearson": 0.67343242223329,
+    "n": 216
+   },
+   "per_feature_mean": {
+    "spearman": 0.7365853658536586,
+    "pearson": 0.5240132360582853,
+    "n": 40
+   }
+  },
+  "|dL1| vs |AtP_dL1|": {
+   "per_feature_window_all": {
+    "spearman": 0.9159872001770069,
+    "pearson": 0.8555033154390882,
+    "n": 227
+   },
+   "per_feature_window_live": {
+    "spearman": 0.9025339668250394,
+    "pearson": 0.8533815841551103,
+    "n": 216
+   },
+   "per_feature_mean": {
+    "spearman": 0.9872420262664166,
+    "pearson": 0.916132695324131,
+    "n": 40
+   }
+  },
+  "rel_l2 vs |AtP_dL1| (proxy; rel_l2 has no first-order term)": {
+   "per_feature_window_all": {
+    "spearman": 0.8587202211719612,
+    "pearson": 0.5801561829998321,
+    "n": 227
+   },
+   "per_feature_window_live": {
+    "spearman": 0.8360923564224388,
+    "pearson": 0.5720115732426639,
+    "n": 216
+   },
+   "per_feature_mean": {
+    "spearman": 0.953470919324578,
+    "pearson": 0.8390318745310825,
+    "n": 40
+   }
+  },
+  "cosd vs |AtP_dL1| (proxy; cosd has no first-order term)": {
+   "per_feature_window_all": {
+    "spearman": 0.8605597936307551,
+    "pearson": 0.388529781512506,
+    "n": 227
+   },
+   "per_feature_window_live": {
+    "spearman": 0.838227413996356,
+    "pearson": 0.38213473998905234,
+    "n": 216
+   },
+   "per_feature_mean": {
+    "spearman": 0.9424015009380865,
+    "pearson": 0.7027060274700299,
+    "n": 40
+   }
+  },
+  "|mean dL1| vs |mean AtP| per feature": {
+   "spearman": 0.9834896810506568,
+   "pearson": 0.8876974932014007,
+   "n": 40
+  }
+ },
+ "topk_recall": {
+  "by |dL1| (mean over windows of |dL1|) vs mean |AtP|": {
+   "real_top10": [
+    8103,
+    8023,
+    224,
+    6842,
+    270,
+    923,
+    5124,
+    642,
+    1609,
+    6712
+   ],
+   "atp_top10": [
+    224,
+    8023,
+    8103,
+    6201,
+    270,
+    6842,
+    923,
+    6712,
+    5124,
+    1609
+   ],
+   "in_atp_top10": 9,
+   "in_atp_top20": 10
+  },
+  "by increase in L1 (signed mean dL1) vs signed mean AtP": {
+   "real_top10": [
+    8103,
+    8023,
+    5124,
+    6849,
+    2461,
+    6201,
+    3446,
+    998,
+    5240,
+    7890
+   ],
+   "atp_top10": [
+    224,
+    8023,
+    8103,
+    5124,
+    6849,
+    3446,
+    998,
+    2461,
+    7890,
+    3180
+   ],
+   "in_atp_top10": 8,
+   "in_atp_top20": 8
+  },
+  "by rel_l2 vs mean |AtP| (proxy)": {
+   "real_top10": [
+    8103,
+    224,
+    6201,
+    1609,
+    6842,
+    998,
+    6712,
+    2461,
+    8023,
+    5124
+   ],
+   "atp_top10": [
+    224,
+    8023,
+    8103,
+    6201,
+    270,
+    6842,
+    923,
+    6712,
+    5124,
+    1609
+   ],
+   "in_atp_top10": 8,
+   "in_atp_top20": 10
+  }
+ },
+ "sign_check": {
+  "n": 216,
+  "sign_agree": 0.9074074074074074,
+  "median_ratio_atp_over_real": 0.9797514927301655
+ },
+ "cross_check_vs_ablation_json": {
+  "spearman_cosd_old_vs_new": 0.999998809226116,
+  "spearman_rel_l2_old_vs_new": 0.9999999999999999,
+  "pearson_rel_l2_old_vs_new": 0.9999999999917517,
+  "max_abs_null_dL1": 2.220446049250313e-16
+ },
+ "timing": {
+  "prefix": 719.0706601142883,
+  "atp": 855.3874442577362,
+  "real": 1378.378532409668,
+  "n_real_edits": 227,
+  "done": 67,
+  "n_windows": 67,
+  "phases": [
+   "subset"
+  ],
+  "real_s_per_feature_window": 6.072152125152722,
+  "real_s_per_feature_6win": 36.43291275091633,
+  "atp_s_per_window_all_latents": 12.766976779966212,
+  "atp_s_per_feature_window_amortised_over_tested_features": 3.7682266266860625,
+  "speedup_tested_features_only": 1.611408422771225,
+  "speedup_if_ranking_all_8192": 3896.2293945194083,
+  "note": "real time = batched (6/batch) fp64 tail fwd per edited feature incl. clean+null overhead; AtP = one fp64 fwd+bwd per window covering all 8192 latents; prefix (full target encoder + blocks 1-16, 10.7s/window) is shared by both and excluded"
+ },
+ "positive_control": {
+  "top100": {
+   "mean_dL1": 0.009685311641087435,
+   "mean_atp_dL1": 0.0013734742161823407,
+   "mean_rel_l2": 0.25183278341337534,
+   "mean_cosd": 0.03368933317525943,
+   "per_window": [
+    {
+     "edit": "top100",
+     "clip_id": 2,
+     "window": 0,
+     "L_clean": 0.5804819976599191,
+     "dL1": 0.007370040926577337,
+     "cosd": 0.033020446188674814,
+     "rel_l2": 0.24770023447327286,
+     "atp_dL1": 0.0019248168395578314,
+     "n_feats_active": 14457
+    },
+    {
+     "edit": "top100",
+     "clip_id": 4,
+     "window": 0,
+     "L_clean": 0.5571573139650949,
+     "dL1": 0.00980362773965704,
+     "cosd": 0.04177971223638749,
+     "rel_l2": 0.2810446005408429,
+     "atp_dL1": 0.0003421542859114839,
+     "n_feats_active": 14264
+    },
+    {
+     "edit": "top100",
+     "clip_id": 5,
+     "window": 0,
+     "L_clean": 0.5465261079711955,
+     "dL1": 0.011821521449653871,
+     "cosd": 0.03793128168764155,
+     "rel_l2": 0.26859616921281326,
+     "atp_dL1": -0.0005161007201900534,
+     "n_feats_active": 16363
+    },
+    {
+     "edit": "top100",
+     "clip_id": 7,
+     "window": 0,
+     "L_clean": 0.5718077005896511,
+     "dL1": 0.009221444662548817,
+     "cosd": 0.032727728875260736,
+     "rel_l2": 0.24857328293902944,
+     "atp_dL1": 0.0012924008577571428,
+     "n_feats_active": 15018
+    },
+    {
+     "edit": "top100",
+     "clip_id": 10,
+     "window": 0,
+     "L_clean": 0.56197575376544,
+     "dL1": 0.010656038990752292,
+     "cosd": 0.0310248402224192,
+     "rel_l2": 0.2419113858430974,
+     "atp_dL1": 0.0026029028030803768,
+     "n_feats_active": 14535
+    },
+    {
+     "edit": "top100",
+     "clip_id": 16,
+     "window": 0,
+     "L_clean": 0.5699679881363804,
+     "dL1": 0.009239196077335254,
+     "cosd": 0.02565198984117279,
+     "rel_l2": 0.22317102747119616,
+     "atp_dL1": 0.0025946712309772614,
+     "n_feats_active": 14194
+    }
+   ]
+  },
+  "zero": {
+   "mean_dL1": 0.22321086004039445,
+   "mean_atp_dL1": -0.00030233422667624957,
+   "mean_rel_l2": 1.3109609278507481,
+   "mean_cosd": 0.6930897150201757,
+   "per_window": [
+    {
+     "edit": "zero",
+     "clip_id": 2,
+     "window": 0,
+     "L_clean": 0.5804819976599191,
+     "dL1": 0.21585866596334002,
+     "cosd": 0.705538672128648,
+     "rel_l2": 1.3627221987131197,
+     "atp_dL1": -0.0008762129064350639,
+     "n_feats_active": 14457
+    },
+    {
+     "edit": "zero",
+     "clip_id": 4,
+     "window": 0,
+     "L_clean": 0.5571573139650949,
+     "dL1": 0.22526359555526343,
+     "cosd": 0.692901896609444,
+     "rel_l2": 1.2960412571563509,
+     "atp_dL1": -0.000787524799597511,
+     "n_feats_active": 14264
+    },
+    {
+     "edit": "zero",
+     "clip_id": 5,
+     "window": 0,
+     "L_clean": 0.5465261079711955,
+     "dL1": 0.2441792295410632,
+     "cosd": 0.7140572277858459,
+     "rel_l2": 1.2769440027561056,
+     "atp_dL1": -0.004535296254663067,
+     "n_feats_active": 16363
+    },
+    {
+     "edit": "zero",
+     "clip_id": 7,
+     "window": 0,
+     "L_clean": 0.5718077005896511,
+     "dL1": 0.2184630125451228,
+     "cosd": 0.7098365754819939,
+     "rel_l2": 1.343388636174398,
+     "atp_dL1": 2.4895198644877387e-05,
+     "n_feats_active": 15018
+    },
+    {
+     "edit": "zero",
+     "clip_id": 10,
+     "window": 0,
+     "L_clean": 0.56197575376544,
+     "dL1": 0.2216024773461489,
+     "cosd": 0.6773934123193889,
+     "rel_l2": 1.2812942570143095,
+     "atp_dL1": -0.0019820808529174842,
+     "n_feats_active": 14535
+    },
+    {
+     "edit": "zero",
+     "clip_id": 16,
+     "window": 0,
+     "L_clean": 0.5699679881363804,
+     "dL1": 0.2138981792914284,
+     "cosd": 0.6588105057957342,
+     "rel_l2": 1.3053752152902045,
+     "atp_dL1": 0.006342214254910752,
+     "n_feats_active": 14194
+    }
+   ]
+  },
+  "top100_dL1_over_zero_gap": 0.043390862072457785,
+  "single_feature_mean_|dL1|_over_zero_gap": 0.00017806802571171626
+ },
+ "candidates_rank_among_8192_by_mean_abs_atp": {
+  "991": 7425,
+  "3446": 208,
+  "7476": 7845,
+  "7563": 6766,
+  "3574": 2464,
+  "998": 86,
+  "3180": 1929,
+  "336": 930,
+  "224": 21,
+  "270": 108
+ },
+ "top20_all_latents_by_mean_abs_atp": [
+  6584,
+  8087,
+  3420,
+  3817,
+  1362,
+  1019,
+  2982,
+  2849,
+  4566,
+  1800,
+  4683,
+  3117,
+  5667,
+  7417,
+  3005,
+  6613,
+  973,
+  4153,
+  2906,
+  1392
+ ],
+ "baseline_edit_size": {
+  "note": "trivial ranker: sum of a_f over context tokens (decoders unit-norm, so ~edit size)",
+  "spearman_fw_absdL1_vs_act_sum": 0.8002,
+  "spearman_fw_absdL1_vs_absAtP": 0.916,
+  "spearman_feat_absdL1_vs_act_sum": 0.9017,
+  "spearman_feat_absdL1_vs_absAtP": 0.9872,
+  "act_sum_top10_recall_in_top10": 7,
+  "act_sum_top10_recall_in_top20": 10,
+  "spearman_per_unit_act_absdL1_vs_absAtP": 0.8762
+ },
+ "run_status": "subset phase (10 candidates + first 3 matched controls each = 40 features) stopped at 67/70 windows with no traceback (process gone, likely killed/OOM under load ~15); 227/240 feature-windows; 10 features have 4-5 windows instead of 6. 'rest' phase (other 70 controls) not run (CPU budget)."
+}

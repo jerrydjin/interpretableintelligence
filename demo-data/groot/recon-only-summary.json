@@ -1,0 +1,121 @@
+{
+  "cond": "recon-only",
+  "arm": "baseline",
+  "kind": "recon_only",
+  "latents": [],
+  "dir": "baseline/recon-only",
+  "plan_sha256": "f51d58884f6f22c5aa92ec338641890956e68167995fdf29e7c134a833a240cf",
+  "n": 8,
+  "successes": 5,
+  "rate": 0.625,
+  "wilson95": [
+    0.3057,
+    0.8632
+  ],
+  "fail_kind_counts": {
+    "lifted_not_placed": 2,
+    "never_grasped": 1
+  },
+  "n_logged": 8,
+  "n_logged_not_used": 0,
+  "inflight": [],
+  "n_max": 8,
+  "schedule_position": 1,
+  "failed": null,
+  "finished": true,
+  "sprt": {
+    "none": "sanity check, no SPRT"
+  },
+  "vs_baseline": {
+    "paired_shared_seeds": {
+      "n_shared": 8,
+      "rate_cond": 0.625,
+      "rate_base": 0.625,
+      "delta": 0.0,
+      "n_cond_only_success": 0,
+      "n_base_only_success": 0,
+      "mcnemar_exact_p_two_sided": 1.0,
+      "shared_eps_max": 7
+    },
+    "unpaired": {
+      "baseline_n": 8,
+      "baseline_rate": 0.625,
+      "delta": 0.0
+    }
+  },
+  "edit": {
+    "track_latents": [
+      10,
+      60,
+      553,
+      720,
+      754,
+      992,
+      1159,
+      1364,
+      1456,
+      1685,
+      1869,
+      2010,
+      2144,
+      2343,
+      2994,
+      3311,
+      3585,
+      5039,
+      5852,
+      6347,
+      6742,
+      6810,
+      6814,
+      7063,
+      7081,
+      7339,
+      7353,
+      7542,
+      7774,
+      8157
+    ],
+    "live_fire_frac_stat_tokens": [
+      0.03139,
+      0.03125,
+      0.03125,
+      0.24004,
+      0.03139,
+      0.03125,
+      0.03139,
+      0.19275,
+      0.08559,
+      0.03125,
+      0.35371,
+      0.25761,
+      0.03125,
+      0.15736,
+      0.03125,
+      0.03125,
+      0.03125,
+      0.29964,
+      0.07688,
+      0.03125,
+      0.03125,
+      0.26963,
+      0.29978,
+      0.15113,
+      0.07868,
+      0.13081,
+      0.24115,
+      0.14657,
+      0.18888,
+      0.26452
+    ],
+    "mean_rel_delta": 0.0,
+    "max_abs_change": 0.0,
+    "n_calls": 226
+  },
+  "recon_check": {
+    "n_compared_with_baseline": 8,
+    "n_identical_actions": 8,
+    "n_same_success": 8,
+    "hook_max_abs_change": 0.0
+  }
+}

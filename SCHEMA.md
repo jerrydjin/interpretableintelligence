@@ -306,3 +306,42 @@ For each candidate and each control the summary stores the paired success rates 
 - `control_percentile >= 95`
 
 Null does not pass. `validated_feature_ids` lists the feature ids with `causal: true`. These thresholds live next to the scoreboard gates in `src/interpretableintelligence/thresholds.py` and are not the `real` rule: a rollout never rewrites `scoreboard.json`.
+
+## steering/ (optional)
+
+`interpretableintelligence steer-scorecard` writes an offline steering scorecard. It works on a version-0 or version-1 folder and does not change `schema_version`. It never rewrites `scoreboard.json`, and a feature's `real` does not depend on it. `validate` checks it only when `steering/` exists.
+
+```
+steering/effects.parquet
+steering/scorecard.json
+```
+
+**Features.** Without `--features`, the scoreboard features with `real: true`, ordered by descending `ablation_effect` (null last, ties toward the smaller id), first `--top`. `selection` is `verified`. With no real feature the command stops. With `--features`, those ids in the given order, and `selection` is `requested`.
+
+**Edits.** On every window of every held-out clip (`split.json`), for each feature that fires on that window (some token above `DEAD_ACT_EPS`): `remove` scales the feature by 0 and `boost` scales it by `boost_factor`. The edit adds `(factor - 1) * f_i * W_dec[:, i]` on each token and keeps the SAE's reconstruction error. Each edit has `n_controls` matched controls. Control `k` of feature `i` is one random direction, rescaled to the norm of `W_dec[:, i]`, used on every window. On a window it adds the same per-token coefficients `(factor - 1) * f_i`, permuted across that window's tokens. `n_controls` is at least 19, so a p-value can reach 0.05.
+
+**effects.parquet.** One row per (feature, kind, arm, clip, window) where the feature fires. Columns, in order:
+
+| column | type | meaning |
+| --- | --- | --- |
+| `feature_id` | int32 | SAE feature. |
+| `kind` | string | `remove` or `boost`. |
+| `arm` | string | `feature` or `control`. |
+| `control` | int16 | Control index, `-1` for the feature arm. |
+| `clip_id` | string | Held-out clip. |
+| `window` | int16 | Window index. |
+| `rel_change` | float32 | `‖edited − clean‖ / ‖clean‖` over the masked output (for GR00T, the planned action chunk). |
+| `abs_change` | float32 | Mean per-row L2 change (per action step for GR00T, in the policy's normalised units). |
+
+**scorecard.json.** Top-level keys: `schema_version` (1), `run_id`, `model_sha`, `layer`, `split_sha`, `adapter` (all matching the manifest), `target` (`action_chunk` for `groot:` adapters, else `masked_prediction`), `metric` (`relative_l2_change`), `selection`, `feature_ids`, `boost_factor`, `n_controls`, `control`, `seed`, `bootstrap`, `confidence` (0.95), `alpha` (0.05), `sae_usable`, `n_episodes` and `n_windows` (held-out clips and windows scored), `rows`, `rollout_finding` (always false), and `note`.
+
+`rows` holds one object per feature and kind, features in `feature_ids` order, `remove` before `boost`. Over the rows of that feature and kind:
+
+- `n_windows`, `n_episodes`: windows and distinct clips where the feature fired. `coverage` is `n_windows / n_windows(top level)`.
+- `action_change`: mean `rel_change` of the feature arm. `control_change`: mean over windows of the per-window mean over controls. `excess`: their difference. `ratio`: `action_change / control_change`, null when the controls do not move the output. Each is `{mean, ci_low, ci_high}`.
+- `abs_change`: mean `abs_change` of the feature arm.
+- `reliability`: `{rate, ci_low, ci_high, chance}`. `rate` is the share of windows where the feature arm's `rel_change` is above every control's by more than `1e-9`. `chance` is `1 / (n_controls + 1)`.
+- `p_value`: `(1 + #{control arms whose mean ≥ action_change}) / (n_controls + 1)`. Ties count against the feature. `control_percentile` is the scoreboard's `percentile_le` of `action_change` among the control arms' means.
+- `beats_controls`: `p_value <= alpha` and `excess.ci_low > 0`. A null bound does not pass.
+
+Intervals are percentile intervals from `bootstrap` resamples of the episodes (clips) with replacement, seeded by `(seed, feature_id, kind)`. They are null with fewer than two episodes. A feature that never fires on a held-out window has `n_windows: 0`, null statistics, and `beats_controls: false`. `validate` recomputes `scorecard.json` from `effects.parquet` and the top-level settings and requires the stored file to match.

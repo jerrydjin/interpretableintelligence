@@ -111,6 +111,21 @@ GR00T also needs a wrist camera, the robot state and an instruction. Put them in
 
 Weights stream in at half precision (6.3 GB). On a 4-core CPU the model loads in about a minute and each window takes a few seconds; a GPU is much faster. `ii run groot --tiny` runs a GR00T-shaped random network instead, with no download; it is for tests and is not GR00T. Closed-loop LIBERO rollouts for GR00T still go through `adapters/groot/v9/`.
 
+#### Steering scorecard
+
+```bash
+uv run ii steer-scorecard runs/groot --clips clips/libero
+```
+
+For the top verified (`real`) features, strongest ablation effect first (`--top`, default 5), it removes each feature (scale 0) and boosts it (`--boost`, default ×3) on every held-out window where the feature fires. It then measures how far the planned action chunk moved: the relative L2 change against the clean chunk. Each edit is paired with `--controls` (default 32, at least 19) matched random-feature controls on the same window. A control is a random direction at the feature's decoder norm, carrying the same per-token edit sizes, on a random permutation of that window's tokens. The scorecard reports, per feature and edit:
+
+- how much: the mean change, the controls' mean change, the excess, and the ratio to controls;
+- how reliably: the share of windows where the edit moved the actions more than every control did (chance is `1 / (controls + 1)`);
+- a Monte Carlo p-value against the control arms;
+- 95% intervals from a bootstrap that resamples held-out episodes, since windows of one episode are not independent.
+
+It writes `steering/effects.parquet` and `steering/scorecard.json`, and `ii view` shows it under **Steering** and on each feature's page. When no feature is `real`, the command stops; `--features 3,7` measures named features and records them as unverified. The scorecard never touches `scoreboard.json` or a badge. It is offline, on recorded clips, so it is not a rollout finding under the research rules. It works on any run (`fake`, `hf`, `vjepa2`), where it measures the masked prediction instead.
+
 ```bash
 uv run interpretableintelligence rollouts runs/demo --policy fake --episodes 32 --features 3 --controls 10 --workers 2
 uv run pytest
@@ -162,6 +177,7 @@ The playground needs the model, so the export precomputes it: remove, scale, cla
 | `scripts/compare_attribution_vs_ablation.py` | Spearman and top-K overlap for a finished run |
 | `src/interpretableintelligence/view.py` | Local clip viewer over a finished run folder |
 | `src/interpretableintelligence/steer.py` | Playground steering behind `view --steer` |
+| `src/interpretableintelligence/steer_scorecard.py` | `ii steer-scorecard`: remove and boost features against matched controls, `steering/` |
 | `src/interpretableintelligence/contract_view.py` | Read-API payloads matched by `interpretableintelligence-server` |
 | `src/interpretableintelligence/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
 | `src/interpretableintelligence/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |
