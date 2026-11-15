@@ -44,6 +44,7 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_CONTROLS,
     DEFAULT_ROLLOUT_EPISODES,
     DEFAULT_ROLLOUT_MIN_EPISODES,
+    DEFAULT_RANDOM_SAE,
     DEFAULT_ROLLOUT_WORKERS,
     PICK_DISCOVERY_EPISODES,
     SPRT_LAMBDA,
@@ -788,7 +789,7 @@ def execute_rollouts(
     min_episodes: int = DEFAULT_ROLLOUT_MIN_EPISODES,
     batch_size: int = DEFAULT_ROLLOUT_BATCH,
     pick: int | None = None,
-    random_sae: int = 0,
+    random_sae: int | None = None,
     pick_episodes: int = PICK_DISCOVERY_EPISODES,
 ) -> dict:
     """Run the paired design into ``run_dir/rollouts`` and return the summary.
@@ -796,6 +797,7 @@ def execute_rollouts(
     Pass ``features`` (ids chosen by hand) or ``pick`` (the top ``pick`` of the
     policy's picker on the trained SAE), not both. ``random_sae`` untrained SAEs
     go through the same picker and add one arm per pick; it needs ``pick``.
+    ``None`` means ``DEFAULT_RANDOM_SAE`` with ``pick`` and 0 without.
     """
     from interpretableintelligence.rollout_pick import pick_features, picker_name, random_sae_seeds
 
@@ -803,6 +805,8 @@ def execute_rollouts(
         raise ValueError("pass --features or --pick, not both")
     if not features and pick is None:
         raise ValueError("at least one feature id is required: pass --features or --pick")
+    if random_sae is None:
+        random_sae = DEFAULT_RANDOM_SAE if pick is not None else 0
     if random_sae < 0:
         raise ValueError(f"--random-sae must be >= 0, got {random_sae}")
     if random_sae and pick is None:

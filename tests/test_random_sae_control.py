@@ -221,3 +221,20 @@ def test_random_sae_needs_a_policy_that_can_edit_one(tmp_path: Path, monkeypatch
     monkeypatch.setattr(fake.FakePolicyEnv, "random_dictionaries", False)
     with pytest.raises(ValueError, match="cannot edit an untrained SAE"):
         execute_rollouts(tmp_path / "x", policy="fake", episodes=8, pick=1, random_sae=1, controls=0)
+
+
+def test_pick_turns_the_control_on_by_default(tmp_path: Path):
+    from interpretableintelligence.thresholds import DEFAULT_RANDOM_SAE
+
+    assert DEFAULT_RANDOM_SAE == 5
+    common = ["--policy", "fake", "--episodes", "8", "--controls", "2", "--seed", "0"]
+    cases = {
+        "pick": (["--pick", "1"], DEFAULT_RANDOM_SAE),
+        "opt-out": (["--pick", "1", "--random-sae", "0"], 0),
+        "features": (["--features", "3"], 0),
+    }
+    for name, (flags, expected) in cases.items():
+        result = runner.invoke(app, ["rollouts", str(tmp_path / name), *common, *flags])
+        assert result.exit_code == 0, (name, result.output)
+        summary = json.loads((tmp_path / name / "rollouts" / "summary.json").read_text())
+        assert summary["random_sae_seeds"] == random_sae_seeds(0, expected), name

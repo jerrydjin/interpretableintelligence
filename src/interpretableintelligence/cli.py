@@ -493,14 +493,15 @@ def rollouts(
         ),
     ] = None,
     random_sae: Annotated[
-        int,
+        int | None,
         typer.Option(
             "--random-sae",
             min=0,
             help="Random-weights SAE control: untrained SAEs sent through the same picker, one arm per pick. "
-            "Needs --pick. A candidate is a finding only if it beats every one of these arms.",
+            "Needs --pick. A candidate is a finding only if it beats every one of these arms. "
+            f"Default: {DEFAULT_RANDOM_SAE} with --pick, 0 without; 0 turns it off.",
         ),
-    ] = DEFAULT_RANDOM_SAE,
+    ] = None,
     pick_episodes: Annotated[
         int,
         typer.Option("--pick-episodes", min=1, help="Discovery episodes the default picker screens each feature on."),
