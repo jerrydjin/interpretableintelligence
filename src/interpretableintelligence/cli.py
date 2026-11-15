@@ -19,7 +19,9 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_EPISODES,
     DEFAULT_ROLLOUT_MIN_EPISODES,
     DEFAULT_ROLLOUT_WORKERS,
+    DEFAULT_RANDOM_SAE,
     DEFAULT_SEED,
+    PICK_DISCOVERY_EPISODES,
     STEER_BOOST_FACTOR,
     STEER_BOOTSTRAP,
     STEER_CONTROLS,
@@ -573,12 +575,34 @@ def rollouts(
         int,
         typer.Option("--batch-size", min=1, help="New episodes per active arm between early-stop checks."),
     ] = DEFAULT_ROLLOUT_BATCH,
+    pick: Annotated[
+        int | None,
+        typer.Option(
+            "--pick",
+            min=1,
+            help="Pick this many candidates with the policy's picker on the trained SAE, instead of --features.",
+        ),
+    ] = None,
+    random_sae: Annotated[
+        int | None,
+        typer.Option(
+            "--random-sae",
+            min=0,
+            help="Random-weights SAE control: untrained SAEs sent through the same picker, one arm per pick. "
+            "Needs --pick. A candidate is a finding only if it beats every one of these arms. "
+            f"Default: {DEFAULT_RANDOM_SAE} with --pick, 0 without; 0 turns it off.",
+        ),
+    ] = None,
+    pick_episodes: Annotated[
+        int,
+        typer.Option("--pick-episodes", min=1, help="Discovery episodes the default picker screens each feature on."),
+    ] = PICK_DISCOVERY_EPISODES,
 ) -> None:
     """Compare baseline and intervened task success. Resume skips episodes already written."""
     from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
 
     try:
-        feature_ids = parse_feature_ids(features)
+        feature_ids = parse_feature_ids(features) if features.strip() or pick is None else []
         summary = execute_rollouts(
             run_dir,
             policy=policy,
@@ -594,6 +618,9 @@ def rollouts(
             alpha=alpha,
             min_episodes=min_episodes,
             batch_size=batch_size,
+            pick=pick,
+            random_sae=random_sae,
+            pick_episodes=pick_episodes,
         )
     except (ValueError, RuntimeError, FileNotFoundError, NotImplementedError) as exc:
         typer.echo(f"error: {exc}", err=True)
