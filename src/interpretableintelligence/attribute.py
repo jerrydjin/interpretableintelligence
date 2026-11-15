@@ -7,7 +7,11 @@ on a clip is the sum over that clip's windows and tokens of
 
 The objective is pluggable through the adapter: ``prediction_loss`` (masked
 predictor MSE) or ``action_loglik`` (log-likelihood of the action the policy
-took). ``activation`` skips the backward and ranks by activation magnitude,
+took), or ``output_sensitivity`` for adapters whose prediction target is the
+model's own clean output (hf, groot): there the loss and its gradient are zero
+at the clean point, so the score is instead a random-probe estimate of how far
+ablating each feature turns the output (``score.output_sensitivity_effects``).
+``activation`` skips the backward and ranks by activation magnitude,
 the baseline attribution has to beat. The result is a shortlist. Every pick
 is confirmed by a real ablation; the score itself is not evidence.
 """
@@ -23,19 +27,29 @@ import pyarrow.parquet as pq
 import torch
 
 from interpretableintelligence.artifacts import ATTRIBUTION_COLUMNS, read_attribution_objective
-from interpretableintelligence.score import estimate_effects
+from interpretableintelligence.score import OUTPUT_SENSITIVITY, PREDICTION_LOSS, default_objective, estimate_effects
 from interpretableintelligence.stats import spearman
 from interpretableintelligence.thresholds import DEFAULT_PREFILTER_K
 
 METHOD = "attribution_patching"
-PREDICTION_LOSS = "prediction_loss"
 ACTION_LOGLIK = "action_loglik"
 ACTIVATION = "activation"
-RANK_OBJECTIVES = (PREDICTION_LOSS, ACTION_LOGLIK, ACTIVATION)
-GRADIENT_OBJECTIVES = (PREDICTION_LOSS, ACTION_LOGLIK)
+RANK_OBJECTIVES = (PREDICTION_LOSS, OUTPUT_SENSITIVITY, ACTION_LOGLIK, ACTIVATION)
+GRADIENT_OBJECTIVES = (PREDICTION_LOSS, OUTPUT_SENSITIVITY, ACTION_LOGLIK)
+# What ``ii run`` may record on a scored run: the adapter picks (``default_objective``).
+SCORED_OBJECTIVES = (PREDICTION_LOSS, OUTPUT_SENSITIVITY)
 
 
 def rank_description(objective: str) -> str:
+    if objective == OUTPUT_SENSITIVITY:
+        return (
+            "abs(mean over clips of the per-clip score); "
+            f"objective={objective}; "
+            "the per-clip score sums, over windows, a random-probe estimate of how far ablating the feature "
+            "turns the model's output (cosine, to second order); "
+            "ties break toward the smaller feature id. "
+            "This is a shortlist: every pick is confirmed by a real ablation."
+        )
     if objective == ACTIVATION:
         return (
             "mean over clips of sum |activation| over tokens and windows; "
@@ -58,9 +72,12 @@ def check_objective(objective: str) -> str:
     return objective
 
 
-def attribution_by_clip(adapter, sae, clips, objective: str = PREDICTION_LOSS) -> dict[str, np.ndarray]:
-    """Per-clip score, shape ``[n_features]``, summed over windows and tokens."""
-    objective = check_objective(objective)
+def attribution_by_clip(adapter, sae, clips, objective: str | None = None) -> dict[str, np.ndarray]:
+    """Per-clip score, shape ``[n_features]``, summed over windows and tokens.
+
+    ``objective=None`` takes the adapter's default (``score.default_objective``).
+    """
+    objective = check_objective(default_objective(adapter) if objective is None else objective)
     if objective == ACTIVATION:
         return _activation_magnitude_by_clip(adapter, sae, clips)
     n_features = int(sae.n_features)

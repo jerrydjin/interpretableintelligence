@@ -3,26 +3,49 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Demo · interpretableintelligence</title>
+  <meta name="theme-color" content="#faf9f5">
+  <title>ii · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
-  <header class="top">
+  <header class="top demo-top">
     <div class="brand-row">
-      <a class="wordmark" href="/">interpretableintelligence</a>
-      <nav class="nav"><a href="/fake/">Fake</a><a href="/picker/">Picker</a><a href="/vjepa/">V-JEPA 2</a><a href="/groot/">GR00T</a></nav>
+      <a class="wordmark" href="/" aria-label="interpretable intelligence">
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
+        <span class="wordmark-text">interpretable intelligence</span>
+      </a>
+      <nav class="nav"><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
     </div>
   </header>
   <main class="prose">
-    <h1>Demo</h1>
-    <p>Four sections. The fake run is a working viewer. The other three are the measurements on disk, or a section that has no validated run.</p>
-    <ul class="section-list">
-      <li><a href="/fake/">Fake demo</a> — 30 synthetic clips, layer 16, seed 0, held-out fraction 0.2. The scoreboard is the source of <span class="badge badge-real">real</span>.</li>
-      <li><a href="/picker/">Candidate picker</a> — synthetic rollouts. Counts from the rerun of the picker scripts.</li>
-      <li><a href="/vjepa/">V-JEPA 2 on DROID</a> — held-out <code>droid_ep068.mp4</code>, window 0, then feature 270.</li>
-      <li><a href="/groot/">GR00T N1.7 on LIBERO</a> — <span class="badge badge-unverified">Tested: no causal effect found</span></li>
+    <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
+    <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
+    <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
+    <h2>What you get today</h2>
+    <p><code>ii</code> is free and local. <code data-cmd="run">ii run</code> captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); <code data-cmd="view">ii view</code> opens the run; <code data-cmd="validate">ii validate</code> checks it. <code data-cmd="rollouts">ii rollouts</code> compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy.</p>
+    <h2>Proof</h2>
+    <p data-testid="control-headline">Feature 720 tracked failures, and turning it off dropped success from 39/75 to 1/9. Turning off random features caused falls too in 5 of 20 runs. `ii` makes you run that control before calling a feature real.</p>
+    <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>ablate_v9.py</code></a>), 641 rollouts. Label: <span class="badge badge-unverified">Tested: no causal effect found</span>. <a href="/results/">Results</a>.</p>
+    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
+    <h2>What's coming</h2>
+    <ul class="coming" data-testid="coming">
+      <li><span class="badge badge-unverified">Coming</span> <code data-cmd="import">ii import</code> (bring the rollout logs you already have).</li>
+      <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>
+      <li><span class="badge badge-unverified">Coming</span> Closed-loop rollouts at scale.</li>
+      <li><span class="badge badge-unverified">Coming</span> Live GR00T rollouts through <code>ii</code>.</li>
+    </ul>
+    <h2 id="quickstart">Quickstart</h2>
+    <pre class="quickstart"><code>uv sync
+uv run ii try</code></pre>
+    <p><code data-cmd="try">ii try</code> writes practice clips and runs the pipeline on the fake model.</p>
+    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code> — New here? Start with this. Finds features in a small practice model and opens the playground.</li><li><code data-cmd="run">ii run</code> — Capture, train, extract features, score what is missing, then serve the viewer.</li><li><code data-cmd="view">ii view</code> — Start a local viewer for a run folder and open it in a browser.</li><li><code data-cmd="rollouts">ii rollouts</code> — Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written.</li><li><code data-cmd="validate">ii validate</code> — Validate a run folder against the schema.</li></ul>
+    <p><a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md">The rest of the commands are in the README.</a></p>
+    <h2>Synthetic demos</h2>
+    <ul class="section-list" data-testid="synthetic-sections">
+      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer. Not a result on a real model.</span></a></li>
+      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> Generated clips with planted features. Shows the viewer end to end. Not a result on a real model.</span></a></li>
     </ul>
     </main>
 </body>

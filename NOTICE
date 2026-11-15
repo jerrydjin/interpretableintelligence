@@ -1,0 +1,83 @@
+interpretableintelligence
+Copyright 2026 Jerry Jin
+
+This product includes software developed by Jerry Jin, licensed under the
+Apache License, Version 2.0. See LICENSE.
+
+Third-party components referenced by this repository, or bundled in demo
+assets and documentation, are licensed separately as described below.
+This NOTICE summarizes those components; it does not replace their license
+terms.
+
+================================================================================
+NVIDIA GR00T
+================================================================================
+
+LeRobot fine-tuned checkpoint (dataset card / redistribution terms):
+  nvidia/gr00t17-lerobot-libero_10-640
+  https://huggingface.co/nvidia/gr00t17-lerobot-libero_10-640
+  License: Apache-2.0 (per Hugging Face model card)
+
+Upstream GR00T N1.7 base model:
+  https://huggingface.co/nvidia/GR00T-N1.7-3B
+  License text: https://huggingface.co/nvidia/GR00T-N1.7-3B/raw/main/LICENSE
+  (NVIDIA Open Model License)
+
+For artifacts derived from GR00T N1.7 weights or outputs, include the
+following notice where required by the NVIDIA Open Model License:
+
+  Licensed by NVIDIA Corporation under the NVIDIA Open Model License
+
+================================================================================
+LIBERO
+================================================================================
+
+Simulation benchmark and reference code: MIT License
+LIBERO datasets: Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+================================================================================
+LIBERO-plus
+================================================================================
+
+Dataset (Hugging Face dataset card): MIT License
+  https://huggingface.co/datasets/Sylvest/LIBERO-plus
+
+The corresponding GitHub repository does not ship a LICENSE file in the
+upstream tree; comply with the dataset card and your upstream checkout when
+using LIBERO-plus data or code.
+
+================================================================================
+DROID
+================================================================================
+
+Upstream DROID robot manipulation dataset: CC BY 4.0
+Credit the DROID dataset authors (Khazatsky et al.; the DROID project).
+
+LeRobot subset used in demo clips:
+  lerobot/droid_100
+  https://huggingface.co/datasets/lerobot/droid_100
+  License: MIT (per Hugging Face dataset card)
+
+See also demo-data/vjepa-slim/SOURCE.json for clip-level attribution.
+
+================================================================================
+V-JEPA 2
+================================================================================
+
+Video Joint Embedding Predictive Architecture 2 (V-JEPA 2): MIT License
+
+================================================================================
+Fonts (vendored, SIL Open Font License 1.1)
+================================================================================
+
+Geist (woff2 files under src/interpretableintelligence/static/fonts/)
+  Copyright (c) 2023 Vercel, in collaboration with basement.studio
+  Full license: src/interpretableintelligence/static/fonts/OFL.txt
+
+Newsreader (newsreader.woff2)
+  Copyright 2020 The Newsreader Project Authors
+  Full license: src/interpretableintelligence/static/fonts/OFL-newsreader.txt
+
+The viewer and export bundles copy these fonts so the UI works offline.
+Do not rename the fonts or use reserved font names in derivative font works
+(OFL requirements).

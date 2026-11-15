@@ -28,7 +28,7 @@ from interpretableintelligence.rollout import (
     make_episode_id,
     summarize,
 )
-from interpretableintelligence.attribute import PREDICTION_LOSS, METHOD, rank_feature_ids
+from interpretableintelligence.attribute import METHOD, SCORED_OBJECTIVES, rank_feature_ids
 from interpretableintelligence.sae import load_sae
 from interpretableintelligence.split import assign_split, split_sha
 from interpretableintelligence.stats import feature_is_real, is_usable
@@ -172,6 +172,9 @@ def validate_run(run_dir: Path) -> list[str]:
     _check_shards(run_dir, manifest, errors)
     _check_feature_files(run_dir, manifest, scoreboard, errors)
     _check_rollouts(run_dir, schema_version, errors)
+    from interpretableintelligence.steer_scorecard import check_steering  # noqa: PLC0415
+
+    errors.extend(check_steering(run_dir, manifest, scoreboard))
     return errors
 
 
@@ -838,9 +841,9 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
         errors.append(f"attribution columns must be {ATTRIBUTION_COLUMNS}")
         return
     recorded = read_attribution_objective(path)
-    if recorded != PREDICTION_LOSS:
+    if recorded not in SCORED_OBJECTIVES:
         errors.append(
-            f"attribution.parquet objective metadata must be {PREDICTION_LOSS!r} on a scored run, got {recorded!r}"
+            f"attribution.parquet objective metadata must be one of {SCORED_OBJECTIVES} on a scored run, got {recorded!r}"
         )
     frame = table.to_pydict()
     clip_ids = [clip["clip_id"] for clip in manifest["clips"] if isinstance(clip, dict)]
@@ -880,8 +883,8 @@ def _check_attribution(run_dir: Path, manifest: dict, n_features: int, errors: l
     _exact_keys(document, _CANDIDATE_KEYS, "candidates.json", errors)
     if document.get("method") != METHOD:
         errors.append(f"candidates.json method must be {METHOD}")
-    if document.get("objective") != PREDICTION_LOSS:
-        errors.append(f"candidates.json objective must be {PREDICTION_LOSS!r} on a scored run")
+    if document.get("objective") != recorded:
+        errors.append(f"candidates.json objective must match attribution.parquet ({recorded!r})")
     if document.get("shortlist_only") is not True:
         errors.append("candidates are a shortlist and must be confirmed by a real ablation")
     if not isinstance(document.get("rank_by"), str) or not document["rank_by"]:
