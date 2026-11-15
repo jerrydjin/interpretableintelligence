@@ -114,3 +114,21 @@ def test_run_steer_opens_the_playground(demo) -> None:
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+def test_playground_works_before_scoring(demo, tmp_path: Path) -> None:
+    """--no-score --steer: the playground loads with every feature unverified; explain still refuses."""
+    import pytest
+
+    from interpretableintelligence.explain import ExplainError, load_run
+    from interpretableintelligence.steer import Steerer
+
+    out = tmp_path / "demo"
+    shutil.copytree(demo.run, out)
+    (out / "scoreboard.json").unlink()
+    with pytest.raises(ExplainError):
+        load_run(out)
+    steerer = Steerer(out, demo.clips)
+    assert steerer.sae_usable is False
+    assert all(record["real"] is False for record in steerer.ctx.scoreboard["features"])
+    assert not (out / "scoreboard.json").exists()

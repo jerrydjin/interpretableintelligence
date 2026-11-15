@@ -116,7 +116,7 @@ class Steerer:
     def __init__(self, run_dir: Path, clips_dir: Path | None = None) -> None:
         from interpretableintelligence.view import _resolve_pixels  # noqa: PLC0415 (view stays adapter-free)
 
-        self.ctx = load_run(Path(run_dir))
+        self.ctx = load_run(Path(run_dir), allow_unscored=True)
         ctx = self.ctx
         self.device = pick_device()
         try:
