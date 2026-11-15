@@ -102,7 +102,7 @@ f = relu(W_enc @ (x - b_dec) + b_enc)
 x_hat = W_dec @ f + b_dec
 ```
 
-Decoder columns are unit-norm. `sae/config.json` records `d_model`, `n_features`, `l1_coeff`, `ortho_coeff`, `lr`, `steps`, `batch_size`, `seed`, `normalize_decoder`, and `activation` (`relu` or `topk`). A `topk` SAE also records `k`, the number of features kept per token; its `l1_coeff` and `ortho_coeff` are 0. Training uses train-split activations only. The orthogonality term keeps one planted direction from splitting into two live features.
+Decoder columns are unit-norm. `sae/config.json` records `d_model`, `n_features`, `l1_coeff`, `ortho_coeff`, `lr`, `steps`, `batch_size`, `seed`, `normalize_decoder`, and `activation` (`relu`, `topk`, or `jumprelu`). A `topk` SAE also records `k`, the number of features kept per token; its `l1_coeff` and `ortho_coeff` are 0. A `jumprelu` SAE records `threshold` instead: `f = r * (r > threshold)` with `r = relu(W_enc @ (x - b_dec) + b_enc)`. That is how a BatchTopK SAE runs at inference, and `ii import` writes it (see "Imported runs"). Training uses train-split activations only. The orthogonality term keeps one planted direction from splitting into two live features.
 
 ## features/feature_acts.parquet
 
@@ -253,6 +253,46 @@ One record per run. No extra keys.
 - `absent_in_random_init is true`
 
 `null` is not a pass. A high percentile alone is not a pass: a dead feature can tie a null control distribution and still score 100.
+
+## Imported runs
+
+`interpretableintelligence import --format <format> <source> <out>` writes a run folder from rollout logs captured outside `ii`. `<source>` is a directory or a `.tar`, `.tar.xz` or `.tar.gz` of one. The first format is `groot-v9`, the GR00T v9 rollcap-v0 layout (the `data-groot-1028-v1` release). An imported run is the version-0 tree above plus `manifest.import`. Everything that does not need the model is computed by the same code as `interpretableintelligence run`: activation shards, `feature_acts.parquet`, top examples, `ev_heldout`, `dead_frac`, `distinct_clips_top20`, the attribution files, and `real` through the four gates. What does need the model in the loop is `null`, with a reason, and never `0.0`. A validator treats a folder as imported exactly when `manifest.import` is present; without it, every rule above applies unchanged.
+
+### manifest.import
+
+```json
+{
+  "format": "groot-v9",
+  "cells": {"t": [0], "h": [0], "w": [0, 1, 3, 4]},
+  "clips": [{"clip_id": "ep-00000", "source_id": 0, "n_windows": 23, "success": true, "fail_kind": null}],
+  "nulls": {"scoreboard.sae.loss_recovered": "needs the GR00T action head ..."},
+  "source": {"layout": "rollcap-v0", "files": {"split.json": "<64 hex>"}, "archive": {"name": "...", "sha256": "<64 hex>", "bytes": 0}},
+  "notes": {},
+  "wall_s": 61.2
+}
+```
+
+- `cells` are the grid cells the source captured, as the product of the three sorted lists. Rows cover exactly these cells in row-major `(t, h, w)` order. A capture that kept every token lists the whole grid.
+- `clips` has one entry per `manifest.clips` entry, in the same order. `source_id` is the id the source's `split.json` uses for that clip. `n_windows` is that clip's own window count: an imported clip covers windows `0 .. n_windows - 1`, and clips may differ. Other keys are per-clip outcome fields kept from the source (for `groot-v9`: `seed`, `init_state_id`, `success`, `fail_kind`, `fail_t`, `fail_subkind`, `fail_rule`).
+- `nulls` maps each field the import left null to a non-empty reason. Every null listed below needs a reason, and a reason for a field that is not null is an error.
+- `source` is provenance: the source layout, sha256s of its key files, and the archive's name, sha256 and size when one was imported. `notes` are format-specific (the hook, the token layout, the SAE fold, where `model.sha` came from). `wall_s` is the import's wall time.
+
+### What changes for an imported run
+
+- **split.json** is the source's file, copied byte for byte. It is not re-serialised, and it does not follow the clip-level algorithm. It must be a JSON object with `train` and `heldout` lists of source ids (integers or strings), disjoint, together naming every `manifest.import.clips[].source_id`; other keys are the source's. `manifest.split.sha` is the sha256 of the file's bytes. `manifest.split.seed` and `heldout_frac` are `null` (with reasons) unless the source records them, and `scoreboard.run.seed` equals `manifest.split.seed`. `clips[].split` still matches the file. Held-out labels are never edited.
+- **clips[].sha256** is the sha256 of the source file the clip's rows came from (for `groot-v9`, the episode's `acts/shard-NNNNN.safetensors`), because the source has no clip pixels.
+- **Activation shards** hold each clip's own windows and the captured cells only, in manifest clip order, then window, then cell. Values are the source's, cast to float16. Nothing is padded or interpolated.
+- **Nullable fields.** `scoreboard.sae.loss_recovered`, `loss_sae`, and `loss_visible_mean` are null when the source cannot be spliced back into the model, and then `usable` is null too. `ev_heldout` may be null only if the source has no held-out rows (it is computed whenever it can be). `label_holds_heldout`, `ablation_effect`, `random_percentile`, and `absent_in_random_init` are null when no labeller, ablation or random-init capture ran; `n_random` is then 0. Each has a reason in `manifest.import.nulls`, under the key `scoreboard.sae.<field>` or `scoreboard.features.<field>`. `null` is still not a pass: with `usable` null, every feature is `real: false`.
+- **features/clip_effects.parquet** has the usual columns and zero rows when no effect could be measured; its reason is `nulls["features/clip_effects.parquet"]`. If an imported run does carry effect rows, they follow the version-0 rules.
+- **Attribution.** `attribution.parquet` may record objective `activation` (sum of |activation|, no backward), and `candidates.json` records the same objective. It is a shortlist; nothing in it was ablated.
+
+### groot-v9
+
+The mapping follows `interpretableintelligence run groot`. The adapter is `groot:<checkpoint>` and the layer is the hooked DiT block. Each clip is one episode, and each window is one policy call (`window = step // action_queue_steps`). The grid is `t=1, h=1, w=1+action_horizon` with `tubelet = action_queue_steps`, and `w` is the DiT token index (0 is the state token, `k` is action step `k - 1`). `cells.w` is the capture's `token_indices`. `fps` is env steps per second (LIBERO: 20, `--fps`), and `n_frames` is the env steps the episode executed.
+
+The source SAE is BatchTopK, run with a learned JumpReLU threshold on `(x - norm_mu) / norm_scale`. The normalisation is folded into the stored weights (`W_enc' = W_enc^T`, `b_enc' = norm_scale * b_enc`, `b_dec' = norm_mu + norm_scale * b_dec`, `W_dec' = W_dec^T`), and `threshold' = norm_scale * threshold`. Feature ids and active sets equal the source's, and values are `norm_scale` times the source's, in raw activation units.
+
+Failure labels are the pot-0 detector's (`fail_rule` starting `pot0-v1`, from `tools/derive_pot0_fail.py`). The importer refuses a capture without them and never reads the v9 active-object labels (`fail_kind_v9_active`, `fail_t_v9_active`). `model.sha` is `--model-sha` when given. Otherwise it is the sha `run groot` computes from the Hub's sha256 of the checkpoint weights, and if the Hub cannot be reached, a sha256 of the source's declared model and hook record. `notes.model_sha_source` says which.
 
 ## Adapter obligations the schema assumes
 

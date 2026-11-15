@@ -296,9 +296,9 @@ def explain_clip(run_dir: Path, clip_path: Path, *, clip_id: str | None = None) 
             model_sha=ctx.model_sha,
             layer=ctx.layer,
         ) from exc
-    if config.activation not in ("relu", "topk"):
+    if config.activation not in ("relu", "topk", "jumprelu"):
         raise ExplainError(
-            f"refusing to explain: SAE for run {ctx.run_id} has activation {config.activation!r}, expected relu or topk",
+            f"refusing to explain: SAE for run {ctx.run_id} has activation {config.activation!r}, expected relu, topk or jumprelu",
             run_id=ctx.run_id,
             model_sha=ctx.model_sha,
             layer=ctx.layer,

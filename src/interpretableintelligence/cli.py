@@ -637,6 +637,36 @@ def export_site_cmd(
     typer.echo(f"wrote {dest}")
 
 
+@app.command("import")
+def import_cmd(
+    source: Annotated[Path, typer.Argument(help="Capture to import: a directory, or a .tar / .tar.xz / .tar.gz of one.")],
+    out: Annotated[Path, typer.Argument(help="Run folder to write. Must not exist or must be empty.")],
+    format_name: Annotated[str, typer.Option("--format", help="Source layout. Known: groot-v9.")],
+    model_sha: Annotated[
+        str | None,
+        typer.Option(
+            "--model-sha",
+            help="manifest.model.sha to record. Default: the same sha ii run groot computes (needs the Hugging Face Hub), "
+            "else a digest of the declared model; the manifest records which.",
+        ),
+    ] = None,
+    fps: Annotated[float, typer.Option("--fps", help="Env steps per second, recorded as clips[].fps (LIBERO: 20).")] = 20.0,
+) -> None:
+    """Import rollout logs captured outside ii into a run folder that ii validate accepts.
+
+    split.json is copied byte for byte. Metrics that need the model in the loop are null, each with a reason in
+    manifest.import.nulls, and every feature stays real: false.
+    """
+    from interpretableintelligence.importers import import_run
+
+    try:
+        import_run(format_name, source, out, log=typer.echo, model_sha=model_sha, fps=fps)
+    except (ValueError, FileNotFoundError, FileExistsError, KeyError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"next: ii validate {out}")
+
+
 @app.command()
 def validate(
     run_dir: Annotated[Path, typer.Argument(help="Run folder to check against the schema.")],

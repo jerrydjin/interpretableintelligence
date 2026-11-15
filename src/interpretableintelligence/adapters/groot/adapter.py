@@ -93,6 +93,20 @@ def parse_spec(spec: str) -> str:
     return checkpoint
 
 
+def model_sha_for(spec: str, fingerprint: bytes, *, random_init: bool = False) -> str:
+    """``manifest.model.sha`` for ``groot:<checkpoint>`` given the backend's weights fingerprint.
+
+    ``ii import --format groot-v9`` uses this too, so an imported capture and an
+    ``ii run groot`` on the same checkpoint carry the same sha.
+    """
+    digest = hashlib.sha256()
+    digest.update(b"groot-v1")
+    digest.update(spec.encode())
+    digest.update(b"random" if random_init else b"weights")
+    digest.update(fingerprint)
+    return digest.hexdigest()
+
+
 def make_spec(checkpoint: str | None = None, *, tiny: bool = False) -> str:
     if tiny:
         if checkpoint not in (None, TINY):
@@ -198,12 +212,7 @@ class GrootAdapter:
 
     def model_sha(self) -> str:
         self._ensure()
-        digest = hashlib.sha256()
-        digest.update(b"groot-v1")
-        digest.update(self.name.encode())
-        digest.update(b"random" if self._random_init else b"weights")
-        digest.update(self.backend.fingerprint())
-        return digest.hexdigest()
+        return model_sha_for(self.name, self.backend.fingerprint(), random_init=self._random_init)
 
     # --------------------------------------------------------------- protocol
 
