@@ -22,7 +22,7 @@ uv run pytest
 
 `interpretableintelligence` is the long command name; **`ii` is the same CLI**. PyTorch is pinned to CPU wheels in `pyproject.toml` for CI and local dev; GR00T/LIBERO jobs use separate GPU environments (Colab), not this default install.
 
-On a fresh clone of `main`, expect **218 passed, 13 skipped** (`pytest` excludes `slow` and two deselected tests by default). Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
+On a fresh clone of `main`, expect **229 passed, 13 skipped** (`pytest` excludes `slow` and two deselected tests by default). Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
 
 ## `ii` CLI (public surface)
 
@@ -37,6 +37,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
 | `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
+| `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls; effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
 | `validate` | Check a run folder against `SCHEMA.md`. |

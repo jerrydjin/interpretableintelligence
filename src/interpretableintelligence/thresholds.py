@@ -116,3 +116,20 @@ PICK_SEED_OFFSET = 1_000_000
 # Untrained dictionaries drawn by default. 0 keeps existing runs and their cost unchanged;
 # without at least one, no candidate can be a finding.
 DEFAULT_RANDOM_SAE = 0
+
+# Steering scorecard (`ii steer-scorecard`, steering/). Independent of `real` and of
+# the rollout causal gate: it never rewrites scoreboard.json and is not a rollout
+# finding. Each top feature is removed (scale 0) and boosted (scale
+# STEER_BOOST_FACTOR) on held-out windows, next to STEER_CONTROLS matched random
+# directions. A row "beats controls" only when its mean action change clears the
+# Monte Carlo p-value at STEER_ALPHA (ties count against the feature) and the
+# lower confidence bound of its excess over the controls is above zero.
+STEER_TOP_FEATURES = 5
+STEER_BOOST_FACTOR = 3.0
+STEER_CONTROLS = 32
+STEER_BOOTSTRAP = 2000
+STEER_CONFIDENCE = 0.95
+STEER_ALPHA = 0.05
+# Relative changes at or below this are numerical dust when deciding whether the
+# feature moved the actions more than every control on a window.
+STEER_TIE_EPS = 1e-9

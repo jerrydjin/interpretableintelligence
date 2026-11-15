@@ -173,6 +173,9 @@ def validate_run(run_dir: Path) -> list[str]:
     _check_shards(run_dir, manifest, errors)
     _check_feature_files(run_dir, manifest, scoreboard, errors)
     _check_rollouts(run_dir, schema_version, errors)
+    from interpretableintelligence.steer_scorecard import check_steering  # noqa: PLC0415
+
+    errors.extend(check_steering(run_dir, manifest, scoreboard))
     return errors
 
 
