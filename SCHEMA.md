@@ -343,3 +343,39 @@ steering/scorecard.json
 - `beats_controls`: `p_value <= alpha` and `excess.ci_low > 0`. A null bound does not pass.
 
 Intervals are percentile intervals from `bootstrap` resamples of the episodes (clips) with replacement, seeded by `(seed, feature_id, kind)`. They are null with fewer than two episodes. A feature that never fires on a held-out window has `n_windows: 0`, null statistics, and `beats_controls: false`. `validate` recomputes `scorecard.json` from `effects.parquet` and the top-level settings and requires the stored file to match.
+
+## probe/ (optional)
+
+`interpretableintelligence probe` writes an offline failure probe. It works on a version-0 or version-1 folder, does not change `schema_version`, never reads or writes `scoreboard.json`'s gates, never edits `split.json`, and never sets `real`. `validate` checks it only when `probe/` exists.
+
+```
+probe/scores.parquet
+probe/probe.json
+```
+
+**Labels.** `--labels FILE` (default: `failures.json` in the manifest's `clips_dir`) is JSON with `episodes`, one per manifest clip: `{clip_id, failure, onset_s}`. A failed episode has `onset_s` in seconds from the clip start; a successful one has `onset_s: null`. Optional `source` names the labeller. Every clip needs exactly one label. `ii generate-clips --failure-labels planted|null` writes this file for fake clips.
+
+**Inputs.** Three, from the same activation shards: `trained_sae` (the run's SAE), `random_sae`, and `raw` (the layer activations). `random_sae` is `sae.random_weights_sae`: the trained SAE's architecture, `n_features`, `activation` and `k`, with the trainer's initial weights (unit-norm Gaussian decoder columns, tied encoder, zero encoder bias, `b_dec` at the train-row mean) and zero optimiser steps. It is deterministic in its seed (`--random-seed`, default the SAE config's `seed`, which makes it the trained SAE's own starting point).
+
+**Probe.** Bin `t` of window `k` ends at `(k * grid.t + t + 1) * grid.tubelet / fps` seconds (windows tile the clip back to back, as on `fake`). An episode's reference time is `onset_s` for a failure and `n_frames / fps` for a success; the probe sees only bins that end at or before `reference - lead_s`. An episode with no such bin is not scored (`labels.n_unscored`). Each input is max-pooled over the seen tokens, standardised with the train split's mean and standard deviation, and fit with an L2 logistic regression (`--l2`, bias unpenalised) on `split.json`'s train clips only. Held-out clips are scored once.
+
+**scores.parquet.** One row per (input, scored episode), train and held-out. Columns, in order:
+
+| column | type | meaning |
+| --- | --- | --- |
+| `input` | string | `trained_sae`, `random_sae`, or `raw`. |
+| `clip_id` | string | Episode. |
+| `split` | string | `train` or `heldout`, as in `split.json`. |
+| `failure` | bool | Label. |
+| `ref_s` | float64 | Onset (failure) or clip end (success). |
+| `cutoff_s` | float64 | `ref_s - lead_s`. |
+| `lead_s` | float64 | `ref_s` minus the end of the last bin the probe saw. |
+| `score` | float64 | Probe logit. |
+
+**probe.json.** Top-level keys: `schema_version` (1), `run_id`, `model_sha`, `layer`, `split_sha`, `adapter` (all matching the manifest), `target` (`failure`), `labels` (`source`, `sha256` of the file, `n_failures`, `n_episodes`, `n_unscored`), `pool` (`max`), `probe`, `lead_s`, `min_lead_s`, `bootstrap`, `confidence` (0.95), `alpha` (0.05), `seed`, `n_episodes` (held-out scored, failed, successful), `inputs`, `comparisons`, `sae_gate`, `positive`, `reason`, `real` (always false), `rollout_finding` (always false), and `note`.
+
+- `inputs.<name>`: `n_dims`, held-out `auroc` (failures scored above successes, ties half), its percentile interval `ci_low`/`ci_high`, and `lead_time_s` (the smallest `lead_s` among held-out failures). `trained_sae` adds `sae_usable` and `loss_recovered`, copied from `scoreboard.json` when it has them and null otherwise. `random_sae` adds `seed`, `init`, `weights_sha256`, and `sae_usable`, `loss_recovered`, `clip_effects` (always null: the control is never spliced, scored or ablated, and a missing measurement is null, never 0.0) and `real` (always false).
+- `comparisons.random_sae` and `comparisons.raw`: `delta` (trained minus baseline AUROC), its interval, `p_value`, and `beats`. The bootstrap resamples held-out episodes with replacement within each class, `bootstrap` times, seeded by `seed`; every input is scored on the same resample. `p_value` is `(1 + #{resamples with delta <= 0}) / (bootstrap + 1)`. `beats` is `delta > 0` and `p_value < alpha`.
+- `sae_gate` is `not_run` when the gate is skipped: no probe could be fit (the train split lacks a class), fewer than `PROBE_MIN_CLASS` (2) held-out episodes of either class, `lead_s` below `min_lead_s` (1 s), or a held-out lead time below it. Otherwise it is `pass` when both comparisons beat, else `fail`. `positive` is `sae_gate == "pass"`. Null never passes.
+
+`validate` recomputes `probe.json` from `scores.parquet` and the stored settings and requires the stored file to match.

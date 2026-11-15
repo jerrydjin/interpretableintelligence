@@ -175,6 +175,9 @@ def validate_run(run_dir: Path) -> list[str]:
     from interpretableintelligence.steer_scorecard import check_steering  # noqa: PLC0415
 
     errors.extend(check_steering(run_dir, manifest, scoreboard))
+    from interpretableintelligence.probe import check_probe  # noqa: PLC0415
+
+    errors.extend(check_probe(run_dir, manifest))
     return errors
 
 

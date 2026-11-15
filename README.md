@@ -157,7 +157,7 @@ The playground needs the model, so the export precomputes it: remove, scale, cla
 | `src/interpretableintelligence/adapters/hf.py` | Generic Hugging Face vision adapter (`hf:<model>`) |
 | `src/interpretableintelligence/adapters/groot/adapter.py` | GR00T N1.7 adapter (`groot:<checkpoint>`) and its random `groot:tiny` stand-in |
 | `docs/FRICTION-vjepa2.md` | Jeff's setup log for the V-JEPA 2 port |
-| `src/interpretableintelligence/sae.py` | ReLU SAE trainer |
+| `src/interpretableintelligence/sae.py` | ReLU / TopK SAE trainer and the seeded random-weights SAE control |
 | `src/interpretableintelligence/score.py` | Explained variance, loss recovered, ablations, random controls |
 | `src/interpretableintelligence/attribute.py` | Attribution-patching prefilter and the ablation comparison |
 | `src/interpretableintelligence/pipeline.py` | Resumable capture, SAE, features, score, and viewer |
@@ -169,6 +169,7 @@ The playground needs the model, so the export precomputes it: remove, scale, cla
 | `src/interpretableintelligence/view.py` | Local clip viewer over a finished run folder |
 | `src/interpretableintelligence/steer.py` | Playground steering behind `view --steer` |
 | `src/interpretableintelligence/steer_scorecard.py` | `ii steer-scorecard`: remove and boost features against matched controls, `steering/` |
+| `src/interpretableintelligence/probe.py` | `ii probe`: held-out failure probe on trained-SAE latents vs a random-weights SAE and raw activations, `probe/` |
 | `src/interpretableintelligence/contract_view.py` | Read-API payloads matched by `interpretableintelligence-server` |
 | `src/interpretableintelligence/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
 | `src/interpretableintelligence/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |

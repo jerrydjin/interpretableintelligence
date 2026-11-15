@@ -31,13 +31,14 @@ All experiments that belong in this repo should be reachable through these comma
 | Command | Purpose |
 | --- | --- |
 | `try` | Guided first run for newcomers: practice clips, a `fake` run under `runs/try`, then the playground opened on the strongest verified feature. |
-| `generate-clips` | Write deterministic synthetic clips for the `fake` adapter. |
+| `generate-clips` | Write deterministic synthetic clips for the `fake` adapter (`--failure-labels planted\|null` also writes `failures.json` for `ii probe`). |
 | `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). |
 | `rank` | Attribution prefilter shortlist; does not replace ablation. |
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
 | `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
 | `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls; effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
+| `probe` | Held-out failure probe on a run's SAE latents, trained on `split.json`'s train clips only, against a seeded random-weights SAE (same architecture, width, `k`) and raw activations → `probe/`. `sae_gate` passes only if the trained SAE beats both on AUROC (paired episode bootstrap p < 0.05) at a lead of ≥ 1 s; `not_run` when skipped. Offline; never changes the scoreboard, never sets `real`, not a rollout finding. |
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
 | `validate` | Check a run folder against `SCHEMA.md`. |
@@ -86,7 +87,7 @@ These override intuition, offline plots, and demo-site copy.
 1. The **Sobel–Wald SPRT** stop rule calls a **rise** (not merely a fall or cap).
 2. The rise over the measured baseline on those seeds has **McNemar p < 0.05**.
 3. The effect **beats every matched random control** arm in the plan.
-4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. **Not implemented in the repo yet** (no `ii` command; known gap).
+4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. The random-weights SAE itself is in the repo (`sae.random_weights_sae`, used offline by `ii probe`), but it is **not wired into the rollout picker yet** (known gap), so no rollout result satisfies rule 4.
 
 **`recon_only` (groot ablation plans):** sanity check only—the hook applies SAE reconstruction with **no latent ablation** (empty edit set). On task 1028 it was **8/8 bit-identical to baseline**. This verifies the hook path; it is **not** the random-weights SAE control and does not satisfy rule 4.
 

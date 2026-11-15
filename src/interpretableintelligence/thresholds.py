@@ -124,3 +124,16 @@ STEER_ALPHA = 0.05
 # Relative changes at or below this are numerical dust when deciding whether the
 # feature moved the actions more than every control on a window.
 STEER_TIE_EPS = 1e-9
+
+# Failure probe (`ii probe`, probe/). Independent of `real` and of the rollout
+# causal gate: it never rewrites scoreboard.json and never sets real. The gate
+# (`sae_gate`) passes only when the trained SAE's held-out AUROC beats both the
+# random-weights SAE and raw activations, each with a one-sided paired bootstrap
+# p-value below PROBE_ALPHA, at a lead time of at least PROBE_MIN_LEAD_S seconds.
+# It is not run with fewer than PROBE_MIN_CLASS held-out episodes of either class.
+PROBE_MIN_LEAD_S = 1.0
+PROBE_ALPHA = 0.05
+PROBE_BOOTSTRAP = 2000
+PROBE_CONFIDENCE = 0.95
+PROBE_L2 = 1.0
+PROBE_MIN_CLASS = 2

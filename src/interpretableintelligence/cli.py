@@ -20,6 +20,9 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_MIN_EPISODES,
     DEFAULT_ROLLOUT_WORKERS,
     DEFAULT_SEED,
+    PROBE_BOOTSTRAP,
+    PROBE_L2,
+    PROBE_MIN_LEAD_S,
     STEER_BOOST_FACTOR,
     STEER_BOOTSTRAP,
     STEER_CONTROLS,
@@ -79,12 +82,30 @@ def generate_clips_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write synthetic clips into.")],
     n: Annotated[int, typer.Option("--n", min=1, help="Number of clips.")] = 30,
     seed: Annotated[int, typer.Option("--seed", help="Generator seed.")] = 0,
+    failure_labels: Annotated[
+        str | None,
+        typer.Option(
+            "--failure-labels",
+            help="Also write failures.json for `ii probe`: 'planted' (fails when the stripe peak is in the first half) or 'null' (seeded coin, no signal).",
+        ),
+    ] = None,
 ) -> None:
     """Write deterministic synthetic clips for the fake adapter."""
-    from interpretableintelligence.adapters.fake import generate_clips
+    from interpretableintelligence.adapters.fake import FAILURE_LABELS_FILE, generate_clips
+    from interpretableintelligence.adapters.fake import failure_labels as make_labels
+    from interpretableintelligence.artifacts import write_json
 
+    try:
+        labels = None if failure_labels is None else make_labels(n, seed, failure_labels)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     generate_clips(out, n=n, seed=seed)
     typer.echo(f"wrote {n} clips to {out}")
+    if labels is not None:
+        write_json(Path(out) / FAILURE_LABELS_FILE, labels)
+        failed = sum(1 for episode in labels["episodes"] if episode["failure"])
+        typer.echo(f"wrote {failure_labels} failure labels ({failed}/{n} fail) to {Path(out) / FAILURE_LABELS_FILE}")
 
 
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
@@ -561,6 +582,56 @@ def steer_scorecard_cmd(
         raise typer.Exit(code=1) from exc
     typer.echo(format_report(card))
     typer.echo(f"wrote {run_dir / 'steering'}")
+
+
+@app.command("probe")
+def probe_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder. The result is written under probe/.")],
+    labels: Annotated[
+        Path | None,
+        typer.Option(
+            "--labels",
+            exists=True,
+            dir_okay=False,
+            help="Episode failure labels (JSON: episodes[] of clip_id, failure, onset_s). Default: failures.json in the run's clips_dir.",
+        ),
+    ] = None,
+    lead: Annotated[
+        float,
+        typer.Option("--lead-s", help=f"Seconds before onset the probe must stop looking. The gate needs at least {PROBE_MIN_LEAD_S:g}."),
+    ] = PROBE_MIN_LEAD_S,
+    seed: Annotated[int, typer.Option("--seed", help="Bootstrap seed.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Paired bootstrap resamples of held-out episodes.")] = PROBE_BOOTSTRAP,
+    l2: Annotated[float, typer.Option("--l2", help="L2 penalty of the logistic probe (same for every input).")] = PROBE_L2,
+    random_seed: Annotated[
+        int | None,
+        typer.Option("--random-seed", help="Seed of the random-weights SAE control. Default: the trained SAE's seed (its own untrained start)."),
+    ] = None,
+) -> None:
+    """Held-out failure probe: trained SAE latents vs a random-weights SAE and raw activations.
+
+    Fits one logistic probe per input on split.json's train clips, scores held-out clips, and passes
+    sae_gate only if the trained SAE beats both baselines on AUROC (paired bootstrap p < 0.05) at a lead
+    of at least 1 s. Never changes scoreboard.json, never sets real, and is not a rollout finding.
+    """
+    from interpretableintelligence.probe import execute_probe, format_report
+
+    try:
+        result = execute_probe(
+            run_dir,
+            labels_path=labels,
+            lead_s=lead,
+            seed=seed,
+            bootstrap=bootstrap,
+            l2=l2,
+            random_seed=random_seed,
+            log=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(format_report(result))
+    typer.echo(f"wrote {run_dir / 'probe'}")
 
 
 @app.command("export")
