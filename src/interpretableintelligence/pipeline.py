@@ -10,6 +10,7 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import os
 import shutil
 import threading
 import time
@@ -84,11 +85,15 @@ from interpretableintelligence.thresholds import (
     LABEL_HOLD_MIN_CORR,
     MIN_CLIPS,
     N_RANDOM_FEATURES,
+    RANDOM_PERCENTILE_MIN,
     PATTERN_ABSENT_MAX_CORR,
     TOP_K_ABLATION_PER_CLIP,
     TOP_K_EXAMPLES,
 )
 from interpretableintelligence.view import bind_server, load_run
+
+# Torch's own default (physical cores it may use), read before any run changes it.
+_DEFAULT_THREADS = max(1, torch.get_num_threads())
 
 STAGES = ("capture", "sae", "features", "score", "view")
 REPORT_BEGIN = "--- interpretableintelligence cost report ---"
@@ -231,7 +236,7 @@ def execute_pipeline(
     prefilter = None if prefilter is None else int(prefilter)
     extra_effects = check_extra_effects(extra_effects)
 
-    torch.set_num_threads(1)
+    torch.set_num_threads(_cpu_threads(adapter_name))
     device = pick_device()
     clips_dir = Path(clips_dir)
     out = Path(out_dir)
@@ -386,6 +391,22 @@ def execute_pipeline(
                 thread.join(timeout=5)
             httpd.server_close()
     return {"report": report, "scoreboard": scoreboard, "manifest": manifest}
+
+
+def _cpu_threads(adapter_name: str) -> int:
+    """Torch CPU threads for a run.
+
+    The fake acceptance run is tiny matmuls and keeps one thread, so its
+    reference scoreboard is stable. Real models are dominated by large
+    matmuls and use every core (one thread was 3 to 4 times slower on a
+    4-core CPU). ``II_THREADS`` overrides both.
+    """
+    override = os.environ.get("II_THREADS", "").strip()
+    if override:
+        return max(1, int(override))
+    if adapter_name == "fake":
+        return 1
+    return _DEFAULT_THREADS
 
 
 def _report(manifest: dict, gpu_cost_per_hour: float | None) -> dict:
@@ -778,6 +799,7 @@ def _score(
                     meta=meta,
                     heldout_meta=heldout_meta,
                     seed=int(seed),
+                    n_tokens=int(held_count[feature_id]) if STOP_CONTROLS_ON_FAIL else None,
                 )
                 control_seconds += time.perf_counter() - started_controls
                 n_random = N_RANDOM_FEATURES
@@ -1101,34 +1123,51 @@ def _ablation_rows(
                 baseline, _target = adapter.predict_masked(clip, window)
                 baselines.append(baseline.detach())
                 masks.append(adapter.mask(window).detach())
-            for feature_id in feature_ids:
-                edit = ablate_edit(sae, feature_id)
-                for window, baseline, mask in zip(windows, baselines, masks, strict=True):
-                    edited, _target = adapter.predict_masked(clip, window, edit=edit)
-                    dist = cosine_distance(baseline, edited).detach().cpu()
-                    if heldout:
-                        held_total[feature_id] += float(dist.sum())
-                        held_count[feature_id] += int(dist.numel())
-                    if feature_id not in record_ids:
-                        continue
-                    coords = mask.detach().cpu().nonzero(as_tuple=False)
-                    for t_index in range(int(adapter.grid().t)):
-                        selected = coords[:, 0] == t_index
-                        value = float(dist[selected].mean()) if int(selected.sum()) else 0.0
-                        writer.add(
-                            feature_id=np.asarray([feature_id], dtype=np.int32),
-                            clip_id=[clip.clip_id],
-                            window=np.asarray([int(window.index)], dtype=np.int16),
-                            t=np.asarray([t_index], dtype=np.int16),
-                            effect=np.asarray([value], dtype=np.float32),
-                            effect_kind=["ablation"],
-                        )
+            for start in range(0, len(feature_ids), ABLATION_BATCH):
+                group = feature_ids[start : start + ABLATION_BATCH]
+                edits = [ablate_edit(sae, feature_id) for feature_id in group]
+                # One batched, downstream-only pass per window for the whole group.
+                # Rows and sums still go feature by feature, window by window.
+                dists_by_window = []
+                with torch.no_grad():
+                    for window, baseline in zip(windows, baselines, strict=True):
+                        edited_many = _predict_many(adapter, clip, window, edits)
+                        dists_by_window.append([cosine_distance(baseline, edited).detach().cpu() for edited in edited_many])
+                for slot, feature_id in enumerate(group):
+                    _ablation_feature_rows(
+                        adapter, clip, windows, masks, [dists[slot] for dists in dists_by_window],
+                        feature_id, heldout, record_ids, held_total, held_count, writer,
+                    )
 
         _with_clip(adapter, item, visit)
     return held_total, held_count
 
 
-def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, meta, heldout_meta, seed: int) -> float:
+def _ablation_feature_rows(adapter, clip, windows, masks, dists, feature_id, heldout, record_ids, held_total, held_count, writer) -> None:
+    """Held-out sums and per-frame ``ablation`` rows for one feature on one clip."""
+    for window, mask, dist in zip(windows, masks, dists, strict=True):
+        if heldout:
+            held_total[feature_id] += float(dist.sum())
+            held_count[feature_id] += int(dist.numel())
+        if feature_id not in record_ids:
+            continue
+        coords = mask.detach().cpu().nonzero(as_tuple=False)
+        for t_index in range(int(adapter.grid().t)):
+            selected = coords[:, 0] == t_index
+            value = float(dist[selected].mean()) if int(selected.sum()) else 0.0
+            writer.add(
+                feature_id=np.asarray([feature_id], dtype=np.int32),
+                clip_id=[clip.clip_id],
+                window=np.asarray([int(window.index)], dtype=np.int16),
+                t=np.asarray([t_index], dtype=np.int16),
+                effect=np.asarray([value], dtype=np.float32),
+                effect_kind=["ablation"],
+            )
+
+
+def _random_percentile(
+    *, adapter, sae, feature_id, real_effect, fires, pool, meta, heldout_meta, seed: int, n_tokens: int | None = None
+) -> float:
     """Percentile of ``real_effect`` among ``N_RANDOM_FEATURES`` matched random directions.
 
     Every trial draws its directions and positions up front, in the same RNG
@@ -1136,6 +1175,15 @@ def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, me
     unedited prediction is computed once per window, and every trial's edit is
     measured against that. Per-trial sums still add clips and windows in the
     same order, so the samples are unchanged.
+
+    ``n_tokens`` is the held-out token count every trial ends on (the feature's
+    own ablation saw the same windows). With it, the controls stop as soon as
+    the percentile gate is certain to fail: cosine distances are never
+    negative, so a running sum only grows, and a trial whose partial mean
+    already beats ``real_effect`` will beat it at the end. The verdict is the
+    same; the returned value is then an upper bound on the full percentile
+    (see :func:`_percentile_upper_bound`). A feature that can still pass always
+    runs every control, so a pass is always the exact percentile.
     """
     if fires.size == 0:
         return percentile_le(real_effect, np.zeros(N_RANDOM_FEATURES, dtype=np.float64))
@@ -1172,26 +1220,92 @@ def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, me
                     baseline, _target = adapter.predict_masked(clip, window)
                     edits = []
                     for direction, by_clip in trials:
-                        positions = by_clip.get(clip_key, [])
+                        edits.append(_control_edit(by_clip.get(clip_key, []), direction))
+                    # Slices line up with the adapter's own batches, so each forward
+                    # sees the same inputs as one call with every edit. Checking
+                    # between slices lets a certain fail stop mid-window.
+                    step = _edits_per_batch(adapter, window) or len(edits)
+                    for start in range(0, len(edits), step):
+                        edited_many = _predict_many(adapter, clip, window, edits[start : start + step])
+                        for trial, edited in enumerate(edited_many, start=start):
+                            dist = cosine_distance(baseline, edited)
+                            totals[trial] += float(dist.sum())
+                            counts[trial] += int(dist.numel())
+                        if _fail_is_certain(totals, n_tokens, real_effect):
+                            raise _ControlsDecided
 
-                        def edit(acts: torch.Tensor, positions=positions, direc=direction) -> torch.Tensor:
-                            out = acts.clone()
-                            for ti, hi, wi, value in positions:
-                                out[ti, hi, wi] = out[ti, hi, wi] - value * direc
-                            return out
-
-                        edits.append(edit)
-                    for trial, edited in enumerate(_predict_many(adapter, clip, window, edits)):
-                        dist = cosine_distance(baseline, edited)
-                        totals[trial] += float(dist.sum())
-                        counts[trial] += int(dist.numel())
-
-        _with_clip(adapter, item, visit)
+        try:
+            _with_clip(adapter, item, visit)
+        except _ControlsDecided:
+            return _percentile_upper_bound(totals, n_tokens, real_effect)
     samples = np.array(
         [0.0 if count == 0 else total / count for total, count in zip(totals, counts, strict=True)],
         dtype=np.float64,
     )
     return percentile_le(real_effect, samples)
+
+
+# Stop a feature's random controls once its percentile gate is certain to fail.
+# Verdicts are unchanged; a failing feature then records an upper bound.
+STOP_CONTROLS_ON_FAIL = True
+
+
+class _ControlsDecided(Exception):
+    """Raised inside a clip visit once the percentile gate is certain to fail."""
+
+
+def _controls_beating(totals: list[float], n_tokens: int, real_effect: float) -> int:
+    """Trials whose running mean already exceeds ``real_effect``; final means can only be larger."""
+    return sum(1 for total in totals if total / n_tokens > real_effect)
+
+
+def _percentile_upper_bound(totals: list[float], n_tokens: int, real_effect: float) -> float:
+    """``percentile_le`` if every trial not yet beating the feature ends up at or below it."""
+    beaten = _controls_beating(totals, n_tokens, real_effect)
+    return float(100.0 * ((len(totals) - beaten) / len(totals)))
+
+
+def _fail_is_certain(totals: list[float], n_tokens: int | None, real_effect: float) -> bool:
+    if not n_tokens or not math.isfinite(real_effect):
+        return False
+    return _percentile_upper_bound(totals, n_tokens, real_effect) < RANDOM_PERCENTILE_MIN
+
+
+# Feature ablations measured per batched pass in ``_ablation_rows``. Bounds the
+# edited outputs held at once when every feature of a small SAE is ablated.
+ABLATION_BATCH = 32
+
+
+def _control_edit(positions: list[tuple[int, int, int, float]], direction: torch.Tensor):
+    """Subtract ``value * direction`` at each ``(t, h, w)`` in one indexed op.
+
+    Positions within a trial are distinct tokens, so this is elementwise the
+    same float32 arithmetic as updating them one at a time.
+    """
+    if not positions:
+        return lambda acts: acts.clone()
+    device = direction.device
+    ti = torch.tensor([p[0] for p in positions], dtype=torch.long, device=device)
+    hi = torch.tensor([p[1] for p in positions], dtype=torch.long, device=device)
+    wi = torch.tensor([p[2] for p in positions], dtype=torch.long, device=device)
+    values = torch.tensor([p[3] for p in positions], dtype=torch.float32, device=device)
+    delta = values[:, None] * direction
+
+    def edit(acts: torch.Tensor) -> torch.Tensor:
+        out = acts.clone()
+        out[ti, hi, wi] = out[ti, hi, wi] - delta.to(out.dtype)
+        return out
+
+    return edit
+
+
+def _edits_per_batch(adapter, window) -> int | None:
+    """Edits per batched forward in the adapter's ``predict_masked_many``, if it says."""
+    many = getattr(adapter, "predict_masked_many", None)
+    size = getattr(adapter, "edits_per_batch", None)
+    if many is None or size is None:
+        return None
+    return max(1, int(size(window)))
 
 
 def _predict_many(adapter, clip, window, edits) -> list[torch.Tensor]:
