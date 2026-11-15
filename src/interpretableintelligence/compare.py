@@ -387,14 +387,16 @@ def _thumb(clips_dir: Path | None, clip_id: str, size: int = 112) -> str:
     path = Path(clips_dir) / f"{clip_id}.npy"
     if not path.is_file():
         return ""
-    from PIL import Image
-
     frames = np.load(path, mmap_mode="r")
     frame = np.asarray(frames[len(frames) // 2])
     if frame.ndim != 3 or frame.shape[-1] not in (1, 3):
         return ""
     if frame.shape[-1] == 1:
         frame = np.repeat(frame, 3, axis=-1)
+    try:
+        from PIL import Image
+    except ImportError:  # Pillow is optional; the page works without thumbnails
+        return ""
     if frame.dtype != np.uint8:
         frame = (np.clip(frame, 0, 1) * 255).astype(np.uint8)
     image = Image.fromarray(frame).resize((size, size), Image.BILINEAR)
