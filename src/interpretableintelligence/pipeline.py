@@ -706,6 +706,7 @@ def _score(
         reported_k = min(int(prefilter), n_features)
         selected = set(ranked_ids[:reported_k])
         log(f"prefilter K={reported_k}  candidates={ranked_ids[:reported_k]}")
+    _autointerp(adapter, model, meta, out, labels, selected, ranked_ids, device, seed, log)
 
     top_k = min(TOP_K_ABLATION_PER_CLIP, n_features)
     effects_path = out / "features" / "clip_effects.parquet"
@@ -1353,12 +1354,46 @@ def _wait_health(url: str) -> dict:
 
 
 def _concept_inputs(adapter_name: str, concepts_file) -> dict:
-    """Score-stage cache key for the labeller, so a new concept list relabels."""
+    """Score-stage cache key for the labeller, so a new concept list or label model relabels."""
     if not adapter_name.startswith("hf:"):
         return {}
+    from interpretableintelligence.autointerp import AUTOINTERP_VERSION, provider_from_env
     from interpretableintelligence.labelers import CLIP_LABEL_MODEL, load_concepts
 
-    return {"labeller": CLIP_LABEL_MODEL, "concepts": load_concepts(concepts_file)}
+    inputs = {"labeller": CLIP_LABEL_MODEL, "concepts": load_concepts(concepts_file)}
+    picked = provider_from_env()
+    if picked is not None:
+        inputs["autointerp"] = [AUTOINTERP_VERSION, *picked]
+    return inputs
+
+
+def _autointerp(adapter, sae, meta, out: Path, labels: list[dict], selected, ranked_ids, device, seed, log) -> None:
+    """Replace the CLIP labels of the features being scored with explain-then-simulate labels.
+
+    Only for hf and only when a vision-model key is set (``autointerp.client_from_env``).
+    The label still has to hold on held-out clips at the same AUROC bar. A provider
+    error keeps the CLIP labels and says so; it never fails the run.
+    """
+    if not adapter.name.startswith("hf:"):
+        return
+    from interpretableintelligence.autointerp import MAX_FEATURES, client_from_env, label_features
+
+    client = client_from_env()
+    if client is None:
+        return
+    targets = sorted(selected) if selected is not None else sorted(ranked_ids[: min(MAX_FEATURES, len(ranked_ids))])
+    log(f"score: auto-interp labels from {client.name} for {len(targets)} features")
+    try:
+        new, evidence = label_features(
+            client=client, adapter=adapter, meta=meta, acts_dir=out / "acts", sae=sae,
+            feature_ids=targets, device=device, seed=int(seed), log=log,
+        )
+    except RuntimeError as exc:
+        log(f"score: auto-interp failed ({exc}); keeping CLIP labels")
+        return
+    for feature_id, row in new.items():
+        labels[feature_id] = row
+    write_json(out / "features" / "autointerp.json", evidence)
 
 
 def _concept_source(adapter, concepts_file, device, log):
@@ -1895,6 +1930,7 @@ def _invalidate(out: Path, stage: str) -> None:
             out / "features" / "clip_effects.parquet",
             out / "features" / "attribution.parquet",
             out / "features" / "candidates.json",
+            out / "features" / "autointerp.json",
         ]
     else:
         targets = []
