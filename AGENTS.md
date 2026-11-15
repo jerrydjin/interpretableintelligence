@@ -6,7 +6,7 @@ Shared rules for Claude Code, Codex, and other coding agents working in this rep
 
 **interpretableintelligence** (`ii`) is infrastructure for mechanistic interpretability on video world models and robot / VLA policies: a shared **run folder** format, SAE training, offline scoreboard gates, local viewers, and causal rollouts.
 
-The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, the generic `hf:<model>` adapter (any ViT-style Hugging Face vision model, `ii run hf --model <id>`), and `groot:<checkpoint>` (NVIDIA GR00T N1.7 through LeRobot, `ii run groot`; needs `lerobot[groot]==0.7.0`, and `--tiny` is a random-weights stand-in for tests). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
+The main library and CLI live under `src/interpretableintelligence/`. Adapters shipped on main are `fake` (acceptance test), `vjepa2`, the generic `hf:<model>` adapter (any Hugging Face vision model: ViT-style, CNN, the vision tower of CLIP/SigLIP/VLMs, or a SmolVLA-style policy's frozen encoder; `ii run hf --model <id>`), and `groot:<checkpoint>` (NVIDIA GR00T N1.7 through LeRobot, `ii run groot`; needs `lerobot[groot]==0.7.0`, and `--tiny` is a random-weights stand-in for tests). Robot work is **dogfooded** on real models in `src/interpretableintelligence/adapters/groot/`—currently **NVIDIA GR00T** checkpoint `nvidia/gr00t17-lerobot-libero_10-640` on **LIBERO-plus** (task 1028 is the active rise-test task).
 
 Contract details: `SCHEMA.md`, `ARCHITECTURE.md`, `README.md`. Do not drift from them in agent docs.
 
@@ -22,7 +22,7 @@ uv run pytest
 
 `interpretableintelligence` is the long command name; **`ii` is the same CLI**. PyTorch is pinned to CPU wheels in `pyproject.toml` for CI and local dev; GR00T/LIBERO jobs use separate GPU environments (Colab), not this default install.
 
-On a fresh clone of `main`, expect **229 passed, 13 skipped** (`pytest` excludes `slow` and two deselected tests by default). Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
+On a fresh clone of `main` with `cargo`, Chrome and `node` on the machine (as in CI, on Ubuntu and macOS), expect **232 passed, 13 skipped, 3 deselected** (the three `slow` tests, excluded by default). Without `cargo` the 3 Rust parity tests in `tests/test_contract.py` also skip (**229 passed, 16 skipped**). Without Chrome or Chromium the 10 browser tests skip, and without `node` 4 guide tests skip. Every skip prints its reason with `pytest -rs`. Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
 
 ## `ii` CLI (public surface)
 
@@ -32,6 +32,7 @@ All experiments that belong in this repo should be reachable through these comma
 | --- | --- |
 | `try` | Guided first run for newcomers: practice clips, a `fake` run under `runs/try`, then the playground opened on the strongest verified feature. |
 | `generate-clips` | Write deterministic synthetic clips for the `fake` adapter. |
+| `get-clips` | Download short real robot clips (DROID, MIT licence) to run a real model on, for learners with no video of their own. |
 | `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). `--remote` runs it on a Modal GPU billed to the invoking user's account and streams results back (`docs/REMOTE.md`). |
 | `rank` | Attribution prefilter shortlist; does not replace ablation. |
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
@@ -40,6 +41,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls; effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
+| `compare` | Match SAE features across runs on the same clips (activation correlation, shuffle null): which concepts models share and which are unique. Writes `compare.json` and a static page. |
 | `validate` | Check a run folder against `SCHEMA.md`. |
 | `cache` | Show or clear the shared activation cache (keyed by model, layer, clip hash, window, preprocessing) that lets reruns and the playground skip forward passes. Not part of the run contract. |
 | `view` | Local browser viewer for a finished run. `--steer` adds the playground (steer SAE features, see the prediction move; exploration only, never evidence). |
@@ -102,7 +104,7 @@ These override intuition, offline plots, and demo-site copy.
 
 - **Never push to `main`.** Branch from latest `main`, one topic per branch (for example `claude/<topic>`).
 - Open a PR against `main`; the repo owner (**@jerrydjin**) reviews and merges.
-- Keep PRs small; **`uv run pytest` must stay green** before you push. CI (`.github/workflows/ci.yml`) runs the same suite on every PR.
+- Keep PRs small; **`uv run pytest` must stay green** before you push. CI (`.github/workflows/ci.yml`) runs the same suite on every PR. `.github/workflows/real-model.yml` also runs one real Hugging Face model (DeiT-tiny) through `ii run hf` end to end on every PR (`uv run pytest -m real_model`; downloads weights, so it is not in the default suite).
 
 Docs-only PRs are fine; do not touch `scoreboard.json`, `split.json`, held-out labels, or committed run artifacts.
 

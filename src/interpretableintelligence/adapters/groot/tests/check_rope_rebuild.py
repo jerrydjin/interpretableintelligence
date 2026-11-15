@@ -1,3 +1,4 @@
+from box_paths import COLAB, groot_snapshot  # noqa: E402 (box roots; see box_paths.py)
 def _skip_if_unavailable():
     """GPU script: skip unless CUDA, lerobot, and the GR00T checkpoint are present."""
     import glob
@@ -13,11 +14,9 @@ def _skip_if_unavailable():
         reasons.append("GPU")
     if importlib.util.find_spec("lerobot") is None:
         reasons.append("lerobot")
-    if not glob.glob(
-        "/home/box/.cache/huggingface/hub/models--nvidia--gr00t17-lerobot-libero_10-640/snapshots/*"
-    ):
+    if groot_snapshot() is None:
         reasons.append("GR00T checkpoint")
-    if not Path("/workspace/groot-colab/v8/low_ram_policy_load.v7_buggy.py").is_file():
+    if not Path(f"{COLAB}/v8/low_ram_policy_load.v7_buggy.py").is_file():
         reasons.append("v7 loader fixture")
     if not reasons:
         return
@@ -29,13 +28,13 @@ def _skip_if_unavailable():
 _skip_if_unavailable()
 
 import sys, torch
-sys.path.insert(0, "/workspace/groot-colab")
+sys.path.insert(0, str(COLAB))
 import low_ram_policy_load as L
 from lerobot.policies.groot.configuration_groot import GrootConfig
 from lerobot.policies.groot.groot_n1_7 import GR00TN17, GR00TN17Config, _tie_unused_qwen_lm_head
 from lerobot.policies.groot.modeling_groot import GrootPolicy
 import glob
-ck = glob.glob("/home/box/.cache/huggingface/hub/models--nvidia--gr00t17-lerobot-libero_10-640/snapshots/*")[0]
+ck = groot_snapshot()
 config = GrootConfig.from_pretrained(ck)
 fixed = L.fix_groot_base_model_path(config, override="nvidia/GR00T-N1.7-3B")
 config.device = "meta"
@@ -63,7 +62,7 @@ for n, m in mods.items():
     ref = type(m)(m.config)
     assert torch.equal(m.inv_freq.float(), ref.inv_freq.float()), n
 import importlib.util
-spec = importlib.util.spec_from_file_location("lrl_v7", "/workspace/groot-colab/v8/low_ram_policy_load.v7_buggy.py")
+spec = importlib.util.spec_from_file_location("lrl_v7", f"{COLAB}/v8/low_ram_policy_load.v7_buggy.py")
 old = importlib.util.module_from_spec(spec); spec.loader.exec_module(old)
 pol2 = L._construct_on_meta(lambda: GrootPolicy(config))
 old.materialize_computed_buffers(pol2, "cpu")

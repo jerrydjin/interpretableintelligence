@@ -87,6 +87,33 @@ def generate_clips_cmd(
     typer.echo(f"wrote {n} clips to {out}")
 
 
+@app.command("get-clips")
+def get_clips_cmd(
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the clips into.")] = Path("clips/droid"),
+    n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode.")] = 100,
+    seconds: Annotated[float, typer.Option("--seconds", min=0.5, help="Length of each clip.")] = 4.0,
+) -> None:
+    """Download real robot video to try a real model on: short clips from DROID (MIT licence).
+
+    One 175 MB download, cached after the first time. Each clip is cut from the middle of a robot
+    episode in a real kitchen or office and saved as an mp4.
+    """
+    from interpretableintelligence.sample_clips import DATASET, LICENSE, fetch_droid_clips
+
+    try:
+        entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo)
+    except (ValueError, RuntimeError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {len(entries)} clips from {DATASET} ({LICENSE} licence) to {out}")
+    typer.echo("")
+    typer.echo("Next, find the features a real vision model uses on them, and open the playground:")
+    typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
+    typer.echo("That takes about 10 minutes on a laptop CPU. Every feature is explorable but none is verified yet.")
+    typer.echo("To run the checks that mark features verified, run the same command without --no-score.")
+    typer.echo("It reuses what is done and adds the scoring, which takes longer (up to an hour on a CPU).")
+
+
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
     """``hf`` plus ``--model``/``--blocks`` becomes the self-describing ``hf:<model>[#<blocks>]`` name.
 
@@ -176,7 +203,7 @@ def run(
         typer.Option(
             "--sae-features",
             min=1,
-            help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf.",
+            help="SAE dictionary size. Default 12 for fake and vjepa2; 8 per activation dimension for hf. Above 64, a TopK SAE.",
         ),
     ] = None,
     concepts: Annotated[
@@ -185,7 +212,7 @@ def run(
             "--concepts",
             exists=True,
             dir_okay=False,
-            help="hf only: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
+            help="hf, vjepa2, groot: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
         ),
     ] = None,
     tiny: Annotated[
@@ -214,6 +241,10 @@ def run(
     host: Annotated[str, typer.Option("--host", help="Viewer interface.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Viewer port. 0 chooses a free port.")] = 0,
     no_open: Annotated[bool, typer.Option("--no-open", help="Do not open a browser.")] = False,
+    steer: Annotated[
+        bool,
+        typer.Option("--steer", help="Turn on the playground in the viewer: edit features and watch the prediction move."),
+    ] = False,
     no_cache: Annotated[
         bool,
         typer.Option(
@@ -305,6 +336,7 @@ def run(
             host=host,
             port=port,
             open_browser=not no_open,
+            steer=steer,
             use_cache=not no_cache,
             log=typer.echo,
         )
@@ -384,12 +416,16 @@ def rank(
         ),
     ] = None,
     objective: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--objective",
-            help="prediction_loss, action_loglik, or activation (magnitude baseline). The result is a shortlist.",
+            help=(
+                "prediction_loss, output_sensitivity, action_loglik, or activation (magnitude baseline). "
+                "Default: the adapter's own (output_sensitivity for hf and groot, else prediction_loss). "
+                "The result is a shortlist."
+            ),
         ),
-    ] = "prediction_loss",
+    ] = None,
 ) -> None:
     """Rank SAE features. Does not ablate; every pick still needs a real ablation."""
     from interpretableintelligence.run import execute_rank
@@ -690,6 +726,33 @@ def export_site_cmd(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"wrote {dest}")
+
+
+@app.command("compare")
+def compare_cmd(
+    runs: Annotated[list[Path], typer.Argument(help="Two or more finished run folders that captured the same clips.")],
+    out: Annotated[Path, typer.Option("--out", help="Folder for compare.json and index.html.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Clip directory for thumbnails. Defaults to the first run's recorded clips_dir."),
+    ] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Shuffle-null seed.")] = 0,
+) -> None:
+    """Match SAE features across models on the same clips: which concepts they share and which are unique."""
+    from interpretableintelligence.compare import compare_runs, describe_groups, write_compare
+
+    report = compare_runs(list(runs), seed=seed, log=typer.echo)
+    clips_dir = clips
+    if clips_dir is None and report["_profiles"][0].clips_dir:
+        clips_dir = Path(report["_profiles"][0].clips_dir)
+    describe_groups(report, clips_dir)
+    write_compare(report, out, clips_dir)
+    shared = report["shared"]
+    every = sum(1 for group in shared if group["n_models"] == len(runs))
+    typer.echo(
+        f"{len(shared)} shared concepts ({every} in all {len(runs)} models), "
+        f"{len(report['unmatched_verified'])} verified features with no counterpart. Wrote {out / 'index.html'}"
+    )
 
 
 @app.command()

@@ -19,7 +19,6 @@ import torch
 from interpretableintelligence.adapters import get_adapter
 from interpretableintelligence.artifacts import read_json, write_attribution, write_json
 from interpretableintelligence.attribute import (
-    PREDICTION_LOSS,
     attribution_by_clip,
     candidates_document,
     check_objective,
@@ -30,7 +29,7 @@ from interpretableintelligence.device import pick_device
 from interpretableintelligence.labelers import FakeCueLabeller, cue_patterns
 from interpretableintelligence.pipeline import execute_pipeline
 from interpretableintelligence.sae import SAEConfig, load_sae, save_sae, train_sae
-from interpretableintelligence.score import capture_activations, check_extra_effects, extra_effect_rows as _extra_effect_rows
+from interpretableintelligence.score import capture_activations, default_objective, check_extra_effects, extra_effect_rows as _extra_effect_rows
 from interpretableintelligence.split import assign_split
 from interpretableintelligence.thresholds import (
     DEFAULT_HELDOUT_FRAC,
@@ -87,7 +86,7 @@ def execute_rank(
     heldout_frac: float = DEFAULT_HELDOUT_FRAC,
     prefilter: int = DEFAULT_PREFILTER_K,
     from_run: Path | None = None,
-    objective: str = PREDICTION_LOSS,
+    objective: str | None = None,
     log=print,
 ) -> dict:
     """Score every feature with one attribution pass and write the top-K shortlist.
@@ -97,7 +96,8 @@ def execute_rank(
     ``interpretableintelligence run`` already trained; otherwise an SAE is trained on the train
     split.
     """
-    objective = check_objective(objective)
+    if objective is not None:
+        objective = check_objective(objective)
     if prefilter < 1:
         raise ValueError(f"prefilter K must be >= 1, got {prefilter}")
     torch.set_num_threads(1)
@@ -126,13 +126,14 @@ def execute_rank(
             f"{from_run} split does not match these clips at seed {seed} heldout_frac {heldout_frac}"
         )
     membership = split.membership()
+    adapter_cls = get_adapter(adapter_name)
+    adapter = adapter_cls(layer=layer, device=device)
+    if objective is None:
+        objective = default_objective(adapter)
     log(
         f"interpretableintelligence rank  device={device}  adapter={adapter_name}  "
         f"clips={len(clips)}  prefilter={prefilter}  objective={objective}"
     )
-
-    adapter_cls = get_adapter(adapter_name)
-    adapter = adapter_cls(layer=layer, device=device)
     adapter.load(random_init=False)
     tokens, acts = capture_activations(adapter, clips, membership)
     if acts.shape[1] != adapter.d_model:

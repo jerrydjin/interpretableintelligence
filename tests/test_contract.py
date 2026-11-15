@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import threading
@@ -127,6 +128,9 @@ def _server_bin() -> Path:
         return debug
     if release.is_file():
         return release
+    if shutil.which("cargo") is None:
+        # The Python install (uv sync) needs no Rust; only this Rust/Python parity check does.
+        pytest.skip("cargo is not installed (https://rustup.rs); the Rust read-API parity tests need it")
     subprocess.check_call(["cargo", "build", "-p", "interpretableintelligence-server"], cwd=ROOT)
     return debug
 
