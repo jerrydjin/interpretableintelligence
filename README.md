@@ -181,7 +181,7 @@ uv run ii compare runs/cmp-dinov2 runs/cmp-groot --out site/compare
 
 Each LIBERO clip is 16 frames, so a vision model and GR00T read it as exactly one window and see the same moment. `ii compare` takes each feature's largest activation in each shared clip (clips are matched by file hash), pairs features across models that are each other's best partner by Pearson r, and keeps a pair only if r beats the 99th percentile of the best r after shuffling clip order. It writes `compare.json` and a static `index.html`. A match is correlational. Only scoreboard-`real` features are marked verified; a run that has not been scored can still be compared, and all its features show as exploratory. When clips carry GR00T sidecars, each shared concept is described by the instruction most of its top moments come from; otherwise by a CLIP hint, which is a reading aid and never a label.
 
-`vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. `II_THREADS=N` lets a CPU-only run use N threads at the cost of bit-reproducibility.
+`vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. Real models use every CPU core by default and the `fake` run keeps one thread so its scoreboard is reproducible; `II_THREADS=N` overrides both.
 
 ### No GPU? Run on a hosted one
 
