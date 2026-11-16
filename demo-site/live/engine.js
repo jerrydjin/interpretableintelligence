@@ -151,20 +151,7 @@ export class Engine {
     this.timings.download = now() - t0;
     onProgress({ phase: "compile" });
     const t1 = now();
-    const options = {
-      executionProviders: backend === "webgpu" ? ["webgpu", "wasm"] : ["wasm"],
-      graphOptimizationLevel: "all",
-    };
-    const [front, back, sae] = await Promise.all([
-      ort.InferenceSession.create(bytes[0], options),
-      ort.InferenceSession.create(bytes[1], options),
-      ort.InferenceSession.create(bytes[2], options),
-    ]);
-    this.front = front;
-    this.back = back;
-    this.sae = sae;
-    const decBits = new Uint16Array(bytes[3].buffer, bytes[3].byteOffset, bytes[3].byteLength / 2);
-    this.decoder = halfToFloat(decBits); // [n_features, d]
+    this.decoder = halfToFloat(new Uint16Array(bytes[3].buffer, bytes[3].byteOffset, bytes[3].byteLength / 2)); // [n_features, d]
     this.features = features;
     this.nFeatures = pack.sae.n_features;
     this.d = pack.model.d_model;
@@ -173,14 +160,49 @@ export class Engine {
     this.nTok = this.gridH * this.gridW;
     this.prefix = pack.model.prefix_tokens;
     this.size = pack.model.image_size;
+    try {
+      await this.startSessions(bytes, backend);
+    } catch (err) {
+      if (backend !== "webgpu") throw err;
+      // Some GPUs and browsers cannot run a graph on WebGPU; the CPU path always can.
+      console.warn("WebGPU could not run the model, using the CPU instead:", err);
+      this.gpuError = String(err && err.message ? err.message : err);
+      await this.startSessions(bytes, "wasm");
+    }
     this.timings.compile = now() - t1;
-    // One warm-up pass, so the first real image is not paying for shader compilation.
     const t2 = now();
-    await this.encode(this.blankCanvas());
+    try {
+      await this.encode(this.blankCanvas());
+    } catch (err) {
+      if (this.backend !== "webgpu") throw err;
+      console.warn("WebGPU failed on the first pass, using the CPU instead:", err);
+      this.gpuError = String(err && err.message ? err.message : err);
+      await this.startSessions(bytes, "wasm");
+      await this.encode(this.blankCanvas());
+    }
     this.timings.warmup = now() - t2;
     this.timings.ready = now() - t0;
     onProgress({ phase: "ready" });
     return this;
+  }
+
+  // One session at a time: ONNX Runtime's WebGPU backend refuses to create two at once.
+  async startSessions(bytes, backend) {
+    const options = {
+      executionProviders: backend === "webgpu" ? ["webgpu", "wasm"] : ["wasm"],
+      graphOptimizationLevel: "all",
+    };
+    for (const s of [this.front, this.back, this.sae]) {
+      try {
+        await s?.release();
+      } catch {
+        /* already gone */
+      }
+    }
+    this.front = await this.ort.InferenceSession.create(bytes[0], options);
+    this.back = await this.ort.InferenceSession.create(bytes[1], options);
+    this.sae = await this.ort.InferenceSession.create(bytes[2], options);
+    this.backend = backend;
   }
 
   blankCanvas() {

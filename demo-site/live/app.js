@@ -67,6 +67,7 @@ async function boot() {
   const text = $("loader-text");
   try {
     await engine.load({
+      preferGpu: !new URLSearchParams(location.search).has("cpu"), // ?cpu forces the CPU path
       onProgress: ({ phase, loaded, total, cached }) => {
         if (phase === "download") {
           const frac = total ? loaded / total : 0;

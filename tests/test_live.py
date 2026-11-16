@@ -113,6 +113,14 @@ def test_onnx_pack_matches_torch(tiny_run):
     assert rel(hidden.numpy(), got_hidden) < 1e-2
     assert rel(full.last_hidden_state.numpy(), got_final) < 1e-2
     assert rel(pre.numpy(), got_pre) < 1e-2
+    # No float64 anywhere: ONNX Runtime Web's WebGPU build has no float64 kernels (the SDPA
+    # export's float64 Sqrt stopped the model loading on GPUs).
+    onnx = pytest.importorskip("onnx")
+    for name in ("front.onnx", "back.onnx", "sae.onnx"):
+        graph = onnx.load(str(pack / name)).graph
+        doubles = [node.name for node in graph.node if node.op_type == "Constant" and node.attribute[0].t.data_type == onnx.TensorProto.DOUBLE]
+        doubles += [init.name for init in graph.initializer if init.data_type == onnx.TensorProto.DOUBLE]
+        assert doubles == [], (name, doubles[:3])
     decoder = np.frombuffer((pack / "decoder.bin").read_bytes(), dtype="<f2").reshape(sae.n_features, -1)
     assert np.allclose(decoder, sae.W_dec.detach().T.numpy(), atol=1e-3)
 

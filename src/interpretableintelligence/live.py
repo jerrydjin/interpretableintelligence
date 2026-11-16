@@ -229,6 +229,10 @@ def export_live(
     d_model = int(adapter.d_model)
 
     log("exporting the model to ONNX")
+    # Plain (eager) attention: the SDPA path exports a float64 Sqrt for its scale, which
+    # ONNX Runtime Web's WebGPU build cannot run. Same maths, so the gap check below still holds.
+    if hasattr(adapter.model, "set_attn_implementation"):
+        adapter.model.set_attn_implementation("eager")
     front, back = split_model(adapter)
     pixels = torch.zeros(1, 3, size, size)
     with torch.no_grad():
