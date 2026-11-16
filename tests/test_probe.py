@@ -232,6 +232,10 @@ def test_pooling_does_not_depend_on_chunk_size(probe_run, monkeypatch):
     monkeypatch.setattr(probe_module, "ROWS_PER_CHUNK", 7)  # not a multiple of the 16 tokens per bin
     keys_small, pooled_small = probe_module.pooled_bins(run / "acts", encoders, torch.device("cpu"))
     assert np.array_equal(keys, keys_small)
-    for name in encoders:
-        assert np.array_equal(pooled[name], pooled_small[name]), name
+    # Raw activations go through no arithmetic, so any bin split or mixed across chunks shows
+    # up as a mismatch here.
+    assert np.array_equal(pooled["raw"], pooled_small["raw"])
+    # The SAE encoder is a matmul, and BLAS may round the same row differently for a different
+    # batch size (macOS Accelerate does, by one float32 ulp), so compare to float32 precision.
+    np.testing.assert_allclose(pooled["trained_sae"], pooled_small["trained_sae"], rtol=1e-6, atol=1e-6)
     assert keys.size == N_CLIPS * 8  # one bin per (clip, t): fake has one window of 8 time bins
