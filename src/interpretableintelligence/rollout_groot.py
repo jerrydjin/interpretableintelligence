@@ -11,12 +11,14 @@ on latent 720 so ``episode_id`` differs from a true ablation of 720.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from interpretableintelligence.artifacts import write_rollout_episodes
 from interpretableintelligence.policies.groot import is_groot_policy
+from interpretableintelligence.policies.base import TRAINED_DICTIONARY, random_dictionary
 from interpretableintelligence.rollout import (
     SUMMARY_KEYS,
     RolloutConfig,
@@ -24,6 +26,7 @@ from interpretableintelligence.rollout import (
     _index_rows,
     batch_ends,
     make_episode_id,
+    oriented,
 )
 from interpretableintelligence.rollout_stats import (
     binding_sprt,
@@ -162,6 +165,7 @@ def row_from_v9_episode(
     plan: dict,
 ) -> dict:
     cid = cond["id"]
+    dictionary = cond.get("dictionary") or TRAINED_DICTIONARY
     if cid not in COND_TO_POLICY:
         latents = cond.get("latents")
         if latents is None:
@@ -173,9 +177,11 @@ def row_from_v9_episode(
     else:
         spec = COND_TO_POLICY[cid]
     condition, feature_ids, layer, kind, value = spec
+    if condition == "baseline":
+        dictionary = None
     ep = int(episode["ep"])
     seed = v9_episode_seed(ep, plan)
-    task_id = GROOT_TASK_ID
+    task_id = str((plan.get("task") or {}).get("id", GROOT_TASK_ID))
     episode_id = make_episode_id(
         policy=policy,
         condition=condition,
@@ -185,6 +191,7 @@ def row_from_v9_episode(
         layer=layer,
         kind=kind,
         value=value,
+        dictionary=dictionary,
     )
     steps = int(episode.get("n_steps") or episode.get("steps") or 1)
     if steps < 1:
@@ -202,6 +209,7 @@ def row_from_v9_episode(
         "success": bool(episode["success"]),
         "steps": steps,
         "wall_time_s": wall,
+        "dictionary": dictionary,
         "_cond_id": cid,
         "_ep_index": ep,
         "_actions_sha256": episode.get("actions_sha256"),
@@ -222,21 +230,28 @@ def _recon_arm() -> tuple[str, str, tuple[int, ...], str, float]:
     )
 
 
-def groot_arms(config: RolloutConfig, *, include_recon: bool) -> list[tuple[str, str, str, tuple[int, ...]]]:
-    """Return (name, role, condition, feature_ids) arms for schedule checks."""
-    arms: list[tuple[str, str, str, tuple[int, ...]]] = []
-    arms.append(("baseline", "baseline", "baseline", ()))
+GrootArm = tuple  # (name, role, condition, feature_ids, dictionary)
+
+
+def groot_arms(config: RolloutConfig, *, include_recon: bool) -> list[GrootArm]:
+    """Return (name, role, condition, feature_ids, dictionary) arms for schedule checks."""
+    arms: list[GrootArm] = []
+    arms.append(("baseline", "baseline", "baseline", (), None))
     if include_recon:
-        arms.append(("recon", "recon", "intervention", (RECON_MARKER_FEATURE,)))
+        arms.append(("recon", "recon", "intervention", (RECON_MARKER_FEATURE,), TRAINED_DICTIONARY))
     for feature_id in config.candidate_feature_ids:
-        arms.append((f"candidate:{feature_id}", "candidate", "intervention", (int(feature_id),)))
+        arms.append((f"candidate:{feature_id}", "candidate", "intervention", (int(feature_id),), TRAINED_DICTIONARY))
     for feature_id in config.control_feature_ids:
-        arms.append((f"control:{feature_id}", "control", "intervention", (int(feature_id),)))
+        arms.append((f"control:{feature_id}", "control", "intervention", (int(feature_id),), TRAINED_DICTIONARY))
+    for seed, picks in zip(config.random_sae_seeds, config.random_sae_feature_ids, strict=True):
+        name = random_dictionary(int(seed))
+        for feature_id in picks:
+            arms.append((f"random_sae:{name}:{feature_id}", "random_sae", "intervention", (int(feature_id),), name))
     return arms
 
 
-def _groot_arm_episode_id(config: RolloutConfig, arm: tuple[str, str, str, tuple[int, ...]], offset: int) -> str:
-    _name, role, condition, feature_ids = arm
+def _groot_arm_episode_id(config: RolloutConfig, arm: GrootArm, offset: int) -> str:
+    _name, role, condition, feature_ids, dictionary = arm
     seed = v9_episode_seed(offset, {"seeds": {"base": config.seed}})
     if role == "baseline":
         return make_episode_id(
@@ -263,6 +278,7 @@ def _groot_arm_episode_id(config: RolloutConfig, arm: tuple[str, str, str, tuple
         layer=layer,
         kind=kind,
         value=value,
+        dictionary=dictionary,
     )
 
 
@@ -314,6 +330,7 @@ def config_for_selection(
         workers=workers,
         candidate_feature_ids=tuple(candidate_ids),
         control_feature_ids=tuple(control_ids),
+        direction="rise",
     )
 
 
@@ -391,12 +408,20 @@ def import_v9_jsonl(
 
 
 def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: bool) -> dict:
+    """Summary for a GR00T rollout table. The recon-only arm is the hook sanity check, stored as a control row.
+
+    Deltas, intervals and the early-stopping test use ``config.direction`` (``rise`` for the GR00T plans). Random-SAE
+    arms (rule 4) join the control family, and a candidate is a ``finding`` only when it is ``causal`` and strictly
+    above every random-SAE arm.
+    """
+    direction = config.direction
     public = [public_row(row) for row in rows]
     by_id = _index_rows(public)
     arms = groot_arms(config, include_recon=include_recon)
     n = config.episodes_per_arm
+    recon_n = min(n, VERIFY_SLICE_EPISODES)
 
-    def flags_for(arm: tuple[str, str, str, tuple[int, ...]], count: int) -> list[bool]:
+    def flags_for(arm: GrootArm, count: int) -> list[bool]:
         out: list[bool] = []
         for offset in range(count):
             episode_id = _groot_arm_episode_id(config, arm, offset)
@@ -409,11 +434,12 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
     baseline_flags = flags_for(baseline_arm, n)
 
     candidate_arms = [arm for arm in arms if arm[1] == "candidate"]
-    control_arms = [arm for arm in arms if arm[1] == "control"]
+    family_arms = [arm for arm in arms if arm[1] in ("control", "random_sae")]
     candidate_flags = [flags_for(arm, n) for arm in candidate_arms]
+    oriented_candidates = [oriented(flags, direction) for flags in candidate_flags]
 
-    control_plan: list[tuple[tuple[str, str, str, tuple[int, ...]], int, str, list[bool]]] = []
-    for arm in control_arms:
+    control_plan: list[tuple[GrootArm, int, str, list[bool]]] = []
+    for arm in family_arms:
         present = 0
         while present < n and _groot_arm_episode_id(config, arm, present) in by_id:
             present += 1
@@ -421,13 +447,13 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
             raise ValueError(f"{arm[0]} has no episodes")
         present_flags = flags_for(arm, present)
         length, reason = declared_stop_groot(
-            present_flags,
-            candidate_flags,
+            oriented(present_flags, direction),
+            oriented_candidates,
             episodes=n,
             min_episodes=config.min_episodes,
             batch_size=config.batch_size,
             alpha=config.alpha,
-            n_controls=len(control_arms),
+            n_controls=len(family_arms),
         )
         if length != present:
             raise ValueError(f"{arm[0]} has {present} episodes but schedule requires {length} ({reason})")
@@ -436,7 +462,6 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
     expected_ids = {_groot_arm_episode_id(config, baseline_arm, offset) for offset in range(n)}
     if include_recon:
         recon_arm = next(arm for arm in arms if arm[1] == "recon")
-        recon_n = min(n, VERIFY_SLICE_EPISODES)
         expected_ids |= {_groot_arm_episode_id(config, recon_arm, offset) for offset in range(recon_n)}
     for arm in candidate_arms:
         for offset in range(n):
@@ -449,14 +474,15 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
     if extra or missing:
         raise ValueError(f"episode set mismatch, missing={len(missing)} extra={len(extra)}")
 
-    def score_arm(role: str, feature_id: int, flags: list[bool], episodes_run: int, reason: str) -> dict:
+    def score_arm(arm: GrootArm, flags: list[bool], episodes_run: int, reason: str) -> dict:
+        role = arm[1]
         paired_base = baseline_flags[: len(flags)]
-        delta, ci_low, ci_high = paired_success_delta_ci(paired_base, flags, config.alpha)
+        delta, ci_low, ci_high = paired_success_delta_ci(oriented(paired_base, direction), oriented(flags, direction), config.alpha)
         n10, n01 = discordant_counts(paired_base, flags)
         return {
-            "feature_id": feature_id,
-            "role": role if role != "recon" else "control",
-            "dictionary": "trained",
+            "feature_id": int(arm[3][0]),
+            "role": "control" if role == "recon" else role,
+            "dictionary": arm[4],
             "baseline_success": float(sum(paired_base) / len(paired_base)),
             "intervention_success": float(sum(flags) / len(flags)),
             "delta": delta,
@@ -469,32 +495,30 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
             "episodes_run": episodes_run,
             "stopped_early": bool(episodes_run < n),
             "reason": reason,
+            "_recon": role == "recon",
         }
 
     raw_features: list[dict] = []
     for arm, flags in zip(candidate_arms, candidate_flags, strict=True):
-        feature_id = arm[3][0]
-        raw_features.append(score_arm("candidate", int(feature_id), flags, n, "fixed_budget"))
+        raw_features.append(score_arm(arm, flags, n, "fixed_budget"))
     if include_recon:
         recon_arm = next(arm for arm in arms if arm[1] == "recon")
-        recon_n = min(n, VERIFY_SLICE_EPISODES)
-        recon_flags = flags_for(recon_arm, recon_n)
-        raw_features.append(score_arm("recon", RECON_MARKER_FEATURE, recon_flags, recon_n, "fixed_budget"))
-    control_deltas_all: list[float] = []
+        raw_features.append(score_arm(recon_arm, flags_for(recon_arm, recon_n), recon_n, "fixed_budget"))
     for arm, length, reason, flags in control_plan:
-        feature_id = arm[3][0]
-        scored = score_arm("control", int(feature_id), flags, length, reason)
-        raw_features.append(scored)
-        control_deltas_all.append(float(scored["delta"]))
+        raw_features.append(score_arm(arm, flags, length, reason))
+    # Feature controls of the trained SAE (the recon-only check is not one), and the random-weights SAE arms.
+    control_deltas = [float(item["delta"]) for item in raw_features if item["role"] == "control" and not item["_recon"]]
+    random_deltas = [float(item["delta"]) for item in raw_features if item["role"] == "random_sae"]
 
     features: list[dict] = []
-    n_candidates = len(candidate_arms) + (1 if include_recon else 0)
-    for index, scored in enumerate(raw_features):
-        if scored["role"] == "candidate":
-            others = control_deltas_all
+    control_index = 0
+    for scored in raw_features:
+        recon = scored.pop("_recon")
+        if scored["role"] == "control" and not recon:
+            others = [delta for item, delta in enumerate(control_deltas) if item != control_index]
+            control_index += 1
         else:
-            control_index = index - n_candidates
-            others = [delta for item, delta in enumerate(control_deltas_all) if item != control_index]
+            others = control_deltas
         percentile = control_percentile(float(scored["delta"]), others)
         causal = feature_is_causal(
             delta=float(scored["delta"]),
@@ -502,37 +526,34 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
             control_percentile=percentile,
             alpha=config.alpha,
         )
-        # Rule 4 (random-weights SAE control) is not wired into GR00T yet, so nothing here is a finding.
+        random_percentile = None
+        beats_random = None
+        if scored["role"] == "candidate" and random_deltas:
+            random_percentile = control_percentile(float(scored["delta"]), random_deltas)
+            beats_random = bool(random_percentile is not None and random_percentile >= 100.0)
         features.append(
             {
                 **scored,
                 "control_percentile": percentile,
                 "n_controls": len(others),
                 "causal": causal,
-                "random_sae_percentile": None,
-                "n_random_sae": 0,
-                "beats_random_sae": None,
-                "finding": False,
+                "random_sae_percentile": random_percentile,
+                "n_random_sae": len(random_deltas) if scored["role"] == "candidate" else 0,
+                "beats_random_sae": beats_random,
+                "finding": bool(scored["role"] == "candidate" and causal and beats_random is True),
             }
         )
 
-    def condition_record(
-        arm: tuple[str, str, str, tuple[int, ...]],
-        episodes_run: int,
-        reason: str,
-        flags: list[bool],
-    ) -> dict:
-        role = arm[1]
-        if role == "recon":
-            role = "control"
+    def condition_record(arm: GrootArm, episodes_run: int, reason: str, flags: list[bool]) -> dict:
+        role = "control" if arm[1] == "recon" else arm[1]
         gap = log_lr = threshold = None
-        if role == "control" and arm[1] != "recon":
+        if arm[1] in ("control", "random_sae"):
             gap, log_lr, threshold = binding_sprt(
-                flags,
-                candidate_flags,
+                oriented(flags, direction),
+                oriented_candidates,
                 config.alpha,
                 SPRT_LAMBDA,
-                n_controls=len([a for a in control_arms]),
+                n_controls=len(family_arms),
             )
         layer = None if arm[1] == "baseline" else config.layer
         kind = None if arm[1] == "baseline" else config.kind
@@ -542,7 +563,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
         return {
             "role": role,
             "condition": arm[2],
-            "dictionary": None if arm[1] == "baseline" else "trained",
+            "dictionary": arm[4],
             "feature_ids": list(arm[3]),
             "layer": layer,
             "kind": kind,
@@ -560,10 +581,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
     conditions = [condition_record(baseline_arm, n, "fixed_budget", baseline_flags)]
     if include_recon:
         recon_arm = next(arm for arm in arms if arm[1] == "recon")
-        recon_n = min(n, VERIFY_SLICE_EPISODES)
-        conditions.append(
-            condition_record(recon_arm, recon_n, "fixed_budget", flags_for(recon_arm, recon_n))
-        )
+        conditions.append(condition_record(recon_arm, recon_n, "fixed_budget", flags_for(recon_arm, recon_n)))
     for arm, flags in zip(candidate_arms, candidate_flags, strict=True):
         conditions.append(condition_record(arm, n, "fixed_budget", flags))
     for arm, length, reason, flags in control_plan:
@@ -572,7 +590,10 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
     n_arms = len(conditions)
     fixed_budget = n_arms * n
     total = len(public)
-    validated = [int(feature["feature_id"]) for feature in features if feature["causal"]]
+    validated = [
+        int(feature["feature_id"]) for feature in features if feature["causal"] and feature["role"] in ("candidate", "control")
+    ]
+    findings = [int(feature["feature_id"]) for feature in features if feature["finding"]]
     per = None if not validated else float(total) / float(len(validated))
     summary = {
         "schema_version": 1,
@@ -585,7 +606,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
         "total_episodes": total,
         "episodes_saved": fixed_budget - total,
         "validated_feature_ids": validated,
-        "finding_feature_ids": [],
+        "finding_feature_ids": findings,
         "rollouts_per_validated_feature": per,
         "conditions": conditions,
         "features": features,
@@ -639,6 +660,7 @@ def run_live_v9(
     plan_path: Path,
     sae_path: Path | None,
     only: tuple[str, ...] | None,
+    dictionaries: dict[str, Path] | None = None,
 ) -> Path:
     try:
         import interpretableintelligence.adapters.groot.v9.ablate_v9 as ablate_v9
@@ -653,9 +675,10 @@ def run_live_v9(
     sae = sae_path or Path(plan["sae"].get("subset_file", "sae_subset.safetensors"))
     if not sae.is_file():
         raise FileNotFoundError(f"SAE subset not found: {sae}")
-    ctx = v9.Ctx(run=run_dir, run_id=run_dir.name, layer=int(plan["hook"]["layer"]))
+    v9_out.mkdir(parents=True, exist_ok=True)
+    ctx = v9.Ctx(run=v9_out, run_id=run_dir.name, layer=int(plan["hook"]["layer"]))  # run_ablation writes under ctx.run
     v8.setup(ctx, device="cuda")
-    ablate_v9.run_ablation(ctx, plan, sae_path=sae, only=list(only) if only else None)
+    ablate_v9.run_ablation(ctx, plan, sae_path=sae, only=list(only) if only else None, dictionaries=dictionaries)
     return v9_out
 
 
@@ -729,6 +752,105 @@ def execute_groot_rollouts(
 
     _write_summary(rollout_dir / "summary.json", summary)
     _bump_manifest(Path(run_dir))
+    return summary
+
+
+def null_mock_outcome(cond: dict, ep: int, seed: int) -> bool:
+    """``groot-mock`` with ``--pick``: success depends on the seed only, so every arm matches baseline (no effect)."""
+    del cond, ep
+    return int(hashlib.sha256(f"groot-mock:{int(seed)}".encode()).hexdigest()[:8], 16) / 16**8 < 0.56
+
+
+def mock_plan_rows(policy: str, plan: dict, simulate) -> list[dict]:
+    """One row per (condition, episode index) of ``plan``, success from ``simulate(cond, ep, seed)``."""
+    rows: list[dict] = []
+    for cond in plan["conditions"]:
+        for ep in range(int(cond["n_max"])):
+            seed = v9_episode_seed(ep, plan)
+            episode = {"ep": ep, "success": bool(simulate(cond, ep, seed)), "n_steps": 1, "seconds": 0.0}
+            rows.append(row_from_v9_episode(policy=policy, cond=cond, episode=episode, plan=plan))
+    return rows
+
+
+def execute_groot_pick(
+    run_dir: Path,
+    *,
+    policy: str,
+    capture: Path,
+    pick: int,
+    random_sae: int,
+    controls: int,
+    episodes: int,
+    seed: int = GROOT_SEED_BASE,
+    alpha: float = DEFAULT_ROLLOUT_ALPHA,
+    workers: int = DEFAULT_ROLLOUT_WORKERS,
+    sae_path: Path | None = None,
+    v9_out: Path | None = None,
+    simulate=None,
+    log=print,
+) -> dict:
+    """``ii rollouts --policy groot-* --pick N --random-sae K --capture CAPTURE``: research rule 4 on GR00T.
+
+    Picks candidates and each untrained SAE's features with the same picker (``rollout_groot_pick``), writes the plan,
+    runs it (``groot-1028``: the v9 runner, or its logs from ``v9_out``; ``groot-mock``: ``simulate``, by default no
+    effect anywhere), and scores it as a rise test with the random-SAE arms in the control family. Fixed budget: every
+    arm runs ``episodes`` paired episodes.
+    """
+    from interpretableintelligence.rollout_groot_pick import PICKER, build_pick_plan, dictionary_paths
+    from interpretableintelligence.rollout_pick import random_sae_seeds
+
+    if not is_groot_policy(policy):
+        raise ValueError(f"not a groot rollout policy: {policy!r}")
+    if random_sae < 0:
+        raise ValueError(f"--random-sae must be >= 0, got {random_sae}")
+    run_dir = Path(run_dir)
+    seeds = random_sae_seeds(int(seed), int(random_sae))
+    plan = build_pick_plan(
+        run_dir, Path(capture), n=int(pick), random_seeds=seeds, controls=int(controls), episodes=int(episodes), seed=int(seed), log=log
+    )
+    info = plan["pick"]
+    config = RolloutConfig(
+        policy=policy,
+        task_id=str(plan["task"]["id"]),
+        layer=int(plan["hook"]["layer"]),
+        kind="ablate",
+        value=0.0,
+        seed=int(plan["seeds"]["base"]),
+        episodes_per_arm=int(episodes),
+        batch_size=int(episodes),
+        min_episodes=int(episodes),
+        alpha=float(alpha),
+        workers=int(workers),
+        candidate_feature_ids=tuple(int(item) for item in info["candidates"]),
+        control_feature_ids=tuple(int(item) for item in info["controls"]),
+        candidate_source="pick",
+        picker=PICKER,
+        pick_discovery_episodes=None,
+        random_sae_seeds=tuple(int(item) for item in info["random_sae_seeds"]),
+        random_sae_feature_ids=tuple(tuple(int(x) for x in picks) for picks in info["random_sae_feature_ids"]),
+        direction="rise",
+    )
+    _check_config(config)
+    rollout_dir = run_dir / "rollouts"
+    if policy == "groot-mock":
+        built = mock_plan_rows(policy, plan, simulate or null_mock_outcome)
+    else:
+        out = Path(v9_out) if v9_out else rollout_dir / "v9-ablate"
+        conds = list(plan["conditions"])
+        if not (out.is_dir() and any(out.rglob("episodes.jsonl"))):
+            paths = dictionary_paths(run_dir, plan)
+            trained = Path(sae_path) if sae_path else paths.pop("trained")
+            paths.pop("trained", None)
+            out = run_live_v9(run_dir, plan, plan_path=rollout_dir / "ablate_plan.json", sae_path=trained, only=None, dictionaries=paths)
+        built = import_v9_jsonl(policy=policy, plan=plan, v9_out=out, selected=conds)
+    public = [public_row(row) for row in built]
+    summary = summarize_groot(public, config, include_recon=True)
+    rollout_dir.mkdir(parents=True, exist_ok=True)
+    write_rollout_episodes(rollout_dir / "episodes.parquet", public)
+    from interpretableintelligence.rollout import _bump_manifest, _write_summary
+
+    _write_summary(rollout_dir / "summary.json", summary)
+    _bump_manifest(run_dir)
     return summary
 
 
