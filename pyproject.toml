@@ -41,7 +41,8 @@ ii = "interpretableintelligence.cli:app"
 dev = [
     "httpx>=0.27",
     "onnx>=1.17",
-    "onnxruntime>=1.20",
+    # No cp315 wheels yet; the ONNX parity test skips without it.
+    "onnxruntime>=1.20; python_version < '3.15'",
     "playwright>=1.49",
     "pytest>=8",
 ]
