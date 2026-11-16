@@ -425,7 +425,8 @@ def _droid_info(source: Path, run: dict) -> dict:
     steer = run.get("steer") or {}
     return {
         "model": str(meta["model"]),
-        "clips": len(run["clips"]),
+        "clips": int((run.get("export") or {}).get("clips_total") or len(run["clips"])),
+        "shown": len(run["clips"]),
         "features": len(features),
         "real": sum(1 for feature in features if feature.get("badge") == "real"),
         "steer_clips": len(steer.get("clips") or []),
@@ -447,6 +448,7 @@ def _droid_banner(info: dict) -> str:
     return (
         '  <section class="score-line droid-banner" data-testid="droid-banner">\n'
         f'    <p><span class="badge badge-unverified">Read-only</span> {escape(_droid_summary(info))} '
+        f"The scoreboard covers all {info['clips']} clips; this page shows {info['shown']} of them. "
         "A real badge means a feature passed the offline scoreboard gates on held-out clips; it says nothing "
         "about what happens in a robot rollout. The playground's slider steps through edits computed ahead of "
         f"time on {info['steer_clips']} clips: exploration, never evidence.</p>\n"

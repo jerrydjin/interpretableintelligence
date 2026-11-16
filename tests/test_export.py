@@ -109,6 +109,41 @@ def test_frame_heatmaps_match_the_per_feature_heatmap(demo):
     assert checked > 0
 
 
+def test_max_clips_keeps_every_link_a_page_can_follow(demo, tmp_path: Path):
+    """A trimmed export lists only kept clips, and every picture or heatmap a page asks for is there."""
+    out = tmp_path / "small"
+    result = runner.invoke(
+        app,
+        ["export", str(demo.run), "--clips", str(demo.clips), "--out", str(out), "--max-clips", "4", "--steer-clips", "2", "--steer-features", "2"],
+    )
+    assert result.exit_code == 0, result.output
+    data = out / "data"
+    run = json.loads((data / "run.json").read_text(encoding="utf-8"))
+    kept = [clip["clip_id"] for clip in run["clips"]]
+    assert len(kept) == 4
+    assert run["export"]["clips_total"] > 4
+    assert set(run["steer"]["clips"]) <= set(kept)
+    assert sorted(path.stem for path in (data / "clips").glob("*.json")) == sorted(kept)
+    for feature in run["features"]:
+        detail = json.loads((data / "features" / f"{feature['id']}.json").read_text(encoding="utf-8"))
+        for top in detail["top_clips"]:
+            assert top["clip_id"] in kept
+            assert (data / "clips" / top["clip_id"] / "frames" / f"{top['frame']}.png").is_file()
+            heat = json.loads((data / "clips" / top["clip_id"] / "heat.json").read_text(encoding="utf-8"))
+            assert f"{top['frame']}:{feature['id']}" in heat
+    for clip_id in kept:
+        payload = json.loads((data / "clips" / f"{clip_id}.json").read_text(encoding="utf-8"))
+        assert (data / "clips" / clip_id / "frames" / "0.png").is_file()
+        heat = json.loads((data / "clips" / clip_id / "heat.json").read_text(encoding="utf-8"))
+        for row in payload["frames"]:
+            if row.get("t") is not None:
+                assert (data / "clips" / clip_id / "frames" / f"{row['frame']}.png").is_file()
+            for feature in row["features"]:
+                key = f"{row['frame']}:{feature['id']}"
+                if feature.get("activation", 0) > 0 and key not in heat:
+                    raise AssertionError(f"{clip_id} lists feature {feature['id']} on frame {row['frame']} without a heatmap")
+
+
 def test_refuses_to_overwrite_a_folder_it_did_not_write(demo, tmp_path: Path):
     out = tmp_path / "mine"
     out.mkdir()

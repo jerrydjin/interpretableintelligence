@@ -543,7 +543,9 @@ def test_droid_playground_is_the_vendored_export_read_only():
     assert 'href="/">Home</a>' in page and 'href="/droid/" aria-current="page"' in page
     banner = _text(re.search(r'<section[^>]*data-testid="droid-banner".*?</section>', page, re.S).group(0))
     assert "Read-only" in banner
-    assert f"on {len(run['clips'])} real robot clips" in banner
+    total = run.get("export", {}).get("clips_total", len(run["clips"]))
+    assert f"on {total} real robot clips" in banner
+    assert f"this page shows {len(run['clips'])} of them" in banner
     assert f"{len(real_run)} feature{'s' if len(real_run) != 1 else ''} passed every offline check" in banner
     assert "exploration, never evidence" in banner
     assert "says nothing about what happens in a robot rollout" in banner

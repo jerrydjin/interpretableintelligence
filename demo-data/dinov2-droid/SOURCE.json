@@ -1,5 +1,5 @@
 {
- "what": "Hosted read-only playground: `ii export` of a scored `ii run hf` on DINOv2-small over 100 DROID clips. demo-site/droid is a copy of site/ under the demo bar.",
+ "what": "Hosted read-only playground: `ii export --max-clips 12` of a scored `ii run hf` on DINOv2-small over 100 DROID clips (the scoreboard covers all 100; the page shows the 12 clips with a precomputed playground). demo-site/droid is a copy of site/ under the demo bar.",
  "model": "DINOv2-small",
  "model_id": "facebook/dinov2-small",
  "model_license": "Apache-2.0 (facebook/dinov2-small). Weights are not shipped here.",
@@ -10,7 +10,7 @@
  "commands": [
   "uv run ii get-clips --out clips/droid",
   "uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid",
-  "uv run ii export runs/droid --clips clips/droid --out site/droid"
+  "uv run ii export runs/droid --clips clips/droid --out site/droid --max-clips 12"
  ],
  "scoreboard": "scoreboard.json is the run's own, written by the scorer and copied byte for byte.",
  "source": "lerobot/droid_100 (HF dataset), camera observation.images.exterior_image_1_left, 4.0 s from the middle of each episode",

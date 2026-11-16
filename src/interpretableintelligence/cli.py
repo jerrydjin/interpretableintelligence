@@ -825,6 +825,15 @@ def export_cmd(
         int, typer.Option("--steer-features", min=1, help="Strongest features per clip window to precompute.")
     ] = 6,
     title: Annotated[str | None, typer.Option("--title", help="Page title, also used on the link preview.")] = None,
+    max_clips: Annotated[
+        int | None,
+        typer.Option(
+            "--max-clips",
+            min=1,
+            help="Keep only this many clips: the playground's and the top clips of real and candidate features "
+            "first. Keeps a run over many clips small enough for a free static host.",
+        ),
+    ] = None,
 ) -> None:
     """Export a run as a static site: host the folder anywhere and share the link. No server needed."""
     from interpretableintelligence.explain import ExplainError
@@ -839,6 +848,7 @@ def export_cmd(
             steer_clips=steer_clips,
             steer_features=steer_features,
             title=title,
+            max_clips=max_clips,
             log=typer.echo,
         )
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ExplainError) as exc:

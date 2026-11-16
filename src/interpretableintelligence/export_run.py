@@ -59,19 +59,30 @@ def export_run(
     steer_clips: int = DEFAULT_STEER_CLIPS,
     steer_features: int = DEFAULT_STEER_FEATURES,
     title: str | None = None,
+    max_clips: int | None = None,
     log: Callable[[str], None] = lambda _message: None,
 ) -> ExportSummary:
-    """Write a self-contained static copy of the viewer for ``run_dir`` into ``out_dir``."""
+    """Write a self-contained static copy of the viewer for ``run_dir`` into ``out_dir``.
+
+    ``max_clips`` keeps only that many clips, the ones the playground and the top clips of
+    real and candidate features use first, so a run over many clips fits a free static host.
+    """
     run_dir = Path(run_dir)
     out = Path(out_dir)
+    if max_clips is not None and max_clips < 1:
+        raise ValueError(f"max_clips must be >= 1, got {max_clips}")
     _prepare_out(out)
     model = load_run(run_dir, None if clips_dir is None else Path(clips_dir))
+    keep = clip_priority(model)[:max_clips] if max_clips is not None else None
     data = out / "data"
-    log(f"writing viewer data for {len(model.run_payload['clips'])} clips")
-    write_viewer_data(model, data)
-    summary = ExportSummary(out_dir=out, clips=len(model.run_payload["clips"]), features=len(model.run_payload["features"]))
+    shown = len(keep) if keep is not None else len(model.run_payload["clips"])
+    log(f"writing viewer data for {shown} clips")
+    write_viewer_data(model, data, clip_ids=keep, slim=True)
+    summary = ExportSummary(out_dir=out, clips=shown, features=len(model.run_payload["features"]))
     if steer:
-        chosen, results = _precompute_steering(model, run_dir, clips_dir, data / "steer", steer_clips, steer_features, log)
+        chosen, results = _precompute_steering(
+            model, run_dir, clips_dir, data / "steer", steer_clips, steer_features, log, only=keep
+        )
         summary.steer_clips = chosen
         summary.steer_results = results
         if chosen:
@@ -92,26 +103,47 @@ def export_run(
     return summary
 
 
-def write_viewer_data(model: RunModel, data: Path, indent: int | None = None) -> None:
+def write_viewer_data(
+    model: RunModel,
+    data: Path,
+    indent: int | None = None,
+    clip_ids: list[str] | None = None,
+    slim: bool = False,
+) -> None:
     """Every read the viewer makes, as files under ``data`` (``app.js`` ``apiUrl`` maps the paths).
 
     ``indent`` keeps the committed ``demo-site/`` diff-friendly; ``ii export`` writes compact JSON.
+    ``clip_ids`` keeps only those clips (``run.json`` gains ``export.clips_total``, and feature
+    pages list only top clips that are kept). ``slim`` writes only what a page can reach: the
+    heatmaps of the features a clip frame lists or a feature page links to, and for a clip that
+    plays as video, only the frame pictures used as thumbnails (frame 0 and the model's frames).
     """
     data.mkdir(parents=True)
     write_json = functools.partial(_write_json, indent=indent)
-    write_json(data / "run.json", model.run_payload)
+    kept = None if clip_ids is None else {str(clip_id) for clip_id in clip_ids}
+    clips = [clip for clip in model.run_payload["clips"] if kept is None or str(clip["clip_id"]) in kept]
+    run_payload = model.run_payload
+    if kept is not None:
+        run_payload = {**run_payload, "clips": clips, "export": {"clips_total": len(model.run_payload["clips"])}}
+    write_json(data / "run.json", run_payload)
     feature_ids = [int(feature["id"]) for feature in model.run_payload["features"]]
     feature_dir = data / "features"
     feature_dir.mkdir()
+    linked: dict[str, dict[int, set[int]]] = {}
     for feature_id in feature_ids:
         detail = model.feature(feature_id)
         if detail is None:
             continue
+        if kept is not None:
+            detail = {**detail, "top_clips": [top for top in detail.get("top_clips", []) if str(top["clip_id"]) in kept]}
+        for top in detail.get("top_clips", []):
+            if top.get("frame") is not None:
+                linked.setdefault(str(top["clip_id"]), {}).setdefault(int(top["frame"]), set()).add(feature_id)
         write_json(feature_dir / f"{feature_id}.json", detail)
         viz = model.viz_file(feature_id)
         if viz is not None:
             shutil.copy2(viz, feature_dir / f"{feature_id}.png")
-    for clip in model.run_payload["clips"]:
+    for clip in clips:
         clip_id = str(clip["clip_id"])
         payload = model.clips[clip_id]
         clip_dir = data / "clips" / clip_id
@@ -121,13 +153,21 @@ def write_viewer_data(model: RunModel, data: Path, indent: int | None = None) ->
         frames.mkdir()
         n_frames = int(payload["n_frames"])
         heatmaps = model.frame_heatmaps(clip_id, feature_ids)
+        video = payload.get("media") == "video" and payload.get("pixels") == "ok"
         pack: dict[str, list] = {}
         for frame in range(n_frames):
-            png = model.frame_png(clip_id, frame)
-            if png:
-                (frames / f"{frame}.png").write_bytes(png)
+            row = payload["frames"][frame] if frame < len(payload["frames"]) else {}
+            if not (slim and video) or frame == 0 or row.get("t") is not None:
+                png = model.frame_png(clip_id, frame)
+                if png:
+                    (frames / f"{frame}.png").write_bytes(png)
+            wanted = None
+            if slim:
+                wanted = {int(feature["id"]) for feature in row.get("features", [])}
+                wanted |= linked.get(clip_id, {}).get(frame, set())
             for feature_id, grid in (heatmaps[frame] if frame < len(heatmaps) else {}).items():
-                pack[f"{frame}:{feature_id}"] = grid
+                if wanted is None or feature_id in wanted:
+                    pack[f"{frame}:{feature_id}"] = grid
         write_json(clip_dir / "heat.json", pack)
         media = model.media_file(clip_id)
         if media is not None:
@@ -150,13 +190,11 @@ def steer_key(window: int, feature_id: int, kind: str, value: float) -> str:
     return f"{int(window)}:{int(feature_id)}:{kind}:{text}"
 
 
-def pick_steer_targets(model: RunModel, n_clips: int, n_features: int) -> list[tuple[str, int, list[int]]]:
-    """``(clip_id, window, feature_ids)`` to precompute, strongest first.
+def clip_priority(model: RunModel) -> list[str]:
+    """Every clip id, the ones a visitor is most likely to open first.
 
-    Clips that are the top example of a scoreboard-real or candidate feature come
-    first, so the features a visitor is most likely to open can be steered. Within
-    each window, the features that fire hardest there are taken, which is what the
-    clip page lists first.
+    Clips that are a top example of a scoreboard-real or candidate feature come first,
+    then the rest in run order. Clips without pixels go last.
     """
     priority: list[str] = []
     for feature in model.run_payload["features"]:
@@ -166,6 +204,23 @@ def pick_steer_targets(model: RunModel, n_clips: int, n_features: int) -> list[t
             if top["clip_id"] not in priority:
                 priority.append(top["clip_id"])
     ordered = priority + [str(clip["clip_id"]) for clip in model.run_payload["clips"] if str(clip["clip_id"]) not in priority]
+    ok = {str(clip["clip_id"]) for clip in model.run_payload["clips"] if clip.get("pixels", "ok") == "ok"}
+    return [clip_id for clip_id in ordered if clip_id in ok] + [clip_id for clip_id in ordered if clip_id not in ok]
+
+
+def pick_steer_targets(
+    model: RunModel, n_clips: int, n_features: int, only: list[str] | None = None
+) -> list[tuple[str, int, list[int]]]:
+    """``(clip_id, window, feature_ids)`` to precompute, strongest first.
+
+    Clips come in ``clip_priority`` order, so the features a visitor is most likely to
+    open can be steered; ``only`` limits them to an exported subset. Within each window,
+    the features that fire hardest there are taken, which is what the clip page lists first.
+    """
+    ordered = clip_priority(model)
+    if only is not None:
+        allowed = {str(clip_id) for clip_id in only}
+        ordered = [clip_id for clip_id in ordered if clip_id in allowed]
     targets: list[tuple[str, int, list[int]]] = []
     for clip_id in ordered:
         payload = model.clips.get(clip_id)
@@ -194,12 +249,14 @@ def pick_steer_targets(model: RunModel, n_clips: int, n_features: int) -> list[t
     return targets
 
 
-def _precompute_steering(model, run_dir, clips_dir, dest: Path, n_clips: int, n_features: int, log) -> tuple[list[str], int]:
+def _precompute_steering(
+    model, run_dir, clips_dir, dest: Path, n_clips: int, n_features: int, log, only: list[str] | None = None
+) -> tuple[list[str], int]:
     if n_clips <= 0 or n_features <= 0:
         return [], 0
     from interpretableintelligence.steer import Steerer
 
-    targets = pick_steer_targets(model, n_clips, n_features)
+    targets = pick_steer_targets(model, n_clips, n_features, only=only)
     if not targets:
         log("no clip has pixels and active features; the playground is left off")
         return [], 0
