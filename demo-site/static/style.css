@@ -9,7 +9,9 @@
 
    Sizes:  --t-small 13  --t-body 16  --t-lead 21  --t-head 30  --t-display 52
    Colour: warm ivory paper and ink. Ember marks activation, cobalt marks
-   steering, green appears only on the verified tick.
+   steering, green appears only where something is verified (the tick, the
+   check ring and a verified feature's standing card). Sand marks the next
+   experiment for a feature that is not verified yet.
 
    Plain words first. Raw measurements carry the class "num" and only show
    when the reader turns on the "Numbers" switch in the header. */
@@ -36,6 +38,7 @@
   --steer-wash: #e8ecfb;
   --real: #2f6b4b;
   --real-wash: #e3efe7;
+  --real-line: #c4dccc;
   --warn: #8a5a00;
   --fail: #a33a2a;
   --plate: #1f1e1b;
@@ -406,8 +409,14 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
   color: var(--ink-2);
   background: var(--well);
 }
-.badge-real { color: var(--real); background: var(--real-wash); }
-.badge-real::before { content: "✓"; }
+.badge-real { color: var(--real); background: var(--real-wash); padding-left: 5px; }
+.badge-real::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--real) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><path d='M4.6 8.3l2.3 2.3 4.5-5' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>") center / 16px no-repeat;
+}
 .badge-status { color: var(--warn); background: var(--unv-bg); white-space: normal; }
 .badge-unverified { color: var(--ink-2); background: var(--well); }
 
@@ -446,6 +455,50 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
 .steer-result strong { color: var(--steer); font-weight: 500; }
 .steer-warn { color: var(--warn); }
 .steer-error { color: var(--fail); }
+.steer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.steer-head .panel-title { margin: 0; }
+.steer-verified {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px 5px 5px;
+  border-radius: 999px;
+  background: var(--real-wash);
+  color: var(--real);
+  font-size: var(--t-small);
+  font-weight: 500;
+  line-height: 1;
+}
+.steer-verified::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--real) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><path d='M4.6 8.3l2.3 2.3 4.5-5' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>") center / 16px no-repeat;
+}
+.steer[data-real="true"] { box-shadow: 0 0 0 1px var(--real-line); }
+.steer-idea {
+  margin: 14px 0 4px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--unv-bg);
+}
+.steer-idea[data-kind="verified"] { background: var(--real-wash); }
+.steer .steer-idea p { margin: 0; }
+.steer-idea-kicker { font-size: var(--t-small); color: var(--ink-2); margin-bottom: 4px !important; }
+.steer-idea-text { color: var(--ink-2); }
+.steer-idea-text strong { color: var(--ink); font-weight: 500; }
+.steer-idea-run {
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--steer);
+  font-weight: 500;
+  cursor: pointer;
+}
+.steer-idea-run:hover { text-decoration: underline; text-underline-offset: 3px; }
+.steer-idea-run:disabled { opacity: 0.4; cursor: default; text-decoration: none; }
 
 /* ---- feature page ------------------------------------------------------- */
 .feature-page, .feature-index, .hardest { max-width: 1040px; }
@@ -462,6 +515,77 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
 .lede b { color: var(--ink); font-weight: 400; }
 .feature-page .lede { margin-bottom: 24px; }
 .feature-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 40px; }
+
+/* Where a feature stands: the check ring, its trail of checks, then two columns.
+   Verified: green wash, what the badge earns, what to try now.
+   Not yet: white sheet, what held it back, and the next experiment on sand. */
+.standing {
+  margin: 0 0 56px;
+  padding: 28px;
+  border-radius: var(--radius);
+  background: var(--sheet);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.standing[data-real="true"] { background: var(--real-wash); box-shadow: 0 0 0 1px var(--real-line); }
+.standing-head { display: flex; align-items: center; gap: 20px; margin-bottom: 24px; }
+.standing-ring { flex: none; display: block; line-height: 0; }
+.standing-sum { min-width: 0; }
+.standing-count {
+  margin: 0 0 10px;
+  font-family: var(--serif);
+  letter-spacing: var(--serif-track);
+  font-size: var(--t-lead);
+  line-height: 1.25;
+}
+.standing[data-real="true"] .standing-count { color: var(--real); }
+.check-trail { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.check-trail li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px 4px 4px;
+  border-radius: 999px;
+  font-size: var(--t-small);
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--ink-3);
+  background: var(--well);
+}
+.trail-mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: var(--t-small); line-height: 1; background: var(--sheet); color: var(--ink-3); }
+.check-trail .trail-pass { color: var(--real); background: var(--sheet); box-shadow: 0 0 0 1px var(--real-line); }
+.trail-pass .trail-mark { background: var(--real); color: var(--sheet); }
+.check-trail .trail-fail { color: var(--ink); }
+.trail-fail .trail-mark { color: var(--fail); }
+
+.standing-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.standing-col { min-width: 0; padding: 4px 4px 0 0; }
+.standing-col p { margin: 0 0 12px; color: var(--ink-2); }
+.standing-title { margin: 0 0 8px; font-family: var(--sans); font-size: var(--t-body); font-weight: 500; color: var(--ink); }
+.standing-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; color: var(--ink-2); }
+.standing-list li { position: relative; padding-left: 18px; }
+.standing-list li::before { content: ""; position: absolute; left: 2px; top: 0.62em; width: 6px; height: 6px; border-radius: 50%; background: var(--real); }
+.standing-list a { color: var(--real); font-weight: 500; text-decoration: none; }
+.standing-next { padding: 20px 22px 22px; border-radius: var(--radius-sm); background: var(--unv-bg); }
+.standing[data-real="true"] .standing-next { background: var(--sheet); }
+.standing-next .button { margin-top: 4px; }
+.standing-col .standing-note { margin: 12px 0 0; font-size: var(--t-small); color: var(--ink-3); }
+
+/* The check ring. Arcs draw in one after another; the verified tick draws last. */
+.check-ring { display: block; overflow: visible; }
+.ring-arc { fill: none; stroke-width: 5; stroke-linecap: round; }
+.ring-pass { stroke: var(--real); }
+.ring-fail { stroke: var(--line-2); }
+.ring-skip { stroke: var(--line-2); stroke-dasharray: 0.06 0.08; }
+.ring-core { fill: var(--real); }
+.ring-tick { fill: none; stroke: var(--sheet); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.ring-count { font-family: var(--sans); font-size: var(--t-body); font-weight: 500; fill: var(--ink-2); }
+@media (prefers-reduced-motion: no-preference) {
+  .ring-pass { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ring-draw 0.45s ease-out forwards; animation-delay: calc(var(--i) * 0.11s); }
+  .ring-core { transform-origin: 32px 32px; transform: scale(0.6); opacity: 0; animation: ring-pop 0.35s 0.6s cubic-bezier(0.3, 1.4, 0.6, 1) forwards; }
+  .ring-tick { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ring-draw 0.3s 0.85s ease-out forwards; }
+}
+@keyframes ring-draw { to { stroke-dashoffset: 0; } }
+@keyframes ring-pop { to { transform: scale(1); opacity: 1; } }
 
 .hero {
   display: grid;
@@ -622,6 +746,9 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
   .hero-shot, .hero-terrain { min-height: 220px; }
   .page-section, .hero { margin-bottom: 56px; }
   .score { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .standing { padding: 20px; margin-bottom: 40px; }
+  .standing-head { align-items: flex-start; gap: 14px; }
+  .standing-body { grid-template-columns: minmax(0, 1fr); }
   .hardest-list a { grid-template-columns: 1fr auto; }
   .moment-task { display: none; }
 }
