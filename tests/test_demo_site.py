@@ -519,3 +519,39 @@ def test_vjepa_random_control_and_attribution_come_from_the_vendored_files():
     assert f"edit size alone (summed activation) already gives Spearman {edit:.2f}" in text
     assert f"{int(round(atp['timing']['speedup_if_ranking_all_8192'], -2)):,}x" in text
     assert f"{atp['timing']['speedup_tested_features_only']:.1f}x" in text
+
+
+def test_droid_playground_is_the_vendored_export_read_only():
+    """The hosted playground is the `ii export` in demo-data, untouched, behind a read-only banner."""
+    vendored = _repo() / "demo-data" / "dinov2-droid"
+    source = json.loads((vendored / "SOURCE.json").read_text(encoding="utf-8"))
+    scoreboard = json.loads((vendored / "scoreboard.json").read_text(encoding="utf-8"))
+    built = ROOT / "droid"
+    for path in (vendored / "site" / "data").rglob("*"):
+        if path.is_file():
+            assert (built / "data" / path.relative_to(vendored / "site" / "data")).read_bytes() == path.read_bytes()
+    run = json.loads((built / "data" / "run.json").read_text(encoding="utf-8"))
+    assert run["steer"]["enabled"] and run["steer"]["static"]
+    assert run["steer"]["clips"]
+    for clip_id in run["steer"]["clips"]:
+        assert (built / "data" / "steer" / f"{clip_id}.json").is_file()
+    real_run = sorted(int(f["id"]) for f in run["features"] if f.get("badge") == "real")
+    real_scoreboard = sorted(int(row["id"]) for row in scoreboard["features"] if row.get("real") is True)
+    assert real_run == real_scoreboard
+    page = (built / "index.html").read_text(encoding="utf-8")
+    assert 'data-ii-root="data"' in page
+    assert 'href="/">Home</a>' in page and 'href="/droid/" aria-current="page"' in page
+    banner = _text(re.search(r'<section[^>]*data-testid="droid-banner".*?</section>', page, re.S).group(0))
+    assert "Read-only" in banner
+    assert f"on {len(run['clips'])} real robot clips" in banner
+    assert f"{len(real_run)} feature{'s' if len(real_run) != 1 else ''} passed every offline check" in banner
+    assert "exploration, never evidence" in banner
+    assert "says nothing about what happens in a robot rollout" in banner
+    for command in source["commands"]:
+        assert command in banner
+    results = (ROOT / "results" / "index.html").read_text(encoding="utf-8")
+    real = results.index('data-testid="real-sections"')
+    assert real < results.index('href="/droid/"') < results.index('data-testid="synthetic-sections"')
+    home = (ROOT / "index.html").read_text(encoding="utf-8")
+    assert 'href="/droid/" data-testid="playground-cta"' in home
+    assert "/droid/" in _nav(home)

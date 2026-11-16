@@ -868,12 +868,16 @@ def export_site_cmd(
         Path,
         typer.Option("--groot", help="Directory with groot-1028-ablate-summary.json."),
     ] = Path("demo-data/groot"),
+    droid: Annotated[
+        Path,
+        typer.Option("--droid", help="Hosted playground: an `ii export` in site/ plus SOURCE.json."),
+    ] = Path("demo-data/dinov2-droid"),
 ) -> None:
     """Regenerate the static demo site from a fresh fake run and the vendored measurements."""
     from interpretableintelligence.export_site import export_site
 
     try:
-        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot)
+        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot, droid_dir=droid)
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

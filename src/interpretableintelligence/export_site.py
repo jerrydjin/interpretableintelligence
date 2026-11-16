@@ -31,6 +31,7 @@ def export_site(
     work_dir: Path | None = None,
     randinit_dir: Path | None = None,
     atp_dir: Path | None = None,
+    droid_dir: Path | None = None,
 ) -> Path:
     """Regenerate ``out_dir`` from a fresh fake run plus the vendored measurements."""
     out = Path(out_dir)
@@ -39,6 +40,7 @@ def export_site(
     groot = Path(groot_dir) if groot_dir else REPO / "demo-data" / "groot"
     randinit = Path(randinit_dir) if randinit_dir else REPO / "demo-data" / "vjepa-randinit"
     atp = Path(atp_dir) if atp_dir else REPO / "demo-data" / "vjepa-atp"
+    droid = Path(droid_dir) if droid_dir else REPO / "demo-data" / "dinov2-droid"
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
@@ -68,8 +70,11 @@ def export_site(
     checks = _groot_checks(groot)
     random_control = _random_control(randinit)
     atp_result = _atp(atp)
+    playground = _write_droid(out / "droid", droid)
     _write_product(out / "index.html", groot_summary, groot_status)
-    _write_results(out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result)
+    _write_results(
+        out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result, playground
+    )
     _write_picker(out / "picker", picker)
     _write_vjepa(out / "vjepa", vjepa, random_control, atp_result)
     _write_groot(out / "groot", groot / "groot-1028-ablate-summary.json", groot_summary, groot_status, checks)
@@ -151,6 +156,7 @@ def _wordmark() -> str:
 def _nav(current: str) -> str:
     items = (
         ("explore", "/explore/", "Explore"),
+        ("droid", "/droid/", "Playground"),
         ("results", "/results/", "Results"),
         ("groot", "/groot/", "GR00T"),
         ("vjepa", "/vjepa/", "V-JEPA 2"),
@@ -204,6 +210,7 @@ def _write_product(path: Path, summary: dict, status: str) -> None:
     <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
     <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
     <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
+    <p><a href="/droid/" data-testid="playground-cta">Or try the playground in your browser on real robot video, nothing to install.</a></p>
     <h2>What you get today</h2>
     <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. {_cmd("import", known)} brings rollout logs you already have into a run folder that validate accepts.</p>
     <h2>Proof</h2>
@@ -231,7 +238,9 @@ uv run ii try</code></pre>
     path.write_text(_page("ii", "", body), encoding="utf-8")
 
 
-def _write_results(path: Path, summary: dict, groot_status: str, checks: dict, control: dict, atp: dict) -> None:
+def _write_results(
+    path: Path, summary: dict, groot_status: str, checks: dict, control: dict, atp: dict, playground: dict
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     headline = escape(_control_headline(summary))
     body = f"""
@@ -242,6 +251,7 @@ def _write_results(path: Path, summary: dict, groot_status: str, checks: dict, c
       <li><a href="/groot/#checks"><span class="section-name">Method checks</span><span class="section-text">{escape(_checks_summary(checks))}</span></a></li>
       <li><a href="/vjepa/#random-control"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">{escape(_control_summary(control))}</span></a></li>
       <li><a href="/vjepa/#atp"><span class="section-name">Attribution vs ablation</span><span class="section-text">{escape(_atp_summary(atp))}</span></a></li>
+      <li><a href="/droid/"><span class="section-name">DINOv2 on DROID</span><span class="section-text" data-testid="droid-summary">{escape(_droid_summary(playground))}</span></a></li>
     </ul>
     <h2>Synthetic demos</h2>
     <ul class="section-list" data-testid="synthetic-sections">
@@ -383,6 +393,67 @@ def _write_vjepa(dest: Path, vjepa: Path, control: dict, atp: dict) -> None:
     <p>The random-init SAE still fires {firing} features, and <code>random_init/candidates.json</code> still lists {n_random_cands} candidates. Nothing here is claimed real.</p>
     """
     (dest / "index.html").write_text(_page("V-JEPA 2", "vjepa", body), encoding="utf-8")
+
+
+def _write_droid(dest: Path, source: Path) -> dict:
+    """The vendored ``ii export`` of a real-model run, under the demo bar, read-only.
+
+    ``source/site`` is the export as written (relative paths, precomputed playground);
+    ``source/SOURCE.json`` says how it was made. The page gains the demo bar and a banner;
+    nothing in the export's data is changed.
+    """
+    shutil.copytree(source / "site", dest)
+    (dest / ".ii-export").unlink(missing_ok=True)
+    info = _droid_info(source, json.loads((dest / "data" / "run.json").read_text(encoding="utf-8")))
+    html = (dest / "index.html").read_text(encoding="utf-8")
+    html = html.replace(
+        '<link rel="stylesheet" href="static/style.css">',
+        '<link rel="stylesheet" href="static/style.css">\n'
+        '  <link rel="stylesheet" href="/static/demo.css">\n'
+        '  <link rel="icon" href="/favicon.ico">',
+        1,
+    )
+    html = html.replace("<body>\n", f"<body>\n{_demo_bar('droid')}\n", 1)
+    html = html.replace("  </header>\n", "  </header>\n" + _droid_banner(info), 1)
+    (dest / "index.html").write_text(html, encoding="utf-8")
+    return info
+
+
+def _droid_info(source: Path, run: dict) -> dict:
+    meta = json.loads((source / "SOURCE.json").read_text(encoding="utf-8"))
+    features = run["features"]
+    steer = run.get("steer") or {}
+    return {
+        "model": str(meta["model"]),
+        "clips": len(run["clips"]),
+        "features": len(features),
+        "real": sum(1 for feature in features if feature.get("badge") == "real"),
+        "steer_clips": len(steer.get("clips") or []),
+        "commands": list(meta["commands"]),
+    }
+
+
+def _droid_summary(info: dict) -> str:
+    real = info["real"]
+    verified = f"{real} feature{'s' if real != 1 else ''} passed every offline check"
+    return (
+        f"{info['model']} on {info['clips']} real robot clips: {verified}. "
+        "Open it in the browser, nothing to install; the playground is precomputed and read-only."
+    )
+
+
+def _droid_banner(info: dict) -> str:
+    commands = "\n".join(info["commands"])
+    return (
+        '  <section class="score-line droid-banner" data-testid="droid-banner">\n'
+        f'    <p><span class="badge badge-unverified">Read-only</span> {escape(_droid_summary(info))} '
+        "A real badge means a feature passed the offline scoreboard gates on held-out clips; it says nothing "
+        "about what happens in a robot rollout. The playground's slider steps through edits computed ahead of "
+        f"time on {info['steer_clips']} clips: exploration, never evidence.</p>\n"
+        "    <details><summary>Run it yourself</summary>"
+        f"<pre class=\"quickstart\"><code>{escape(commands)}</code></pre></details>\n"
+        "  </section>\n"
+    )
 
 
 def _write_groot(dest: Path, summary_path: Path, summary: dict, status: str, checks: dict) -> None:

@@ -25,6 +25,13 @@
   color: var(--ink-2);
 }
 
+/* The hosted playground's banner: what is precomputed and what a badge means. */
+.droid-banner { padding-top: 12px; padding-bottom: 4px; }
+.droid-banner p { margin: 0 0 6px; }
+.droid-banner details { margin: 0 0 6px; }
+.droid-banner summary { cursor: pointer; color: var(--ink-2); }
+.droid-banner pre { margin: 8px 0 0; overflow-x: auto; }
+
 /* Demo pages: one readable column. */
 .demo-top { grid-template-columns: 1fr auto; }
 .demo-top .nav { flex-wrap: wrap; min-width: 0; }

@@ -58,13 +58,24 @@ LeRobot subset used in demo clips:
   https://huggingface.co/datasets/lerobot/droid_100
   License: MIT (per Hugging Face dataset card)
 
-See also demo-data/vjepa-slim/SOURCE.json for clip-level attribution.
+See also demo-data/vjepa-slim/SOURCE.json and demo-data/dinov2-droid/SOURCE.json
+for clip-level attribution.
 
 ================================================================================
 V-JEPA 2
 ================================================================================
 
 Video Joint Embedding Predictive Architecture 2 (V-JEPA 2): MIT License
+
+================================================================================
+DINOv2
+================================================================================
+
+facebook/dinov2-small (Meta AI): Apache-2.0
+  https://huggingface.co/facebook/dinov2-small
+The hosted playground (demo-data/dinov2-droid, demo-site/droid) ships
+activations, SAE features and precomputed edits of this model's outputs;
+it does not ship the model weights.
 
 ================================================================================
 Fonts (vendored, SIL Open Font License 1.1)
