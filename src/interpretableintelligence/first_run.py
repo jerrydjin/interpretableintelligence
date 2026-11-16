@@ -12,6 +12,7 @@ what the tool finds against the truth before pointing it at a real model.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -23,6 +24,16 @@ CLIP_SEED = 0
 
 # The features planted in the practice model. Nothing else in it changes the prediction.
 PLANTED = ("stripe", "pulse", "corner")
+
+
+def cli_command() -> str:
+    """How to type this CLI in the shell the newcomer is using.
+
+    ``uv sync`` installs ``ii`` into the project's ``.venv``, which is not on the shell's PATH, so
+    a newcomer who started with ``uv run ii`` gets "command not found" from a bare ``ii``. ``uv run``
+    marks the processes it starts with ``UV_RUN_RECURSION_DEPTH``.
+    """
+    return "uv run ii" if os.environ.get("UV_RUN_RECURSION_DEPTH") else "ii"
 
 
 def pick_feature(scoreboard: dict) -> dict | None:
@@ -65,6 +76,63 @@ def best_clip(tops: list[dict]) -> dict | None:
         if top.get("split") == "heldout":
             return top
     return tops[0] if tops else None
+
+
+def unverified_on_frame(model, top: dict | None) -> dict | None:
+    """The strongest unverified feature in the list the page opens on, to steer next for contrast.
+
+    Naming one that is not on the screen sends a newcomer looking for something that is not there.
+    """
+    if not top:
+        return None
+    try:
+        clip = model.clips.get(str(top["clip_id"])) or {}
+        frame = (clip.get("frames") or [])[int(top.get("frame", 0))]
+    except (IndexError, KeyError, TypeError, ValueError):
+        return None
+    for feature in frame.get("features") or []:
+        if feature.get("badge") != "real":
+            return feature
+    return None
+
+
+def next_steps(chosen: dict | None, contrast: dict | None) -> list[str]:
+    """What to do on the page that just opened, then how to go on to a real model."""
+    lines = []
+    if chosen is not None:
+        label = chosen.get("label") or f"feature {chosen['id']}"
+        lines.append(
+            f"Start here: the page opens on feature {chosen['id']} ({label}) at the moment it fires hardest."
+        )
+        lines.append("The orange overlay on the frame marks where it fires.")
+    lines += [
+        "Things to try:",
+        "  1. In the Playground panel, Remove is already chosen: press Steer. The blue squares show",
+        "     where the model's prediction moved without that feature, and the panel says by how much.",
+    ]
+    if contrast is not None:
+        name = contrast.get("label") or f"feature {contrast['id']}"
+        lines.append(
+            f"  2. In the list above the Playground, click {name} (marked unverified) and press Steer again."
+        )
+    else:
+        lines.append(
+            "  2. Open a feature marked unverified (the 'Features' tab lists them) and steer it the same way."
+        )
+    ii = cli_command()
+    lines += [
+        "     Compare the numbers: an unverified feature can fire just as hard yet barely move the",
+        "     prediction. That is why it is not verified, however busy it looks.",
+        "  3. Open 'Features' to see every feature and the checks each one passed.",
+        "",
+        "When you are ready for a real model, try one on real robot video (no clips needed):",
+        f"  {ii} get-clips --out clips/droid",
+        f"  {ii} run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid --no-score --steer",
+        "Or point --clips at a folder of your own videos (at least 20 clips).",
+        "",
+        "Press Ctrl+C to stop.",
+    ]
+    return lines
 
 
 def _clips_ready(clips_dir: Path) -> bool:
@@ -163,14 +231,18 @@ def guided_run(
         say(f"     Done in {time.perf_counter() - started:.0f}s.")
     say("")
     say(
-        f"     The model has {len(features)} features. {len(real)} passed every check and are marked verified:"
+        f"     The model has {len(features)} features. {len(real)} passed every check, so they are verified"
     )
+    say("     (the page marks them 'real'):")
     for feature in sorted(real, key=lambda f: int(f["id"])):
         say(f"       feature {feature['id']}  {feature.get('label') or 'unlabelled'}")
     decoys = len(features) - len(real)
     if decoys:
         say(
-            f"     The other {decoys} did not pass every check. Some fire a lot but barely change the prediction."
+            f"     The other {decoys} did not pass every check (the page marks them 'unverified'). Some fire a lot"
+        )
+        say(
+            "     but barely change the prediction."
         )
     say(
         f"     This practice model has {len(PLANTED)} features planted on purpose ({', '.join(PLANTED)}), so you"
@@ -189,7 +261,13 @@ def guided_run(
         detail = model.feature(int(chosen["id"])) or {}
         top = best_clip(detail.get("top_clips") or [])
     route = feature_route(int(chosen["id"]), top) if chosen is not None else ""
-    result = {"feature": chosen, "route": route, "real": [int(f["id"]) for f in real]}
+    contrast = unverified_on_frame(model, top)
+    result = {
+        "feature": chosen,
+        "route": route,
+        "real": [int(f["id"]) for f in real],
+        "next_steps": next_steps(chosen, contrast),
+    }
     if not serve:
         return result
 
@@ -199,35 +277,8 @@ def guided_run(
     def announce(url: str) -> None:
         say(f"     {url}")
         say("")
-        if chosen is not None:
-            label = chosen.get("label") or f"feature {chosen['id']}"
-            say(
-                f"Start here: the page opens on feature {chosen['id']} ({label}) at the moment it fires hardest."
-            )
-            say("The coloured squares on the video show where it fires.")
-        say("Things to try:")
-        say(
-            "  1. In the playground under the video, Remove is already chosen: press Steer. The blue"
-        )
-        say(
-            "     squares show where the model's prediction moved without that feature."
-        )
-        say(
-            "  2. Click an unverified feature on the right, such as flicker, and do the same."
-        )
-        say(
-            "     Barely anything moves. That is why it is not verified, however busy it looks."
-        )
-        say("  3. Open 'Features' to see every feature and the checks each one passed.")
-        say("")
-        say("When you are ready for a real model, try one on real robot video (no clips needed):")
-        say("  ii get-clips --out clips/droid")
-        say(
-            "  ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid --no-score --steer"
-        )
-        say("Or point --clips at a folder of your own mp4s.")
-        say("")
-        say("Press Ctrl+C to stop.")
+        for line in result["next_steps"]:
+            say(line)
 
     serve_model(
         model,

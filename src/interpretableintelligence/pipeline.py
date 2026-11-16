@@ -255,7 +255,11 @@ def execute_pipeline(
     out.mkdir(parents=True, exist_ok=True)
     meta = list_clip_meta(clips_dir)
     if len(meta) < MIN_CLIPS:
-        raise ValueError(f"need at least {MIN_CLIPS} clips, found {len(meta)} in {clips_dir}")
+        raise ValueError(
+            f"need at least {MIN_CLIPS} clips, found {len(meta)} in {clips_dir}. Some clips are held out to "
+            "check each feature on video the model was not trained on, so a run needs enough of them. "
+            "No clips of your own? `ii get-clips` downloads 100 short robot clips."
+        )
 
     cache = ActivationCache.open(cache_dir, enabled=use_cache)
     adapter_cls = get_adapter(adapter_name)
@@ -279,10 +283,16 @@ def execute_pipeline(
     n_features = config.n_features
     if prefilter is None and n_features > SCORE_ALL_MAX_FEATURES:
         prefilter = DEFAULT_PREFILTER_K
-        log(
-            f"{n_features} SAE features: scoring the {prefilter} with the largest attribution "
-            "(pass --prefilter K to change). The rest stay unverified."
-        )
+        if score:
+            log(
+                f"{n_features} SAE features: scoring the {prefilter} with the largest attribution "
+                "(pass --prefilter K to change). The rest stay unverified."
+            )
+        else:
+            log(
+                f"{n_features} SAE features. --no-score: nothing is checked now, so every feature stays "
+                f"unverified. Run again without --no-score to check the {prefilter} with the largest attribution."
+            )
     sae_inputs = _with_kind(capture_inputs, "sae", sae=config.as_dict())
 
     if _capture_ready(out, capture_inputs, grid, len(meta)):
@@ -397,6 +407,7 @@ def execute_pipeline(
         view_inputs = _with_kind(view_inputs, "view", scoreboard_sha=file_sha256(out / "scoreboard.json"))
     httpd = None
     thread = None
+    _url = None
     if _view_ready(out, view_inputs):
         log("skip view")
         if serve:
@@ -422,6 +433,8 @@ def execute_pipeline(
         log(line)
     if not serve:
         log("viewer not started")
+    for line in _closing_lines(out, _url if thread is not None else None, score=score, steer=steer):
+        log(line)
     try:
         if thread is not None:
             thread.join()
@@ -472,6 +485,35 @@ def _report(manifest: dict, gpu_cost_per_hour: float | None) -> dict:
         elapsed = sum(float(stage["wall_s"]) for stage in stages.values())
         report["cost_per_hour_footage"] = footage_cost(elapsed, video_s, float(gpu_cost_per_hour))
     return report
+
+
+def _closing_lines(out: Path, url: str | None, *, score: bool, steer: bool) -> list[str]:
+    """Where to look and what the run does and does not show, after the cost report scrolls past."""
+    lines = [""]
+    if url:
+        lines.append(f"Viewer: {url}{' (playground on)' if steer else ''}. Press Ctrl+C to stop.")
+    if not score:
+        lines.append(
+            "Nothing is verified yet: --no-score skipped the checks. Every feature is open to explore."
+        )
+        lines.append("To check features, run the same command without --no-score; it reuses what is done.")
+        return lines
+    board = _read_scoreboard(out) or {}
+    features = [f for f in board.get("features") or [] if isinstance(f, dict)]
+    if not features:
+        return lines
+    real = sum(1 for f in features if f.get("real") is True)
+    measured = sum(1 for f in features if f.get("ablation_effect") is not None)
+    if real:
+        lines.append(f"{real} of {len(features)} features passed every check: verified, marked real in the viewer.")
+    else:
+        lines.append("No feature passed every check, so none is verified. 'Features' in the viewer shows what each missed.")
+    if measured < len(features):
+        lines.append(
+            f"The ablation check ran on {measured} of them. It skips features outside --prefilter and ones that "
+            "already failed a cheaper check; they stay unverified but explorable."
+        )
+    return lines
 
 
 def _progress(log, stage: str, done: int, total: int, started: float) -> None:

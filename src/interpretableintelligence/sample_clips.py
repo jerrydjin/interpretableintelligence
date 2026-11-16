@@ -104,6 +104,8 @@ def fetch_droid_clips(
     out_dir = Path(out_dir)
     if clips_ready(out_dir, n):
         return json.loads((out_dir / INDEX).read_text())["clips"]
+    say(f"     Reading the episode list of {DATASET} from huggingface.co. No account is needed: a warning")
+    say("     about HF_TOKEN only concerns rate limits and can be ignored.")
     episodes = _episodes()
     if not 1 <= n <= len(episodes):
         raise ValueError(f"{DATASET} has {len(episodes)} episodes; pass --n between 1 and {len(episodes)}")
