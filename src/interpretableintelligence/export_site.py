@@ -23,6 +23,7 @@ from interpretableintelligence.view import load_run
 REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
 EXPORT_MARKER = export_run.MARKER
+LIVE_KEEP = ("live", "vercel.json")
 DROID_COMMANDS = (
     "uv run ii get-clips --out clips/droid",
     "# The labels here came from a vision-language model: set FIREWORKS_API_KEY (or another key, see README).",
@@ -58,9 +59,20 @@ def export_site(
     if (droid / EXPORT_MARKER).is_file():
         kept = Path(tempfile.mkdtemp(prefix="ii-droid-")) / "droid"
         shutil.copytree(droid, kept)
+    # The live playground (``ii export-live`` packs plus its page) and the host config are
+    # hand-kept parts of the site, so a regeneration keeps them as they are.
+    keep_dir = Path(tempfile.mkdtemp(prefix="ii-site-keep-"))
+    kept_live = [name for name in LIVE_KEEP if (out / name).exists()]
+    for name in kept_live:
+        source = out / name
+        (shutil.copytree if source.is_dir() else shutil.copy2)(source, keep_dir / name)
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    for name in kept_live:
+        source = keep_dir / name
+        (shutil.copytree if source.is_dir() else shutil.copy2)(source, out / name)
+    shutil.rmtree(keep_dir, ignore_errors=True)
     _copy_static(out / "static")
     (out / "favicon.ico").write_bytes(_favicon_png())
     work = Path(work_dir) if work_dir else out / ".work"
@@ -90,7 +102,7 @@ def export_site(
     droid_run = _write_droid(out / "droid", kept)
     if kept is not None:
         shutil.rmtree(kept.parent, ignore_errors=True)
-    _write_product(out / "index.html", groot_summary, groot_status, droid_run)
+    _write_product(out / "index.html", groot_summary, groot_status, droid_run, live=(out / "live" / "index.html").is_file())
     _write_results(
         out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result, droid_run
     )
@@ -238,6 +250,14 @@ def _droid_proof(run: dict | None) -> str:
     )
 
 
+def _live_cta() -> str:
+    return (
+        '    <p data-testid="live-cta"><a href="/live/">New to mech interp? Try it live in your browser:</a> '
+        "drop in any picture, see what a real vision model notices, switch a feature off and watch its view change. "
+        "Nothing to install.</p>\n"
+    )
+
+
 def _demo_bar(current: str) -> str:
     return (
         '  <nav class="demo-bar" aria-label="Demo sections">'
@@ -298,7 +318,7 @@ def _page(title: str, current: str, body: str) -> str:
 """
 
 
-def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None) -> None:
+def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None, live: bool = False) -> None:
     commands = dict(_ii_commands())
     known = set(commands)
     headline = escape(_control_headline(summary))
@@ -311,7 +331,7 @@ def _write_product(path: Path, summary: dict, status: str, droid_run: dict | Non
     <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
     <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
     <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
-    <h2>What you get today</h2>
+{_live_cta() if live else ""}    <h2>What you get today</h2>
     <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. {_cmd("import", known)} brings rollout logs you already have into a run folder that validate accepts.</p>
     <h2>Proof</h2>
     <p data-testid="control-headline">{headline}</p>

@@ -219,6 +219,8 @@ A real run is larger, mostly video and frame images. `--max-clips N` carries onl
 
 `make demo-site` (or `ii export-site --out demo-site`) rebuilds the static site in `demo-site/`. Serve that directory with any static host. It does not start the viewer API.
 
+`demo-site/live/` is the live playground: DINOv2-small and the DROID dictionary running in the visitor's browser (ONNX Runtime Web, WebGPU or WebAssembly). Any picture, a webcam or the sample frames; see which features fire on each patch, switch one off, turn it up or force it on, and watch the model's final view change. `ii export-live runs/<id> --out demo-site/live/packs/<name>` packs another `hf` image-model run; open it with `/live/?pack=packs/<name>/`.
+
 ## Layout
 
 | Path | What it is |

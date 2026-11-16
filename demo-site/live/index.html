@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f5">
+  <title>Live playground · ii</title>
+  <meta name="description" content="Look inside a real vision model in your browser. Drop in any picture, see what it notices, switch a feature off and watch its view change.">
+  <link rel="preload" href="../static/fonts/geist-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="../static/fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="live.css">
+  <link rel="icon" href="../favicon.ico">
+</head>
+<body>
+  <header class="bar">
+    <a class="mark" href="../" aria-label="interpretable intelligence home">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
+      <span>interpretable intelligence</span>
+    </a>
+    <span class="model-pill" id="model-pill">Loading the model</span>
+  </header>
+
+  <main>
+    <section class="intro">
+      <h1>Look inside a vision model. Then change its mind.</h1>
+      <p class="lede">This is <span id="model-name">DINOv2-small</span>, the kind of vision model robots use to see. It runs right here in your browser. Give it any picture and see the things it has learnt to notice, then switch one off and watch how its view of the scene changes.</p>
+    </section>
+
+    <section class="loader" id="loader" aria-live="polite">
+      <div class="loader-track"><div class="loader-fill" id="loader-fill"></div></div>
+      <p id="loader-text">Getting the model ready. It is about 50 MB the first time and instant after that.</p>
+    </section>
+
+    <section class="work" id="work" hidden>
+      <div class="stage-col">
+        <div class="stage" id="stage">
+          <img id="photo" alt="The picture the model is looking at">
+          <video id="cam" playsinline muted hidden></video>
+          <canvas id="heat" aria-hidden="true"></canvas>
+          <canvas id="grid" aria-hidden="true"></canvas>
+          <div class="drop-hint" id="drop-hint">Drop a picture anywhere</div>
+        </div>
+        <div class="stage-key" id="stage-key"></div>
+        <div class="tray">
+          <div class="tray-head">
+            <span>Pick a picture</span>
+            <span class="tray-actions">
+              <label class="pill-btn" for="file">Upload your own</label>
+              <input type="file" id="file" accept="image/*" hidden>
+              <button class="pill-btn" id="cam-btn" type="button">Use your camera</button>
+            </span>
+          </div>
+          <div class="thumbs" id="thumbs"></div>
+          <p class="tray-note">Frames from real robot videos. The first ones are from videos the dictionary never saw while it was built.</p>
+        </div>
+      </div>
+
+      <div class="panel" id="panel">
+        <div class="find">
+          <input type="search" id="search" placeholder="Find a feature by name or number" autocomplete="off" aria-label="Find a feature">
+        </div>
+        <div id="panel-body"></div>
+      </div>
+    </section>
+
+    <section class="how" id="how">
+      <h2>How this works</h2>
+      <ol class="steps">
+        <li><h3>The model looks</h3><p>It cuts the picture into a 16 by 16 grid of patches and describes every patch with a list of 384 numbers. We read those numbers halfway through the model.</p></li>
+        <li><h3>A dictionary splits them into features</h3><p>A dictionary trained on 80 robot videos breaks each description into a few features out of 3,072, each one a thing the model notices, such as a white ceiling or the edge of the frame. An AI named some of them from where they fire.</p></li>
+        <li><h3>Tests decide the tick</h3><p>A name is a guess until it passes four checks. Only features that pass every one get a green tick: <span id="n-real">5</span> of 3,072 so far.</p>
+          <details><summary>What are the checks?</summary>
+            <ul>
+              <li>It fires across many different videos, not just one.</li>
+              <li>Its name still fits videos that were held back while it was found.</li>
+              <li>Switching it off changes the model more than at least 95 of 100 random look-alike edits do.</li>
+              <li>It is missing from a copy of the model with random, untrained weights, so it was learnt.</li>
+            </ul>
+          </details>
+        </li>
+        <li><h3>You play</h3><p>Switch a feature off, turn it up or force it on, and the rest of the model runs again on the edited patches. Blue shows where the model's final view of each patch moved. Playing is exploring: it never changes which features carry a tick.</p></li>
+      </ol>
+      <p class="fine">Everything runs on your device with <a href="https://onnxruntime.ai/">ONNX Runtime Web</a>. Your pictures and camera never leave it. Model: <a href="https://huggingface.co/facebook/dinov2-small">facebook/dinov2-small</a> (Apache 2.0), cut at block 6 of 12. Want to do this on your own model? <a href="https://github.com/jerrydjin/interpretableintelligence">Run <code>ii</code></a> and pack it with <code>ii export-live</code>.</p>
+      <p class="fine perf" id="perf"></p>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

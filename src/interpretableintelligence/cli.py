@@ -888,6 +888,38 @@ def export_cmd(
     typer.echo(f"preview: python -m http.server -d {summary.out_dir} 8000, then open http://localhost:8000")
 
 
+@app.command("export-live")
+def export_live_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder to pack (an hf image model with a trained SAE).")],
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the pack into, e.g. demo-site/live/packs/<name>.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Directory of clip files, for the sample frames. Overrides a clip path recorded in the manifest."),
+    ] = None,
+    meta_from: Annotated[
+        Path | None,
+        typer.Option(
+            "--meta-from",
+            help="Copy labels and badges from an ii export of the same run (checked against this SAE) instead of the run's scoreboard.",
+        ),
+    ] = None,
+    samples: Annotated[int, typer.Option("--samples", min=0, help="Sample frames to ship with the pack.")] = 16,
+    title: Annotated[str | None, typer.Option("--title", help="Name shown in the playground.")] = None,
+) -> None:
+    """Pack a run for the live in-browser playground: the model split at the SAE's layer, the SAE, labels and badges."""
+    from interpretableintelligence.live import LiveExportError, export_live
+
+    try:
+        summary = export_live(run_dir, out, clips_dir=clips, meta_from=meta_from, n_samples=samples, title=title, log=typer.echo)
+    except (LiveExportError, FileNotFoundError, OSError, KeyError, ValueError, RuntimeError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"wrote {summary.out_dir}: {summary.n_features} features ({summary.n_real} verified, from the {summary.meta_source}), "
+        f"{summary.samples} samples, {summary.bytes_total / 1e6:.1f} MB"
+    )
+
+
 @app.command("export-site")
 def export_site_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the static site into.")] = Path("demo-site"),
