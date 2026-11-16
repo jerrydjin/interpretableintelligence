@@ -131,21 +131,27 @@ def _picker_view(capture: Path, sae_dir: Path, view: Path) -> Path:
     return view
 
 
-def run_picker(capture: Path, sae_dir: Path, out: Path, *, seed: int, top: int, threads: int = 2) -> dict:
-    """Run the GR00T picker on ``capture`` read through ``sae_dir``. Output files go to ``out``."""
-    picker = _load_picker()
-    view = _picker_view(capture, sae_dir, out / "run")
-    argv = [str(view), "--out", str(out), "--seed", str(int(seed)), "--top", str(int(top)), "--threads", str(int(threads)), *PICKER_ARGS]
-    args = picker.args_parser().parse_args(argv)
+def run_picker(capture: Path, sae_dir: Path, out: Path, *, seed: int, top: int) -> dict:
+    """Run the GR00T picker on ``capture`` read through ``sae_dir``. Output files go to ``out``.
+
+    The picker sets torch's thread count; it is handed the current count so the process's BLAS setup (and with it
+    float reduction order in later work) does not change.
+    """
     import torch
 
-    grad, threads = torch.is_grad_enabled(), torch.get_num_threads()
+    picker = _load_picker()
+    view = _picker_view(capture, sae_dir, out / "run")
+    threads = torch.get_num_threads()
+    argv = [str(view), "--out", str(out), "--seed", str(int(seed)), "--top", str(int(top)), "--threads", str(int(threads)), *PICKER_ARGS]
+    args = picker.args_parser().parse_args(argv)
+    grad = torch.is_grad_enabled()
     try:
         torch.set_grad_enabled(False)
-        result = picker.pick(str(view), args)  # sets torch's thread count
+        result = picker.pick(str(view), args)
     finally:
         torch.set_grad_enabled(grad)
-        torch.set_num_threads(threads)
+        if torch.get_num_threads() != threads:
+            torch.set_num_threads(threads)
     return {"result": result, "argv": argv[1:]}
 
 
