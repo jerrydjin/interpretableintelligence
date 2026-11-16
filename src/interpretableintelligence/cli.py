@@ -21,6 +21,7 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_WORKERS,
     DEFAULT_RANDOM_SAE,
     DEFAULT_SEED,
+    MIN_CLIPS,
     PROBE_BOOTSTRAP,
     PROBE_L2,
     PROBE_MIN_LEAD_S,
@@ -113,7 +114,7 @@ def generate_clips_cmd(
 @app.command("get-clips")
 def get_clips_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the clips into.")] = Path("clips/droid"),
-    n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode.")] = 100,
+    n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode. `ii run` needs at least 20.")] = 100,
     seconds: Annotated[float, typer.Option("--seconds", min=0.5, help="Length of each clip.")] = 4.0,
 ) -> None:
     """Download real robot video to try a real model on: short clips from DROID (MIT licence).
@@ -121,20 +122,37 @@ def get_clips_cmd(
     One 175 MB download, cached after the first time. Each clip is cut from the middle of a robot
     episode in a real kitchen or office and saved as an mp4.
     """
+    from interpretableintelligence.first_run import cli_command
     from interpretableintelligence.sample_clips import DATASET, LICENSE, fetch_droid_clips
 
     try:
         entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo)
     except (ValueError, RuntimeError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
+        if "connection" in str(exc).lower() or "internet" in str(exc).lower():
+            typer.echo(
+                "The first download needs internet access to huggingface.co. Later runs read the cached copy.",
+                err=True,
+            )
         raise typer.Exit(code=1) from exc
+    ii = cli_command()
     typer.echo(f"wrote {len(entries)} clips from {DATASET} ({LICENSE} licence) to {out}")
     typer.echo("")
+    if len(entries) < MIN_CLIPS:
+        typer.echo(f"Note: `{ii} run` needs at least {MIN_CLIPS} clips. Run this again with --n {MIN_CLIPS} or more first.")
+        typer.echo("")
     typer.echo("Next, find the features a real vision model uses on them, and open the playground:")
-    typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
-    typer.echo("That takes about 10 minutes on a laptop CPU. Every feature is explorable but none is verified yet.")
+    typer.echo(f"  {ii} run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
+    typer.echo("That takes about 10 minutes on a laptop CPU (it downloads DINOv2-small, about 90 MB, once).")
+    typer.echo("Every feature is explorable, but none is verified yet: --no-score skips the checks.")
     typer.echo("To run the checks that mark features verified, run the same command without --no-score.")
     typer.echo("It reuses what is done and adds the scoring, which takes longer (about 40 minutes on a 4-core CPU).")
+
+
+def _cli() -> str:
+    from interpretableintelligence.first_run import cli_command
+
+    return cli_command()
 
 
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
@@ -183,7 +201,7 @@ def run(
         str,
         typer.Argument(help="Adapter: fake, vjepa2, hf (any Hugging Face vision model; pass --model), or groot (NVIDIA GR00T N1.7)."),
     ],
-    clips: Annotated[Path, typer.Option("--clips", exists=True, file_okay=False, help="Clip directory.")],
+    clips: Annotated[Path, typer.Option("--clips", file_okay=False, help="Clip directory (at least 20 clips).")],
     out: Annotated[Path, typer.Option("--out", help="Run folder, e.g. runs/demo.")],
     model: Annotated[
         str | None,
@@ -304,6 +322,14 @@ def run(
     from interpretableintelligence.remote.backends import RemoteSetupError
 
     modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
+    if not clips.is_dir():
+        typer.echo(f"error: clips folder not found: {clips}", err=True)
+        maker = "generate-clips" if adapter == "fake" else "get-clips"
+        typer.echo(
+            f"Make one with `{_cli()} {maker} --out {clips}`, or pass a folder of your own videos (at least 20).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     try:
         if not remote and (gpu is not None or max_cost is not None):
             raise ValueError("--gpu and --max-cost only apply with --remote")

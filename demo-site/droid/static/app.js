@@ -10,7 +10,8 @@ const state = {
   heatToken: 0,
   heatPack: null,
   heatClip: null,
-  steer: { kind: "ablate", value: 0, result: null, busy: false, show: false, error: "", token: 0 },
+  allFrameFeatures: false,
+  steer: { kind: "ablate", value: 0, result: null, busy: false, show: false, error: "", token: 0, idea: null },
 };
 
 const STEER_KINDS = {
@@ -76,10 +77,25 @@ function fmtUnit(value) {
   return Number.isFinite(value) ? value.toFixed(3) : "—";
 }
 
+// A real model lists up to 40 features per frame, which pushes the Playground a few screens down.
+// Past FRAME_FEATURES_FOLD rows, show the strongest FRAME_FEATURES_SHOWN and the rest on request.
+const FRAME_FEATURES_FOLD = 12;
+const FRAME_FEATURES_SHOWN = 6;
+
 function fmtSmall(value) {
   if (!Number.isFinite(value)) return "—";
   if (value === 0) return "0";
   return Math.abs(value) >= 0.01 ? value.toFixed(3) : value.toExponential(1);
+}
+
+// The before/after error in words, so a newcomer need not compare two numbers in e-notation.
+function errorChange(clean, edited) {
+  if (clean === 0 && edited > 0) return " (the reference is the model's own unedited output, so it starts at 0)";
+  if (!Number.isFinite(clean) || !Number.isFinite(edited) || clean <= 0) return "";
+  const ratio = edited / clean;
+  if (ratio >= 0.95 && ratio <= 1.05) return " (about the same)";
+  if (ratio > 1) return ` (about ${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× the unedited error)`;
+  return ` (about ${Math.round((1 - ratio) * 100)}% lower)`;
 }
 
 function fmtFlag(value) {
@@ -269,7 +285,7 @@ function route() {
   }
   const clip = path.match(/^\/clips\/(.+)$/);
   if (clip) {
-    showClip(decodeURIComponent(clip[1]), Number(params.get("frame") || 0), params.get("feature"));
+    showClip(decodeURIComponent(clip[1]), Number(params.get("frame") || 0), params.get("feature"), params.get("try"));
     return;
   }
   const first = state.run.clips[0];
@@ -317,7 +333,9 @@ function renderIndex() {
       featureGroup(
         "exploring",
         "Still exploring",
-        "Each missed at least one check. Open one to see which, and what experiment to try next.",
+        state.run.scoreboard === false
+          ? "None has been checked yet: this run was not scored. Open one to see where it fires and steer it."
+          : "Each missed at least one check or was not checked. Open one to see which, and what experiment to try next.",
         exploring,
       ),
     ]),
@@ -486,7 +504,7 @@ function renderFeature(feature) {
       el("p", { class: "kicker" }, `Feature ${feature.id}${feature.label_model ? ` · named by ${feature.label_model}` : ""}`),
       el("div", { class: "feature-title" }, [el("h1", {}, displayLabel(feature)), badge(feature)]),
       featureLede(feature),
-      featureActions(feature),
+      featureStanding(feature) || featureActions(feature),
       featureHero(feature),
       feature.viz
         ? el("img", { class: "viz", alt: "", src: apiUrl(`/api/features/${feature.id}/viz`), "data-testid": "feature-viz" })
@@ -648,6 +666,147 @@ function featureActions(feature) {
   ]);
 }
 
+function guideCtx(feature) {
+  const run = state.run;
+  return { steerHref: steerHrefFor(feature), sae: run.scoreboard === false ? null : run.sae };
+}
+
+// The top clip with a playground edit set up (and run) on arrival.
+function tryHref(feature, idea) {
+  const top = feature.top_clips && feature.top_clips[0];
+  if (!top) return null;
+  const base = `#/clips/${encodeURIComponent(top.clip_id)}?frame=${top.frame}&feature=${feature.id}`;
+  return steerEnabled() && idea ? `${base}&try=${idea.kind}:${idea.value}` : base;
+}
+
+function ideaName(idea) {
+  const label = STEER_KINDS[idea.kind]?.label || idea.kind;
+  return idea.kind === "ablate" ? label : `${label} ${idea.value}${idea.kind === "scale" ? "×" : ""}`;
+}
+
+// The check ring: one arc per check, filled when it passed. All filled, it closes
+// into the verified seal with a tick in the middle. Numbers only, so innerHTML is safe.
+function checkRing(trail, real, size = 64) {
+  const n = trail.marks.length;
+  const r = 26;
+  const gap = n > 1 ? 18 : 0;
+  const arc = (start, end) => {
+    const rad = (deg) => ((deg - 90) * Math.PI) / 180;
+    const [x1, y1] = [32 + r * Math.cos(rad(start)), 32 + r * Math.sin(rad(start))];
+    const [x2, y2] = [32 + r * Math.cos(rad(end)), 32 + r * Math.sin(rad(end))];
+    return `M${x1.toFixed(2)} ${y1.toFixed(2)}A${r} ${r} 0 ${end - start > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+  };
+  const step = 360 / n;
+  const arcs = trail.marks.map((mark, i) =>
+    `<path class="ring-arc ring-${mark.mark}" style="--i:${i}" pathLength="1" d="${arc(i * step + gap / 2, (i + 1) * step - gap / 2)}"/>`).join("");
+  const middle = real
+    ? `<circle class="ring-core" cx="32" cy="32" r="16"/><path class="ring-tick" pathLength="1" d="M24.5 32.5l5 5 10-11"/>`
+    : `<text class="ring-count" x="32" y="32" text-anchor="middle" dominant-baseline="central">${trail.passed}/${trail.total}</text>`;
+  const label = real ? "Verified: every check passed" : `${trail.passed} of ${trail.total} checks passed`;
+  return `<svg class="check-ring" width="${size}" height="${size}" viewBox="0 0 64 64" role="img" aria-label="${label}">${arcs}${middle}</svg>`;
+}
+
+const COUNT_WORDS = ["no", "one", "two", "three", "four", "five", "six"];
+
+function countWord(n) {
+  return COUNT_WORDS[n] || String(n);
+}
+
+function standingLine(trail, real) {
+  if (real) return `All ${countWord(trail.total)} checks passed`;
+  const left = trail.total - trail.passed;
+  if (trail.passed === 0) return "A fresh lead, with every check still ahead";
+  const head = countWord(trail.passed);
+  return `${head.charAt(0).toUpperCase()}${head.slice(1)} of ${countWord(trail.total)} checks passed. ${left === 1 ? "One to go." : `${countWord(left).replace(/^./, (c) => c.toUpperCase())} to go.`}`;
+}
+
+function checkTrail(trail) {
+  const symbol = { pass: "✓", fail: "×", skip: "–" };
+  const word = { pass: "passed", fail: "missed", skip: "not run" };
+  return el("ol", { class: "check-trail", "data-testid": "check-trail" }, trail.marks.map((mark) =>
+    el("li", { class: `trail-${mark.mark}`, "data-gate": mark.key, title: `${mark.name}: ${word[mark.mark]}` }, [
+      el("span", { class: "trail-mark", "aria-hidden": "true" }, symbol[mark.mark]),
+      mark.name,
+    ])));
+}
+
+// Where the feature stands, right under its title. Verified: the seal, what the badge
+// earns, and what to try now. Not yet: how far it got, what held it back, and the next
+// experiment, one click from the playground. Both always end in something to do.
+function featureStanding(feature) {
+  const g = guide();
+  if (!g || !g.trail) return null;
+  const ctx = guideCtx(feature);
+  const read = g.feature(feature, ctx);
+  const trail = g.trail(feature, ctx);
+  const plan = g.experiments(feature, ctx);
+  const idea = plan.ideas[0];
+  const real = read.real;
+  const top = feature.top_clips && feature.top_clips[0];
+  const ring = el("span", { class: "standing-ring" });
+  ring.innerHTML = checkRing(trail, real);
+  const head = el("div", { class: "standing-head" }, [
+    ring,
+    el("div", { class: "standing-sum" }, [
+      el("p", { class: "standing-count", "data-testid": "standing-count" }, standingLine(trail, real)),
+      checkTrail(trail),
+    ]),
+  ]);
+  const play = top
+    ? el("a", { class: "button", href: tryHref(feature, idea), "data-testid": "feature-watch" },
+        steerEnabled() ? (real ? "Steer it in the playground" : "Try it in the playground") : "Watch it fire")
+    : null;
+  const playNote = top
+    ? el("p", { class: "standing-note" }, steerEnabled()
+        ? `Opens ${top.clip_id} at frame ${top.frame}, where it is strongest, with ${ideaName(idea)} set up.`
+        : `Opens ${top.clip_id} at frame ${top.frame}, where it is strongest.`)
+    : null;
+  let left;
+  let right;
+  if (real) {
+    const n = Number.isFinite(feature.n_random) && feature.n_random > 0 ? `${feature.n_random} random look-alikes` : "random look-alikes";
+    const steered = steeringCard() && steeringCard().rows.some((row) => row.feature_id === feature.id);
+    left = el("div", { class: "standing-col" }, [
+      el("h3", { class: "standing-title" }, "What the badge earns it"),
+      el("ul", { class: "standing-list" }, [
+        el("li", {}, `Switching it off moved the prediction more than ${n} did, on clips the model never trained on.`),
+        el("li", {}, richText("`ii explain` can now cite it when it explains a new clip.")),
+        el("li", {}, steered
+          ? [el("a", { href: "#/steering" }, "Its steering scorecard"), " is below. For a robot policy, a closed-loop rollout is the next bar."]
+          : richText("Next bar: `ii steer-scorecard RUN` measures removing and boosting it against random edits. For a robot policy, a closed-loop rollout.")),
+      ]),
+    ]);
+    right = el("div", { class: "standing-col standing-next", "data-testid": "standing-next" }, [
+      el("h3", { class: "standing-title" }, steerEnabled() ? idea.title : "Watch it work"),
+      el("p", {}, steerEnabled() ? idea.text : "Play its strongest clip and see where it lights up."),
+      play,
+      playNote,
+    ]);
+  } else {
+    const gate = read.gates.find((item) => item.key === plan.gate) || null;
+    const hint = !steerEnabled() && !iiRoot() && top
+      ? el("p", { class: "standing-note" }, richText("Start the viewer with `ii view RUN --steer` to turn the playground on."))
+      : null;
+    left = el("div", { class: "standing-col" }, [
+      el("h3", { class: "standing-title" }, gate ? (gate.passed === false ? "What held it back" : "What has not run yet") : "Where it stands"),
+      el("p", {}, gate ? richText(gate.result) : "Every check it could take, it passed. The scorer has not marked it verified."),
+    ]);
+    right = el("div", { class: "standing-col standing-next", "data-testid": "standing-next" }, [
+      el("h3", { class: "standing-title" }, "Your next experiment"),
+      el("p", {}, gate && gate.next ? richText(gate.next.text) : idea.text),
+      play,
+      playNote,
+      hint,
+    ]);
+  }
+  return el("section", {
+    class: "standing",
+    "data-testid": "standing",
+    "data-real": real ? "true" : "false",
+    "data-next": plan.key,
+  }, [head, el("div", { class: "standing-body" }, [left, right])]);
+}
+
 // Hero: the frame where the feature fires hardest, next to its activation as isometric blocks.
 function featureHero(feature) {
   const top = feature.top_clips && feature.top_clips[0];
@@ -775,7 +934,7 @@ function scoreVersus(feature) {
   ]);
 }
 
-async function showClip(clipId, frame, featureParam) {
+async function showClip(clipId, frame, featureParam, tryParam) {
   const token = ++state.token;
   const same = Boolean(state.clip && state.clipId === clipId);
   if (!same) {
@@ -791,11 +950,35 @@ async function showClip(clipId, frame, featureParam) {
   if (token !== state.token) return;
   state.featureId = featureParam === null || featureParam === "" ? null : Number(featureParam);
   state.frame = clampFrame(frame);
+  const tried = steerEnabled() ? parseTry(tryParam) : null;
+  if (tried) {
+    state.steer.kind = tried.kind;
+    state.steer.value = tried.value;
+  }
   if (same && document.querySelector("[data-testid=stage]")) {
     renderFrame();
-    return;
+  } else {
+    renderClip();
   }
-  renderClip();
+  // Arriving from "Try it in the playground": run the edit that was set up.
+  if (tried && token === state.token) runSteer();
+}
+
+// `try=scale:3` in a clip link: a playground edit to set up on arrival.
+function parseTry(raw) {
+  if (!raw) return null;
+  const [kind, value] = String(raw).split(":");
+  if (!STEER_KINDS[kind]) return null;
+  const number = kind === "ablate" ? 0 : Number(value);
+  if (!Number.isFinite(number)) return null;
+  return { kind, value: nearestPreset(kind, number) };
+}
+
+// Static exports only have precomputed strengths: snap to the closest one.
+function nearestPreset(kind, value) {
+  const presets = steerPresets(kind);
+  if (!presets) return value;
+  return presets.reduce((best, item) => (Math.abs(item - value) < Math.abs(best - value) ? item : best), presets[0]);
 }
 
 function clampFrame(frame) {
@@ -1056,8 +1239,23 @@ function renderFrame(options) {
   }
   list.dataset.feature = active ? String(active.id) : "";
   const peak = frame.features.reduce((best, feature) => Math.max(best, Number(feature.activation) || 0), 0);
-  list.replaceChildren(...(frame.features.length ? frame.features.map((feature) => renderFeatureRow(feature, active, peak)) : [
-    el("li", { class: "empty" }, "No feature fired on this frame."),
+  const rows = frame.features.map((feature) => renderFeatureRow(feature, active, peak));
+  const folded = !state.allFrameFeatures && rows.length > FRAME_FEATURES_FOLD;
+  if (folded) {
+    rows.forEach((row, index) => {
+      if (index >= FRAME_FEATURES_SHOWN && row.dataset.selected !== "true") row.hidden = true;
+    });
+    const more = el("button", { type: "button", class: "more-features", "data-testid": "more-features" },
+      `Show all ${rows.length} features firing on this frame`);
+    more.addEventListener("click", () => {
+      state.allFrameFeatures = true;
+      for (const row of list.querySelectorAll("[data-testid=frame-feature]")) row.hidden = false;
+      more.parentElement.remove();
+    });
+    rows.push(el("li", { class: "more" }, more));
+  }
+  list.replaceChildren(...(rows.length ? rows : [
+    el("li", { class: "empty" }, "No feature fired on this frame. Move the slider or pick another clip."),
   ]));
   state.activeFeature = active;
   paintSteer();
@@ -1396,15 +1594,34 @@ function steerPanel() {
     renderFrame({ seek: false });
   });
   const usable = state.run.steer.sae_usable;
+  const tryIt = el("button", { type: "button", class: "steer-idea-run", "data-testid": "steer-idea-run" });
+  tryIt.addEventListener("click", () => {
+    const idea = state.steer.idea;
+    if (!idea) return;
+    state.steer.kind = idea.kind;
+    state.steer.value = nearestPreset(idea.kind, idea.value);
+    kind.value = idea.kind;
+    runSteer();
+  });
   return el("div", { class: "steer", "data-testid": "steer-panel" }, [
-    el("h3", { class: "panel-title" }, "Playground"),
+    el("div", { class: "steer-head" }, [
+      el("h3", { class: "panel-title" }, "Playground"),
+      el("span", { class: "steer-verified", "data-testid": "steer-verified", hidden: "" }, "Verified feature"),
+    ]),
     el("p", { class: "steer-target", "data-testid": "steer-target" }),
+    el("div", { class: "steer-idea", "data-testid": "steer-idea", hidden: "" }, [
+      el("p", { class: "steer-idea-kicker" }),
+      el("p", { class: "steer-idea-text" }),
+      tryIt,
+    ]),
     el("div", { class: "steer-controls" }, [kind, value, readout, run]),
     el("p", { class: "steer-help", "data-testid": "steer-help" }),
     el("label", { class: "steer-toggle" }, [show, " Show where the prediction moved"]),
     el("div", { class: "steer-result", "data-testid": "steer-result" }),
     usable ? null : el("p", { class: "steer-warn", "data-testid": "steer-warn" },
-      "This run's SAE is not marked usable, so its features may not mean much yet. Steering still works."),
+      state.run.scoreboard === false
+        ? "This run is not scored yet, so no check has run and no feature is verified. Steering still works: explore freely, but treat what you see as a lead, not a finding."
+        : "This run's SAE is not marked usable, so its features may not mean much yet. Steering still works."),
     el("p", { class: "steer-note" }, "Exploration only. Steering never marks a feature real; only the scored gates do."),
   ].filter(Boolean));
 }
@@ -1435,6 +1652,9 @@ function paintSteer() {
   const feature = state.activeFeature;
   target.replaceChildren(feature ? "Steer " : "Pick a feature above to steer it.");
   if (feature) target.append(el("strong", {}, displayLabel(feature)), " and see where the prediction moves.");
+  const kindSelect = panel.querySelector("[data-testid=steer-kind]");
+  if (kindSelect.value !== state.steer.kind) kindSelect.value = state.steer.kind;
+  paintIdea(panel, feature);
   const run = panel.querySelector("[data-testid=steer-run]");
   run.disabled = !feature || state.steer.busy;
   run.textContent = state.steer.busy ? "Steering…" : "Steer";
@@ -1452,7 +1672,9 @@ function paintSteer() {
   box.dataset.meanShift = String(sum.mean_shift);
   box.append(
     el("p", {}, [
-      `${kindLabel}${amount} on feature ${result.features.join(", ")}, window ${result.window}: `,
+      `${kindLabel}${amount} on ${result.features.map((id) => displayLabel(featureRecord({ id }))).join(", ")}`,
+      el("span", { class: "num" }, ` (window ${result.window})`),
+      ": ",
       "the prediction moved ",
       el("strong", { "data-testid": "steer-mean" }, fmtSmall(sum.mean_shift)),
       " on average (cosine distance), up to ",
@@ -1464,10 +1686,51 @@ function paintSteer() {
       el("strong", {}, fmtSmall(sum.loss_clean)),
       " to ",
       el("strong", {}, fmtSmall(sum.loss_edited)),
+      errorChange(sum.loss_clean, sum.loss_edited),
       `. The feature fired on ${sum.tokens_where_feature_fired} of ${sum.tokens_total} ${state.clip?.layout === "actions" ? "tokens" : "patches"} in this window.`,
     ]),
   );
   if (!steerResultHere()) box.append(el("p", { class: "steer-warn" }, "This frame is in another window. Steer again to see it here."));
+}
+
+// The full scoreboard record for a feature on the frame, when the run has one.
+function featureRecord(feature) {
+  const known = (state.run.features || []).find((item) => Number(item.id) === Number(feature.id));
+  return known || { id: feature.id, label: feature.label, badge: feature.badge, status: feature.status, scored: false };
+}
+
+// One edit worth trying on the selected feature, chosen from what its checks said.
+// After it runs, the card moves on to the other idea, so there is always a next one.
+function paintIdea(panel, feature) {
+  const box = panel.querySelector("[data-testid=steer-idea]");
+  const mark = panel.querySelector("[data-testid=steer-verified]");
+  const g = guide();
+  const real = Boolean(feature && feature.badge === "real");
+  panel.dataset.real = real ? "true" : "false";
+  mark.hidden = !real;
+  if (!feature || !g || !g.experiments) {
+    box.hidden = true;
+    state.steer.idea = null;
+    return;
+  }
+  const record = featureRecord(feature);
+  const plan = g.experiments(record, guideCtx(record));
+  const last = state.steer.result;
+  const ranHere = (idea) => last && last.clip_id === state.clipId
+    && last.features.length === 1 && Number(last.features[0]) === Number(feature.id)
+    && last.kind === idea.kind && (idea.kind === "ablate" || Number(last.value) === Number(nearestPreset(idea.kind, idea.value)));
+  const done = plan.ideas.findIndex(ranHere);
+  const idea = plan.ideas[done === -1 ? 0 : (done + 1) % plan.ideas.length];
+  state.steer.idea = idea;
+  box.hidden = false;
+  box.dataset.kind = plan.key;
+  box.querySelector(".steer-idea-kicker").textContent = done === -1
+    ? (real ? "A good one to steer" : "An experiment to try")
+    : "Next, try";
+  box.querySelector(".steer-idea-text").replaceChildren(el("strong", {}, `${idea.title}. `), idea.text);
+  const button = box.querySelector("[data-testid=steer-idea-run]");
+  button.textContent = `${ideaName(idea)} →`;
+  button.disabled = state.steer.busy;
 }
 
 function paintSteerCaption() {

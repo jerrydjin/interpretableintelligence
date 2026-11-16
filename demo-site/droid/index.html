@@ -44,7 +44,13 @@
       </button>
     </div>
   </header>
-  <p class="score-line" data-testid="droid-banner">A real run: facebook/dinov2-small on 100 DROID robot clips, on a 4-core CPU. 5 of 3072 features passed every check (right edge of the frame, left edge of the frame, plain white ceiling or upper wall, bottom edge of the frame, white robot arm). The playground here is precomputed; it is for exploring, not evidence.</p>
+  <section class="score-line droid-banner">
+    <p data-testid="droid-banner">A real run: facebook/dinov2-small on 100 DROID robot clips, on a 4-core CPU. 5 of 3072 features passed every check (right edge of the frame, left edge of the frame, plain white ceiling or upper wall, bottom edge of the frame, white robot arm). The playground here is precomputed; it is for exploring, not evidence. A real badge means a feature passed the offline checks on held-out clips; it says nothing about what happens in a robot rollout.</p>
+    <details><summary>Run it yourself</summary><pre class="quickstart"><code>uv run ii get-clips --out clips/droid
+# The labels here came from a vision-language model: set FIREWORKS_API_KEY (or another key, see README).
+uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid
+uv run ii export runs/droid --clips clips/droid --out site/droid --max-clips 10</code></pre></details>
+  </section>
   <main id="app"></main>
   <div id="live-status" class="live-status" data-testid="live-status" role="status" aria-live="polite" hidden></div>
   <script src="static/guide.js"></script>

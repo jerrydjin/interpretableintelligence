@@ -23,6 +23,12 @@ from interpretableintelligence.view import load_run
 REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
 EXPORT_MARKER = export_run.MARKER
+DROID_COMMANDS = (
+    "uv run ii get-clips --out clips/droid",
+    "# The labels here came from a vision-language model: set FIREWORKS_API_KEY (or another key, see README).",
+    "uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid",
+    "uv run ii export runs/droid --clips clips/droid --out site/droid --max-clips 10",
+)
 DROID_TITLE = "DINOv2 on DROID robot video: verified features you can steer"
 CAUSAL = ("stripe", "pulse", "corner")
 DECOYS = ("flicker", "band", "speckle")
@@ -85,7 +91,9 @@ def export_site(
     if kept is not None:
         shutil.rmtree(kept.parent, ignore_errors=True)
     _write_product(out / "index.html", groot_summary, groot_status, droid_run)
-    _write_results(out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result)
+    _write_results(
+        out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result, droid_run
+    )
     _write_picker(out / "picker", picker)
     _write_vjepa(out / "vjepa", vjepa, random_control, atp_result)
     _write_groot(out / "groot", groot / "groot-1028-ablate-summary.json", groot_summary, groot_status, checks)
@@ -170,7 +178,13 @@ def _write_droid(dest: Path, source: Path | None) -> dict | None:
         1,
     )
     html = html.replace("<body>\n", f"<body>\n{_demo_bar('droid')}\n", 1)
-    line = f'  <p class="score-line" data-testid="droid-banner">{escape(_droid_sentence(run))}</p>\n'
+    commands = escape("\n".join(DROID_COMMANDS))
+    line = (
+        '  <section class="score-line droid-banner">\n'
+        f'    <p data-testid="droid-banner">{escape(_droid_sentence(run))}</p>\n'
+        f'    <details><summary>Run it yourself</summary><pre class="quickstart"><code>{commands}</code></pre></details>\n'
+        "  </section>\n"
+    )
     html = html.replace("  </header>\n", "  </header>\n" + line, 1)
     (dest / "index.html").write_text(html, encoding="utf-8")
     return run
@@ -186,7 +200,23 @@ def _droid_sentence(run: dict) -> str:
     return (
         f"A real run: {model} on {_droid_clips(run)} DROID robot clips, on a 4-core CPU. "
         f"{len(verified)} of {len(run['features'])} features passed every check ({', '.join(verified)}). "
-        "The playground here is precomputed; it is for exploring, not evidence."
+        "The playground here is precomputed; it is for exploring, not evidence. A real badge means a feature "
+        "passed the offline checks on held-out clips; it says nothing about what happens in a robot rollout."
+    )
+
+
+def _droid_result(run: dict | None) -> str:
+    if run is None:
+        return ""
+    model = (run.get("model") or {}).get("name") or "a real model"
+    count = len(_droid_verified(run))
+    text = (
+        f"{model} on {_droid_clips(run)} real robot clips: {count} feature{'s' if count != 1 else ''} passed every "
+        "offline check. Try it in the browser with nothing to install; the playground is precomputed."
+    )
+    return (
+        '      <li><a href="/droid/"><span class="section-name">DINOv2 on DROID</span>'
+        f'<span class="section-text" data-testid="droid-summary">{escape(text)}</span></a></li>\n'
     )
 
 
@@ -308,7 +338,15 @@ uv run ii try</code></pre>
     path.write_text(_page("ii", "", body), encoding="utf-8")
 
 
-def _write_results(path: Path, summary: dict, groot_status: str, checks: dict, control: dict, atp: dict) -> None:
+def _write_results(
+    path: Path,
+    summary: dict,
+    groot_status: str,
+    checks: dict,
+    control: dict,
+    atp: dict,
+    droid_run: dict | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     headline = escape(_control_headline(summary))
     body = f"""
@@ -319,7 +357,7 @@ def _write_results(path: Path, summary: dict, groot_status: str, checks: dict, c
       <li><a href="/groot/#checks"><span class="section-name">Method checks</span><span class="section-text">{escape(_checks_summary(checks))}</span></a></li>
       <li><a href="/vjepa/#random-control"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">{escape(_control_summary(control))}</span></a></li>
       <li><a href="/vjepa/#atp"><span class="section-name">Attribution vs ablation</span><span class="section-text">{escape(_atp_summary(atp))}</span></a></li>
-    </ul>
+{_droid_result(droid_run)}    </ul>
     <h2>Synthetic demos</h2>
     <ul class="section-list" data-testid="synthetic-sections">
       <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer.</span></a></li>

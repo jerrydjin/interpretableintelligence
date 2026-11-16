@@ -533,7 +533,10 @@ def test_real_run_page_reports_its_own_scoreboard():
     page = (ROOT / "droid" / "index.html").read_text(encoding="utf-8")
     banner = re.search(r'data-testid="droid-banner">(.*?)</p>', page, re.S).group(1)
     assert f"{len(verified)} of {len(run['features'])} features passed every check" in banner
-    assert "not evidence" in banner
+    assert "not evidence" in banner and "robot rollout" in banner
+    results = (ROOT / "results" / "index.html").read_text(encoding="utf-8")
+    summary = re.search(r'data-testid="droid-summary">(.*?)</span>', results, re.S).group(1)
+    assert f"{run['export']['clips_total']} real robot clips: {len(verified)} features passed" in summary
     assert 'data-ii-root="data"' in page and 'aria-current="page"' in _nav_bar(page)
     home = (ROOT / "index.html").read_text(encoding="utf-8")
     proof = re.search(r'data-testid="droid-proof">(.*?)</p>', home, re.S).group(1)
