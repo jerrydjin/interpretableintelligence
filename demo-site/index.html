@@ -23,13 +23,14 @@
     <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
     <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
     <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
+    <a class="start-card" href="/droid/" data-testid="start-here"><span class="start-title">New to this? Play with a real model first</span><span>See what a robot&#8217;s vision model notices, switch one of those things off and watch what changes. Two minutes in your browser, nothing to install.</span><span class="start-go">Open the playground</span></a>
     <h2>What you get today</h2>
     <p><code>ii</code> is free and local. <code data-cmd="run">ii run</code> captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); <code data-cmd="view">ii view</code> opens the run; <code data-cmd="validate">ii validate</code> checks it. <code data-cmd="rollouts">ii rollouts</code> compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. <code data-cmd="import">ii import</code> brings rollout logs you already have into a run folder that validate accepts.</p>
     <h2>Proof</h2>
     <p data-testid="control-headline">Feature 720 tracked failures, and turning it off dropped success from 39/75 to 1/9. Turning off random features caused falls too in 5 of 20 runs. `ii` makes you run that control before calling a feature real.</p>
     <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>ablate_v9.py</code></a>), 641 rollouts. Label: <span class="badge badge-unverified">Tested: no causal effect found</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
     <p data-testid="droid-proof"><a href="/droid/">Open a real run: facebook/dinov2-small on 100 DROID robot clips, with 5 features that passed every check and a playground to remove or boost them.</a></p>
-    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
+    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one, so that control is now the bar.</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
       <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>
@@ -40,7 +41,7 @@
     <pre class="quickstart"><code>uv sync
 uv run ii try</code></pre>
     <p><code data-cmd="try">ii try</code> writes practice clips and runs the pipeline on the fake model.</p>
-    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code> — New here? Start with this. Finds features in a small practice model and opens the playground.</li><li><code data-cmd="run">ii run</code> — Capture, train, extract features, score what is missing, then serve the viewer.</li><li><code data-cmd="view">ii view</code> — Start a local viewer for a run folder and open it in a browser.</li><li><code data-cmd="rollouts">ii rollouts</code> — Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written.</li><li><code data-cmd="validate">ii validate</code> — Validate a run folder against the schema.</li></ul>
+    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code>: New here? Start with this. Finds features in a small practice model and opens the playground.</li><li><code data-cmd="run">ii run</code>: Capture, train, extract features, score what is missing, then serve the viewer.</li><li><code data-cmd="view">ii view</code>: Start a local viewer for a run folder and open it in a browser.</li><li><code data-cmd="rollouts">ii rollouts</code>: Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written.</li><li><code data-cmd="validate">ii validate</code>: Validate a run folder against the schema.</li></ul>
     <p><a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md">The rest of the commands are in the README.</a></p>
     <h2>Synthetic demos</h2>
     <ul class="section-list" data-testid="synthetic-sections">

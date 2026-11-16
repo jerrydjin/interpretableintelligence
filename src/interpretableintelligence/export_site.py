@@ -24,6 +24,10 @@ REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
 EXPORT_MARKER = export_run.MARKER
 DROID_TITLE = "DINOv2 on DROID robot video: verified features you can steer"
+# The guided first step on /droid/: a verified feature with a precomputed playground on a
+# clip where it fires, and a short name for the button. If the export no longer has it,
+# _droid_story falls back to the first verified feature it can steer.
+DROID_STORY = {"feature": 2262, "clip": "droid-028", "frame": 0, "name": "the ceiling feature"}
 CAUSAL = ("stripe", "pulse", "corner")
 DECOYS = ("flicker", "band", "speckle")
 
@@ -96,7 +100,7 @@ def export_site(
 
 def _copy_static(dest: Path) -> None:
     dest.mkdir(parents=True)
-    for name in ("guide.js", "app.js", "style.css", "demo.css"):
+    for name in ("guide.js", "app.js", "style.css", "demo.css", "demo.js"):
         source = STATIC / name
         if source.is_file():
             shutil.copy2(source, dest / name)
@@ -170,30 +174,111 @@ def _write_droid(dest: Path, source: Path | None) -> dict | None:
         1,
     )
     html = html.replace("<body>\n", f"<body>\n{_demo_bar('droid')}\n", 1)
-    line = f'  <p class="score-line" data-testid="droid-banner">{escape(_droid_sentence(run))}</p>\n'
-    html = html.replace("  </header>\n", "  </header>\n" + line, 1)
+    story = _droid_story_html(run, _droid_story(dest, run))
+    html = html.replace("  </header>\n", "  </header>\n" + story, 1)
+    html = html.replace(
+        '  <script src="static/app.js"></script>\n',
+        '  <script src="static/app.js"></script>\n  <script src="/static/demo.js"></script>\n',
+        1,
+    )
     (dest / "index.html").write_text(html, encoding="utf-8")
     return run
+
+
+def _droid_steerable(dest: Path, run: dict) -> dict[tuple[int, str], int]:
+    """(feature, clip) pairs the export precomputed a Remove for, with the window it is in."""
+    found: dict[tuple[int, str], int] = {}
+    for clip_id in (run.get("steer") or {}).get("clips") or []:
+        pack = dest / "data" / "steer" / f"{clip_id}.json"
+        if not pack.is_file():
+            continue
+        for key in json.loads(pack.read_text(encoding="utf-8")):
+            window, feature, kind, value = key.split(":")
+            if kind == "ablate":
+                found.setdefault((int(feature), clip_id), int(window))
+    return found
+
+
+def _droid_story(dest: Path, run: dict) -> dict | None:
+    """The feature, clip and frame the page's "Try it" button opens, already steerable."""
+    steerable = _droid_steerable(dest, run)
+    verified = {int(f["id"]): f for f in run["features"] if f.get("badge") == "real"}
+    wanted = DROID_STORY
+    if wanted["feature"] in verified and (wanted["feature"], wanted["clip"]) in steerable:
+        return {**wanted, "label": str(verified[wanted["feature"]].get("label"))}
+    windows = {clip["clip_id"]: clip for clip in run.get("clips") or []}
+    for feature_id, feature in verified.items():
+        detail_path = dest / "data" / "features" / f"{feature_id}.json"
+        tops = json.loads(detail_path.read_text(encoding="utf-8")).get("top_clips", []) if detail_path.is_file() else []
+        for top in tops:
+            if (feature_id, top["clip_id"]) in steerable and top["clip_id"] in windows:
+                label = str(feature.get("label"))
+                return {"feature": feature_id, "clip": top["clip_id"], "frame": int(top["frame"]),
+                        "name": f"\u201c{label}\u201d", "label": label}
+    return None
+
+
+def _droid_story_html(run: dict, story: dict | None) -> str:
+    """The plain-words introduction above the viewer: what it is, how it works, what to do."""
+    model = str((run.get("model") or {}).get("name") or "the model")
+    short = model.split("/")[-1]
+    clips = _droid_clips(run)
+    total = len(run["features"])
+    verified = _droid_verified(run)
+    if story:
+        href = f"#/clips/{story['clip']}?frame={story['frame']}&amp;feature={story['feature']}"
+        cta = (
+            f'      <p class="story-cta"><a class="button" href="{href}" data-story-try '
+            f'data-clip="{escape(story["clip"])}" data-frame="{story["frame"]}" data-feature="{story["feature"]}" '
+            f'data-label="{escape(story["label"])}" data-name="{escape(story["name"])}" data-testid="story-try">'
+            f"Try it: switch off {escape(story['name'])}</a>"
+            '<span class="story-or">or pick any clip and feature below</span></p>\n'
+        )
+    else:
+        cta = '      <p class="story-cta"><span class="story-or">Pick any clip and feature below to start.</span></p>\n'
+    checks = (
+        "<li>It fires across many different videos, not just one.</li>"
+        "<li>Its name still fits videos that were held back while it was found.</li>"
+        "<li>Switching it off changes the model more than at least 95 of 100 random look-alike edits do.</li>"
+        "<li>It is missing from a copy of the model with random, untrained weights, so it was learnt.</li>"
+    )
+    return f"""  <section class="story" data-testid="droid-story" aria-labelledby="story-title">
+    <div class="story-intro">
+      <h1 id="story-title">Look inside a robot&#8217;s eyes</h1>
+      <p class="story-lede">{escape(short)} is a vision model of the kind robots use to see. We showed it {clips} real robot videos and pulled out {total:,} things it has learnt to notice. Switch one off and watch how the model&#8217;s view of the scene changes.</p>
+{cta}    </div>
+    <ol class="story-steps" data-testid="story-steps">
+      <li><b>The model watches</b>It cuts each frame into small patches and describes every patch with a list of numbers.</li>
+      <li><b>We find features</b>We split those numbers into features, each one a thing the model notices, like a robot arm or a white ceiling. An AI names each one from where it fires.</li>
+      <li><b>We test the names</b>A name is a guess until it passes four checks. <span data-testid="droid-banner">{len(verified)} of {total} features passed every check</span> and carry a green tick.
+        <details class="story-checks"><summary>What are the checks?</summary><ul>{checks}</ul></details></li>
+      <li><b>You play</b>Pick a feature, then remove it or turn it up. The frame glows blue where the model&#8217;s view changed. This page is precomputed for exploring, not evidence: playing never changes what counts as verified.</li>
+    </ol>
+  </section>
+"""
 
 
 def _droid_verified(run: dict) -> list[str]:
     return [str(feature.get("label")) for feature in run["features"] if feature.get("badge") == "real"]
 
 
-def _droid_sentence(run: dict) -> str:
-    model = (run.get("model") or {}).get("name") or "the model"
-    verified = _droid_verified(run)
-    return (
-        f"A real run: {model} on {_droid_clips(run)} DROID robot clips, on a 4-core CPU. "
-        f"{len(verified)} of {len(run['features'])} features passed every check ({', '.join(verified)}). "
-        "The playground here is precomputed; it is for exploring, not evidence."
-    )
-
-
 def _droid_clips(run: dict) -> int:
     """Clips the run was scored on, which is more than a size-limited export shows."""
     export = run.get("export") or {}
     return int(export.get("clips_total") or len(run["clips"]))
+
+
+def _droid_start(run: dict | None) -> str:
+    """The home page's way in for a newcomer: the guided real-model page, not the docs."""
+    if run is None:
+        return ""
+    return (
+        '    <a class="start-card" href="/droid/" data-testid="start-here">'
+        '<span class="start-title">New to this? Play with a real model first</span>'
+        "<span>See what a robot&#8217;s vision model notices, switch one of those things off and watch what changes. "
+        "Two minutes in your browser, nothing to install.</span>"
+        '<span class="start-go">Open the playground</span></a>\n'
+    )
 
 
 def _droid_proof(run: dict | None) -> str:
@@ -274,19 +359,19 @@ def _write_product(path: Path, summary: dict, status: str, droid_run: dict | Non
     headline = escape(_control_headline(summary))
     useful = ("try", "run", "view", "rollouts", "validate")
     command_items = "".join(
-        f"<li>{_cmd(name, known)} — {escape(commands[name])}</li>" for name in useful
+        f"<li>{_cmd(name, known)}: {escape(commands[name])}</li>" for name in useful
     )
     episodes = _episode_total(summary)
     body = f"""
     <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
     <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
     <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
-    <h2>What you get today</h2>
+{_droid_start(droid_run)}    <h2>What you get today</h2>
     <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. {_cmd("import", known)} brings rollout logs you already have into a run folder that validate accepts.</p>
     <h2>Proof</h2>
     <p data-testid="control-headline">{headline}</p>
     <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
-{_droid_proof(droid_run)}    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
+{_droid_proof(droid_run)}    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one, so that control is now the bar.</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
       <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>

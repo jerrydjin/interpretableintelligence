@@ -193,3 +193,131 @@ figcaption { font-size: var(--t-small); color: var(--ink-3); }
   .prose .compare { grid-template-columns: 1fr; }
   .demo-top .nav { width: 100%; justify-content: flex-start; }
 }
+
+/* /droid/: the plain-words introduction above the viewer. What this is, how it
+   works in four steps, and one button that sets up the playground. */
+.story {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 24px 48px;
+  align-items: start;
+  margin: 4px var(--gutter) 8px;
+  padding: 28px 32px;
+  border-radius: var(--radius);
+  background: var(--sheet);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.story h1 {
+  margin: 0 0 12px;
+  font-family: var(--serif);
+  font-size: var(--t-head);
+  font-weight: 400;
+  letter-spacing: var(--serif-track);
+  line-height: 1.15;
+}
+.story-lede { margin: 0 0 20px; color: var(--ink-2); line-height: 1.55; max-width: 46ch; }
+.story-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0; }
+.story-cta .button { color: var(--paper); text-decoration: none; background: var(--steer); }
+.story-cta .button:hover { background: #2c49b8; }
+.story-or { font-size: var(--t-small); color: var(--ink-3); }
+.story-steps {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: story;
+}
+.story-steps li {
+  position: relative;
+  padding-left: 34px;
+  color: var(--ink-2);
+  font-size: var(--t-small);
+  line-height: 1.55;
+  counter-increment: story;
+}
+.story-steps li::before {
+  content: counter(story);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--well);
+  color: var(--ink);
+  font-weight: 500;
+  font-size: var(--t-small);
+  line-height: 22px;
+  text-align: center;
+}
+.story-steps b { display: block; margin-bottom: 2px; color: var(--ink); font-weight: 500; font-size: var(--t-body); }
+.story-checks { margin-top: 6px; }
+.story-checks summary { cursor: pointer; color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.story-checks ul { margin: 8px 0 0; padding-left: 1.1em; }
+.story-checks li { padding: 0; margin: 0 0 4px; }
+.story-checks li::before { content: none; }
+
+/* After "Try it": the playground pulses once and a short note says what the blue means. */
+.story-glow { animation: story-glow 1.6s ease-out 2; border-radius: var(--radius); }
+@keyframes story-glow {
+  0% { box-shadow: 0 0 0 0 rgba(var(--steer-rgb), 0.45); }
+  100% { box-shadow: 0 0 0 14px rgba(var(--steer-rgb), 0); }
+}
+.story-tip {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  z-index: 20;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  width: min(640px, calc(100vw - 32px));
+  padding: 16px 18px;
+  transform: translateX(-50%);
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  line-height: 1.5;
+  box-shadow: 0 10px 30px rgba(20, 20, 19, 0.18);
+}
+.story-tip p { margin: 0; }
+.story-tip b { font-weight: 500; color: #9fb2f5; }
+.story-tip button {
+  flex: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(250, 249, 245, 0.14);
+  color: var(--paper);
+  font: inherit;
+  font-size: var(--t-small);
+  cursor: pointer;
+}
+
+/* Home: the newcomer's way in, above the developer copy. */
+.prose .start-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 8px;
+  padding: 22px 24px;
+  max-width: 68ch;
+  border-radius: var(--radius);
+  background: var(--steer-wash);
+  color: var(--ink-2);
+  text-decoration: none;
+  transition: transform 0.15s;
+}
+.prose .start-card:hover { transform: translateY(-1px); }
+.start-title { font-family: var(--serif); font-size: var(--t-lead); letter-spacing: var(--serif-track); color: var(--ink); }
+.start-go { margin-top: 4px; color: var(--steer); font-weight: 500; }
+.start-go::after { content: " \2192"; }
+
+@media (max-width: 960px) {
+  .story { grid-template-columns: 1fr; padding: 22px 20px; }
+}
+@media (max-width: 560px) {
+  .story-steps { grid-template-columns: 1fr; }
+}

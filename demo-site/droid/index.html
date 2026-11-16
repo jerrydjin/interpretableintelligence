@@ -44,10 +44,24 @@
       </button>
     </div>
   </header>
-  <p class="score-line" data-testid="droid-banner">A real run: facebook/dinov2-small on 100 DROID robot clips, on a 4-core CPU. 5 of 3072 features passed every check (right edge of the frame, left edge of the frame, plain white ceiling or upper wall, bottom edge of the frame, white robot arm). The playground here is precomputed; it is for exploring, not evidence.</p>
+  <section class="story" data-testid="droid-story" aria-labelledby="story-title">
+    <div class="story-intro">
+      <h1 id="story-title">Look inside a robot&#8217;s eyes</h1>
+      <p class="story-lede">dinov2-small is a vision model of the kind robots use to see. We showed it 100 real robot videos and pulled out 3,072 things it has learnt to notice. Switch one off and watch how the model&#8217;s view of the scene changes.</p>
+      <p class="story-cta"><a class="button" href="#/clips/droid-028?frame=0&amp;feature=2262" data-story-try data-clip="droid-028" data-frame="0" data-feature="2262" data-label="plain white ceiling or upper wall" data-name="the ceiling feature" data-testid="story-try">Try it: switch off the ceiling feature</a><span class="story-or">or pick any clip and feature below</span></p>
+    </div>
+    <ol class="story-steps" data-testid="story-steps">
+      <li><b>The model watches</b>It cuts each frame into small patches and describes every patch with a list of numbers.</li>
+      <li><b>We find features</b>We split those numbers into features, each one a thing the model notices, like a robot arm or a white ceiling. An AI names each one from where it fires.</li>
+      <li><b>We test the names</b>A name is a guess until it passes four checks. <span data-testid="droid-banner">5 of 3072 features passed every check</span> and carry a green tick.
+        <details class="story-checks"><summary>What are the checks?</summary><ul><li>It fires across many different videos, not just one.</li><li>Its name still fits videos that were held back while it was found.</li><li>Switching it off changes the model more than at least 95 of 100 random look-alike edits do.</li><li>It is missing from a copy of the model with random, untrained weights, so it was learnt.</li></ul></details></li>
+      <li><b>You play</b>Pick a feature, then remove it or turn it up. The frame glows blue where the model&#8217;s view changed. This page is precomputed for exploring, not evidence: playing never changes what counts as verified.</li>
+    </ol>
+  </section>
   <main id="app"></main>
   <div id="live-status" class="live-status" data-testid="live-status" role="status" aria-live="polite" hidden></div>
   <script src="static/guide.js"></script>
   <script src="static/app.js"></script>
+  <script src="/static/demo.js"></script>
 </body>
 </html>

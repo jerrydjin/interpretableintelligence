@@ -922,7 +922,7 @@ function renderClip() {
     ]),
   );
   renderFrame();
-  document.querySelector(".clip-list a[aria-current='page']")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  revealInList(document.querySelector(".clip-list a[aria-current='page']"));
 }
 
 function clipMoments(clip) {
@@ -1312,6 +1312,19 @@ function stop() {
 boot();
 
 // Playground: steer a feature and see where the model's prediction moves. Exploration only.
+
+// Scroll only the clip list to show the current clip. scrollIntoView would also scroll the
+// page, which on a phone jumps past whatever sits above the viewer.
+function revealInList(item) {
+  const list = item?.closest(".clip-list");
+  if (!list) return;
+  const box = list.getBoundingClientRect();
+  const at = item.getBoundingClientRect();
+  if (at.left < box.left) list.scrollLeft -= box.left - at.left;
+  else if (at.right > box.right) list.scrollLeft += at.right - box.right;
+  if (at.top < box.top) list.scrollTop -= box.top - at.top;
+  else if (at.bottom > box.bottom) list.scrollTop += at.bottom - box.bottom;
+}
 
 function steerEnabled() {
   return Boolean(state.run && state.run.steer && state.run.steer.enabled && (!iiRoot() || steerStatic()));
