@@ -24,7 +24,7 @@ def _labels(holding: set[int], n: int = 8) -> list[dict]:
 
 
 def _shortlist(labels, ranked, k, free_ok, tmp_path, monkeypatch, client=None, label=None):
-    monkeypatch.setattr(pipeline, "_autointerp_client", lambda adapter: client)
+    monkeypatch.setattr(pipeline, "_autointerp_client", lambda adapter, out=None: client)
     if label is not None:
         monkeypatch.setattr(pipeline, "_autointerp_label", label)
     logs: list[str] = []

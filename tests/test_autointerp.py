@@ -264,6 +264,9 @@ def test_ii_run_hf_uses_the_vision_labeller_when_a_key_is_set(tmp_path, monkeypa
     assert validate_run(out) == []
     evidence = json.loads((out / "features" / "autointerp.json").read_text(encoding="utf-8"))
     assert evidence["model"] == "stub/vision" and len(evidence["features"]) == 2
+    # Every reply is kept with the run, so scoring it again elsewhere gives the same labels.
+    kept = list((out / "control" / "autointerp").glob("*.json"))
+    assert kept and len(kept) <= len(stub.calls)
     features = [json.loads(line) for line in (out / "features" / "features.jsonl").read_text(encoding="utf-8").splitlines()]
     relabelled = [f for f in features if f["label_model"].startswith(AUTOINTERP_VERSION)]
     assert sorted(f["id"] for f in relabelled) == sorted(f["id"] for f in evidence["features"])
