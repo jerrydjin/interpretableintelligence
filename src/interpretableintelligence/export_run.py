@@ -39,6 +39,9 @@ STEER_PRESETS: dict[str, list[float]] = {
 DEFAULT_STEER_CLIPS = 12
 DEFAULT_STEER_FEATURES = 6
 SHIFT_DIGITS = 5
+# Heatmap cells in a slim export keep this many significant digits: the page draws them as
+# colours and block heights, and full floats double the size of every clip's heat.json.
+HEAT_DIGITS = 3
 
 
 @dataclass
@@ -115,8 +118,9 @@ def write_viewer_data(
     ``indent`` keeps the committed ``demo-site/`` diff-friendly; ``ii export`` writes compact JSON.
     ``clip_ids`` keeps only those clips (``run.json`` gains ``export.clips_total``, and feature
     pages list only top clips that are kept). ``slim`` writes only what a page can reach: the
-    heatmaps of the features a clip frame lists or a feature page links to, and for a clip that
-    plays as video, only the frame pictures used as thumbnails (frame 0 and the model's frames).
+    heatmaps of the features a clip frame lists or a feature page links to (cells rounded to
+    ``HEAT_DIGITS`` significant digits), and for a clip that plays as video, only the frame
+    pictures used as thumbnails (frame 0 and the model's frames).
     """
     data.mkdir(parents=True)
     write_json = functools.partial(_write_json, indent=indent)
@@ -167,12 +171,16 @@ def write_viewer_data(
                 wanted |= linked.get(clip_id, {}).get(frame, set())
             for feature_id, grid in (heatmaps[frame] if frame < len(heatmaps) else {}).items():
                 if wanted is None or feature_id in wanted:
-                    pack[f"{frame}:{feature_id}"] = grid
+                    pack[f"{frame}:{feature_id}"] = _round_grid(grid) if slim else grid
         write_json(clip_dir / "heat.json", pack)
         media = model.media_file(clip_id)
         if media is not None:
             path, _kind = media
             shutil.copy2(path, clip_dir / "media.mp4")
+
+
+def _round_grid(grid: list[list[float]]) -> list[list[float]]:
+    return [[float(f"{value:.{HEAT_DIGITS}g}") if value else 0 for value in row] for row in grid]
 
 
 def _write_json(path: Path, payload, indent: int | None = None) -> None:
