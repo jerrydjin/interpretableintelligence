@@ -62,8 +62,8 @@ def test_vision_labels_come_before_the_causal_checks(tmp_path, monkeypatch):
     def label(client, adapter, sae, meta, out, labels, targets, device, seed, log):
         asked.append(list(targets))
         for fid in targets:
-            labels[fid] = {"label": "x", "label_model": "autointerp-v1:stub", "label_holds_heldout": fid in good}
-        return [{"version": "autointerp-v1", "model": "stub", "features": []}] + [{"id": fid} for fid in targets]
+            labels[fid] = {"label": "x", "label_model": "autointerp-v2:stub", "label_holds_heldout": fid in good}
+        return [{"version": "autointerp-v2", "model": "stub", "features": []}] + [{"id": fid} for fid in targets]
 
     class Client:
         name = "stub/vision"

@@ -52,10 +52,21 @@ import torch
 
 from interpretableintelligence.thresholds import DEAD_ACT_EPS, LABEL_HOLD_MIN_AUROC
 
-AUTOINTERP_VERSION = "autointerp-v1"
+AUTOINTERP_VERSION = "autointerp-v2"
 # Frames the explainer sees, and firing / non-firing cells the simulator rates.
 N_EXPLAIN = 8
+# Explanations asked for per feature, all from its strongest training frames (shown in a different order each time).
+# One reply is one sample: the same feature came back as "left edge of the frame"
+# (held-out AUROC 1.00) in one run and "blank white wall on left" (0.59) in the
+# next. The candidates are compared on training clips only, and the one that
+# predicts the feature best there is the label that then faces the held-out
+# check, once. Choosing on train data leaves the held-out bar as strict as before.
+N_CANDIDATES = 3
 N_SIMULATE = 10
+# The held-out check rates twice as many cells as the choice between candidates:
+# with 10 firing and 10 quiet cells, one changed rating moves the AUROC by up to
+# 0.05, enough to carry a borderline label across the 0.80 bar from run to run.
+N_SIMULATE_HELDOUT = 20
 SIMULATE_BATCH = 5
 # Fewer held-out firings than this and the label cannot be tested, so it does not hold.
 MIN_HELDOUT_POSITIVES = 4
@@ -63,6 +74,11 @@ MIN_HELDOUT_POSITIVES = 4
 MAX_FEATURES = 32
 # Features asked about at once. The calls are network waits, so threads are enough.
 LABEL_WORKERS = 8
+# Provider calls in flight at once, across all features. Sixteen at a time ran
+# into a provider's rate limit part-way through a shortlist of ten.
+LABEL_CALLS = 6
+# Attempts per call. A rate limit (429) waits longer each time, up to a minute.
+CALL_ATTEMPTS = 8
 IMAGE_PX = 320
 # Reasoning models spend tokens before answering; too few and the answer comes back empty.
 MAX_TOKENS = 4000
@@ -109,26 +125,39 @@ class _Http:
     def post(self, payload: dict) -> dict:
         body = json.dumps(payload).encode()
         delay = 2.0
-        for attempt in range(5):
+        last = CALL_ATTEMPTS - 1
+        for attempt in range(CALL_ATTEMPTS):
             request = urllib.request.Request(self.url, data=body, headers={"content-type": "application/json", **self.headers})
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     return json.loads(response.read().decode())
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode(errors="replace")[:300]
-                if exc.code in (408, 409, 429) or exc.code >= 500:
-                    if attempt < 4:
-                        time.sleep(delay)
-                        delay *= 2
-                        continue
+                if (exc.code in (408, 409, 429) or exc.code >= 500) and attempt < last:
+                    self.sleep(_retry_wait(exc, delay))
+                    delay = min(delay * 2, 60.0)
+                    continue
                 raise RuntimeError(f"{self.url} returned {exc.code}: {detail}") from exc
             except (urllib.error.URLError, TimeoutError) as exc:
-                if attempt < 4:
-                    time.sleep(delay)
-                    delay *= 2
+                if attempt < last:
+                    self.sleep(delay)
+                    delay = min(delay * 2, 60.0)
                     continue
                 raise RuntimeError(f"{self.url} unreachable: {exc}") from exc
         raise RuntimeError(f"{self.url} failed after retries")
+
+    @staticmethod
+    def sleep(seconds: float) -> None:
+        time.sleep(seconds)
+
+
+def _retry_wait(exc: urllib.error.HTTPError, delay: float) -> float:
+    """How long to wait before retrying: the provider's ``Retry-After`` if it names one (at most a minute)."""
+    try:
+        asked = float(exc.headers.get("Retry-After", "")) if exc.headers is not None else 0.0
+    except (TypeError, ValueError):
+        asked = 0.0
+    return min(max(delay, asked), 60.0)
 
 
 class OpenAICompatibleClient:
@@ -410,9 +439,23 @@ def pick_top(tokens: Tokens, column: np.ndarray, rows: np.ndarray, k: int, per_c
     return chosen
 
 
-def simulation_set(tokens: Tokens, column: np.ndarray, rng: np.random.Generator, n: int = N_SIMULATE) -> tuple[list[int], list[bool]]:
-    """Held-out rows to rate: firing (half strongest, half random) and the same number not firing."""
-    held = np.flatnonzero(tokens.split == 1)
+def simulation_set(
+    tokens: Tokens,
+    column: np.ndarray,
+    rng: np.random.Generator,
+    n: int = N_SIMULATE,
+    split: int = 1,
+    exclude_frames: set[tuple[int, int, int]] | None = None,
+) -> tuple[list[int], list[bool]]:
+    """Rows to rate: firing (half strongest, half random) and the same number not firing.
+
+    Held-out rows by default. ``split=0`` draws from training clips instead (to choose
+    between candidate labels), leaving out ``exclude_frames``, the frames the labels were written from.
+    """
+    held = np.flatnonzero(tokens.split == split)
+    if exclude_frames:
+        keep = [row for row in held if _frame_key(tokens, int(row)) not in exclude_frames]
+        held = np.asarray(keep, dtype=np.int64)
     top = pick_top(tokens, column, held, k=(n + 1) // 2, per_clip=2)
     firing = held[column[held] > DEAD_ACT_EPS]
     rest = np.setdiff1d(firing, np.asarray(top, dtype=np.int64))
@@ -489,57 +532,110 @@ def label_features(
     # Render every image first (one decoded clip at a time), then ask the model
     # about the features side by side: the wait is the provider's, not ours.
     jobs: list[dict] = []
-    for column_index, feature_id in enumerate(feature_ids):
-        column = tokens.acts[:, column_index]
-        rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(feature_id), 29]))
-        train = np.flatnonzero(tokens.split == 0)
-        examples = sorted(pick_top(tokens, column, train, k=N_EXPLAIN, per_clip=2), key=lambda row: int(tokens.clip[row]))
-        record: dict = {"id": int(feature_id), "label": "", "description": "", "auroc_heldout": None, "holds": False}
-        job: dict = {"id": int(feature_id), "record": record, "explain": None}
-        jobs.append(job)
-        if len(examples) < 3:
-            record["note"] = "fires in fewer than 3 training frames"
-            continue
-        job["explain"] = [
-            render(frames.get(*_frame_key(tokens, row)), (int(tokens.h[row]), int(tokens.w[row])), (grid.h, grid.w), _heat(tokens, column, row, grid))
-            for row in examples
-        ]
-        job["examples"] = [list(_frame_key(tokens, row)) for row in examples]
-        rows, truth = simulation_set(tokens, column, rng)
-        job["rows"], job["truth"] = rows, truth
-        job["cells"] = [
+
+    def batches_for(rows: list[int]) -> list[tuple[list[int], list[bytes]]]:
+        order = sorted(range(len(rows)), key=lambda i: _frame_key(tokens, rows[i]))
+        out = []
+        for start in range(0, len(order), SIMULATE_BATCH):
+            batch = order[start : start + SIMULATE_BATCH]
+            images = [
+                render(frames.get(*_frame_key(tokens, rows[i])), (int(tokens.h[rows[i]]), int(tokens.w[rows[i]])), (grid.h, grid.w))
+                for i in batch
+            ]
+            out.append((batch, images))
+        return out
+
+    def cells(rows: list[int], truth: list[bool]) -> list[dict]:
+        return [
             {"frame": list(_frame_key(tokens, row)), "cell": [int(tokens.h[row]), int(tokens.w[row])], "fires": bool(fires)}
             for row, fires in zip(rows, truth, strict=True)
         ]
-        job["batches"] = []
-        if int(sum(truth)) >= MIN_HELDOUT_POSITIVES:
-            order = sorted(range(len(rows)), key=lambda i: _frame_key(tokens, rows[i]))
-            for start in range(0, len(order), SIMULATE_BATCH):
-                batch = order[start : start + SIMULATE_BATCH]
-                images = [
-                    render(frames.get(*_frame_key(tokens, rows[i])), (int(tokens.h[rows[i]]), int(tokens.w[rows[i]])), (grid.h, grid.w))
-                    for i in batch
-                ]
-                job["batches"].append((batch, images))
+
+    for column_index, feature_id in enumerate(feature_ids):
+        column = tokens.acts[:, column_index]
+        train = np.flatnonzero(tokens.split == 0)
+        top = pick_top(tokens, column, train, k=N_EXPLAIN, per_clip=2)
+        record: dict = {"id": int(feature_id), "label": "", "description": "", "auroc_heldout": None, "holds": False}
+        job: dict = {"id": int(feature_id), "record": record, "candidates": []}
+        jobs.append(job)
+        if len(top) < 3:
+            record["note"] = "fires in fewer than 3 training frames"
+            continue
+        # Every candidate sees the same strongest frames. The first sees them in clip order;
+        # the rest in a seeded shuffle, which is enough for the model to describe them afresh.
+        examples = sorted(top, key=lambda row: int(tokens.clip[row]))
+        images = [
+            render(frames.get(*_frame_key(tokens, row)), (int(tokens.h[row]), int(tokens.w[row])), (grid.h, grid.w), _heat(tokens, column, row, grid))
+            for row in examples
+        ]
+        order_rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(feature_id), 37]))
+        n_candidates = N_CANDIDATES
+        for index in range(n_candidates):
+            order = list(range(len(examples))) if index == 0 else [int(i) for i in order_rng.permutation(len(examples))]
+            job["candidates"].append(
+                {"images": [images[i] for i in order], "examples": [list(_frame_key(tokens, examples[i])) for i in order]}
+            )
+        job["train_batches"], job["train_truth"] = [], []
+        if n_candidates > 1:
+            pick_rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(feature_id), 31]))
+            used = {_frame_key(tokens, row) for row in top}
+            train_rows, train_truth = simulation_set(tokens, column, pick_rng, split=0, exclude_frames=used)
+            job["train_batches"], job["train_truth"] = batches_for(train_rows), train_truth
+        rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(feature_id), 29]))
+        rows, truth = simulation_set(tokens, column, rng, n=N_SIMULATE_HELDOUT)
+        job["truth"] = truth
+        job["cells"] = cells(rows, truth)
+        job["batches"] = batches_for(rows) if int(sum(truth)) >= MIN_HELDOUT_POSITIVES else []
+
+    calls = ThreadPoolExecutor(max_workers=LABEL_CALLS)
+
+    def rate(label: str, description: str, batches, n: int) -> list[float]:
+        """The model's 0 to 10 rating of each boxed cell, given only the label."""
+        prompt_for = lambda size: SIMULATE_PROMPT.format(label=label.replace('"', "'"), description=description, n=size)  # noqa: E731
+        replies = list(calls.map(lambda item: client.complete(prompt_for(len(item[0])), item[1]), batches))
+        by_index: dict[int, float] = {}
+        for (batch, _images), reply in zip(batches, replies, strict=True):
+            parsed = parse_scores(reply, len(batch))
+            for offset, i in enumerate(batch):
+                # An unreadable reply scores every image 0: it can only hurt the label.
+                by_index[i] = 0.0 if parsed is None else parsed[offset]
+        return [by_index[i] for i in range(n)]
 
     def ask(job: dict) -> None:
         record = job["record"]
-        if job["explain"] is None:
+        candidates = job["candidates"]
+        if not candidates:
             return
-        label, description = parse_label(client.complete(EXPLAIN_PROMPT.format(n=len(job["explain"])), job["explain"]))
-        record.update(label=label, description=description, explain_examples=job["examples"])
+        replies = list(calls.map(lambda c: client.complete(EXPLAIN_PROMPT.format(n=len(c["images"])), c["images"]), candidates))
+        tried = []
+        for candidate, reply in zip(candidates, replies, strict=True):
+            label, description = parse_label(reply)
+            tried.append({"label": label, "description": description, "explain_examples": candidate["examples"], "auroc_train": None})
+        chosen = 0
+        train_truth = job["train_truth"]
+        if len(tried) > 1 and train_truth and 0 < sum(train_truth) < len(train_truth):
+            # Which explanation predicts the feature best on training clips it was not written from?
+            for row in tried:
+                if row["label"]:
+                    scores = rate(row["label"], row["description"], job["train_batches"], len(train_truth))
+                    row["auroc_train"] = auroc(np.asarray(scores), np.asarray(train_truth))
+            ranked = [(-1.0 if row["auroc_train"] is None else row["auroc_train"]) for row in tried]
+            chosen = int(np.argmax(ranked))  # first of the best: ties go to the stronger examples
+        elif not tried[0]["label"]:
+            chosen = next((i for i, row in enumerate(tried) if row["label"]), 0)
+        label, description = tried[chosen]["label"], tried[chosen]["description"]
+        record.update(label=label, description=description, explain_examples=tried[chosen]["explain_examples"])
+        if len(tried) > 1:
+            record["candidates"] = [
+                {"label": row["label"], "description": row["description"], "auroc_train": row["auroc_train"], "chosen": i == chosen}
+                for i, row in enumerate(tried)
+            ]
         truth = job["truth"]
         n_pos = int(sum(truth))
         scores: list[float] = []
         if label and n_pos >= MIN_HELDOUT_POSITIVES:
-            by_index: dict[int, float] = {}
-            for batch, images in job["batches"]:
-                prompt = SIMULATE_PROMPT.format(label=label.replace('"', "'"), description=description, n=len(batch))
-                parsed = parse_scores(client.complete(prompt, images), len(batch))
-                for offset, i in enumerate(batch):
-                    # An unreadable reply scores every image 0: it can only hurt the label.
-                    by_index[i] = 0.0 if parsed is None else parsed[offset]
-            scores = [by_index[i] for i in range(len(truth))]
+            # The chosen label meets the held-out clips once.
+            scores = rate(label, description, job["batches"], len(truth))
             value = auroc(np.asarray(scores), np.asarray(truth))
             record["auroc_heldout"] = value
             record["holds"] = bool(value >= LABEL_HOLD_MIN_AUROC)
@@ -549,14 +645,17 @@ def label_features(
             dict(cell, score=score) for cell, score in zip(job["cells"], scores or [None] * len(truth), strict=True)
         ]
 
-    with ThreadPoolExecutor(max_workers=max(1, min(LABEL_WORKERS, len(jobs)))) as pool:
-        # list() re-raises a provider error from any feature.
-        list(pool.map(ask, jobs))
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, min(LABEL_WORKERS, len(jobs)))) as pool:
+            # list() re-raises a provider error from any feature.
+            list(pool.map(ask, jobs))
+    finally:
+        calls.shutdown(wait=True, cancel_futures=True)
     for job in jobs:
         record = job["record"]
         labels[job["id"]] = {"label": record["label"], "label_model": model_name, "label_holds_heldout": bool(record["holds"])}
         evidence.append(record)
-        if job["explain"] is None:
+        if not job["candidates"]:
             continue
         auc_text = "-" if record["auroc_heldout"] is None else f"{record['auroc_heldout']:.2f}"
         log(f"autointerp feature {job['id']}: {record['label'] or '-'!r}  held-out AUROC {auc_text}  holds={record['holds']}")

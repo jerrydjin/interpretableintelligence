@@ -904,8 +904,10 @@ function renderClip() {
           "Each feature is a pattern the model learned. ",
           el("span", { class: "lead-quiet" }, "These fire on this frame, strongest first. Pick one and the frame glows where it fires."),
         ]),
-        el("ol", { class: "feature-list", "data-testid": "frame-features" }),
+        // The playground sits above the list: a frame can have 40 features, and below them it was
+        // three screens away from the video it changes.
         steerPanel(),
+        el("ol", { class: "feature-list", "data-testid": "frame-features" }),
       ]),
     ]),
   );
