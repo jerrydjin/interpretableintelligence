@@ -218,7 +218,8 @@ function renderHeader() {
   modelEl.title = model.sha || name;
   document.getElementById("run-layer").textContent = `layer ${run.layer}`;
   const split = run.split || {};
-  document.getElementById("split-sizes").textContent = `train ${split.n_train} · held-out ${split.n_heldout}`;
+  const shown = run.export ? ` · showing ${run.export.clips_shown} of ${run.export.clips_total} clips` : "";
+  document.getElementById("split-sizes").textContent = `train ${split.n_train} · held-out ${split.n_heldout}${shown}`;
   const saeEl = document.getElementById("sae-summary");
   if (run.scoreboard === false || !run.sae) {
     saeEl.dataset.usable = "false";
@@ -666,10 +667,19 @@ function featureHero(feature) {
   return el("div", { class: "hero" }, [shot, el("div", { style: "position: relative" }, [terrain, caption])]);
 }
 
+// A static export stores each heatmap sparse: [h, w, value, h, w, value, ...] on a grid of pack.shape.
+function packedHeat(pack, frame, featureId) {
+  const cells = pack && pack.cells && pack.cells[`${frame}:${featureId}`];
+  if (!cells) return null;
+  const grid = Array.from({ length: pack.shape[0] }, () => new Array(pack.shape[1]).fill(0));
+  for (let i = 0; i + 2 < cells.length; i += 3) grid[cells[i]][cells[i + 1]] = cells[i + 2];
+  return grid;
+}
+
 async function fetchHeat(clipId, frame, featureId) {
   if (iiRoot()) {
     const pack = await heatPack(clipId);
-    return (pack && pack[`${frame}:${featureId}`]) || null;
+    return packedHeat(pack, frame, featureId);
   }
   const response = await fetch(
     `/api/clips/${encodeURIComponent(clipId)}/heatmap?frame=${frame}&feature=${featureId}`,
@@ -1202,7 +1212,7 @@ async function renderHeat(feature) {
   if (iiRoot()) {
     const pack = await heatPack(state.clipId);
     if (token !== state.heatToken) return;
-    const rows = (pack && pack[`${frame}:${feature.id}`]) || emptyHeat(state.clip);
+    const rows = packedHeat(pack, frame, feature.id) || emptyHeat(state.clip);
     drawHeat(rows);
     const hot = rows.some((row) => row.some((value) => value > 0));
     if (feature.inactive && hot) paintCaption({ ...feature, inactive: false });

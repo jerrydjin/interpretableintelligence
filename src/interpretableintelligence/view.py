@@ -662,6 +662,32 @@ class RunModel:
                 grid[h][w] = value
         return grid
 
+    def heat_cells(self, clip_id: str) -> dict[str, list]:
+        """Every non-empty heatmap of one clip, as ``"frame:feature" -> [h, w, value, ...]``.
+
+        The same cells :meth:`heatmap` returns, read in one query for the whole clip
+        instead of one per frame and feature, which is what an export of a wide SAE needs.
+        """
+        clip = self.manifest_clips.get(clip_id)
+        if clip is None or self.acts is None:
+            return {}
+        n_frames = int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else 0
+        height, width = int(self.grid["h"]), int(self.grid["w"])
+        by_token: dict[tuple[int, int], dict[int, list]] = {}
+        for window, t, feature_id, h, w, value in self.acts.clip_cells(clip_id):
+            if 0 <= h < height and 0 <= w < width:
+                by_token.setdefault((int(window), int(t)), {}).setdefault(int(feature_id), []).append((int(h), int(w), float(value)))
+        pack: dict[str, list] = {}
+        for frame in range(n_frames):
+            starts, stride = _starts_covering(clip, self.grid, self.extra, frame)
+            window, tubelet_index = frame_to_token(frame, starts, self.grid, stride)
+            if tubelet_index is None:
+                continue
+            for feature_id, cells in sorted(by_token.get((int(window), int(tubelet_index)), {}).items()):
+                if any(value > 0 for _h, _w, value in cells):
+                    pack[f"{frame}:{feature_id}"] = [item for cell in sorted(cells) for item in cell]
+        return pack
+
     def _top_for(self, feature_id: int) -> list[dict]:
         rows = []
         for clip_id, window, tubelet_index, h, w, value in self.acts.top_clips(feature_id):
@@ -1243,6 +1269,19 @@ class _Acts:
             ).fetchall()
             self._cells.put(key, rows)
             return rows
+
+    def clip_cells(self, clip_id: str) -> list[tuple]:
+        """``(window, t, feature_id, h, w, value)`` for every cell that fired in one clip."""
+        with self._lock:
+            return self._con.execute(
+                """
+                SELECT "window", "t", feature_id, h, w, max(value)::DOUBLE
+                FROM read_parquet(?)
+                WHERE clip_id = ?
+                GROUP BY "window", "t", feature_id, h, w
+                """,
+                [self.acts_path, self._clip_param(str(clip_id), self.clip_is_int)],
+            ).fetchall()
 
     def top_clips(self, feature_id: int) -> list[tuple]:
         key = int(feature_id)

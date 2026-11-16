@@ -39,6 +39,7 @@ STEER_PRESETS: dict[str, list[float]] = {
 DEFAULT_STEER_CLIPS = 12
 DEFAULT_STEER_FEATURES = 6
 SHIFT_DIGITS = 5
+HEAT_DIGITS = 4
 
 
 @dataclass
@@ -59,6 +60,7 @@ def export_run(
     steer_clips: int = DEFAULT_STEER_CLIPS,
     steer_features: int = DEFAULT_STEER_FEATURES,
     title: str | None = None,
+    max_clips: int | None = None,
     log: Callable[[str], None] = lambda _message: None,
 ) -> ExportSummary:
     """Write a self-contained static copy of the viewer for ``run_dir`` into ``out_dir``."""
@@ -67,8 +69,14 @@ def export_run(
     _prepare_out(out)
     model = load_run(run_dir, None if clips_dir is None else Path(clips_dir))
     data = out / "data"
+    total_clips = len(model.run_payload["clips"])
+    keep = _clips_to_keep(model, max_clips)
+    if keep is not None:
+        model.run_payload["clips"] = [clip for clip in model.run_payload["clips"] if str(clip["clip_id"]) in keep]
+        model.run_payload["export"] = {"clips_shown": len(keep), "clips_total": total_clips}
+        log(f"keeping {len(keep)} of {total_clips} clips (--max-clips); the features' example lists are cut to those clips")
     log(f"writing viewer data for {len(model.run_payload['clips'])} clips")
-    write_viewer_data(model, data)
+    write_viewer_data(model, data, slim=True, clip_ids=keep)
     summary = ExportSummary(out_dir=out, clips=len(model.run_payload["clips"]), features=len(model.run_payload["features"]))
     if steer:
         chosen, results = _precompute_steering(model, run_dir, clips_dir, data / "steer", steer_clips, steer_features, log)
@@ -92,10 +100,57 @@ def export_run(
     return summary
 
 
-def write_viewer_data(model: RunModel, data: Path, indent: int | None = None) -> None:
+def _clips_to_keep(model: RunModel, max_clips: int | None) -> set[str] | None:
+    """The clips a size-limited export carries: top examples of verified features first."""
+    clips = [str(clip["clip_id"]) for clip in model.run_payload["clips"]]
+    if max_clips is None or max_clips >= len(clips):
+        return None
+    if max_clips < 1:
+        raise ValueError("--max-clips must be at least 1")
+    return set(_clip_priority(model)[:max_clips])
+
+
+def _clip_priority(model: RunModel) -> list[str]:
+    """Clip ids, those a visitor is most likely to open first.
+
+    The top examples of scoreboard-real features come first, taken one rank at a time
+    across features so every verified feature keeps an example, then those of the
+    candidates, then the rest in run order.
+    """
+    clips = [str(clip["clip_id"]) for clip in model.run_payload["clips"]]
+    order: list[str] = []
+    for wanted in ("real", "candidate"):
+        tops = []
+        for feature in model.run_payload["features"]:
+            is_real = feature.get("badge") == "real"
+            if (wanted == "real") != is_real or (wanted == "candidate" and not feature.get("candidate")):
+                continue
+            seen: list[str] = []
+            for top in (model.feature(int(feature["id"])) or {}).get("top_clips", []):
+                if top["clip_id"] not in seen:
+                    seen.append(str(top["clip_id"]))
+            tops.append(seen[:2])
+        for rank in range(2):
+            for seen in tops:
+                if rank < len(seen) and seen[rank] not in order and seen[rank] in clips:
+                    order.append(seen[rank])
+    return order + [clip_id for clip_id in clips if clip_id not in order]
+
+
+def write_viewer_data(
+    model: RunModel,
+    data: Path,
+    indent: int | None = None,
+    slim: bool = False,
+    clip_ids: set[str] | None = None,
+) -> None:
     """Every read the viewer makes, as files under ``data`` (``app.js`` ``apiUrl`` maps the paths).
 
     ``indent`` keeps the committed ``demo-site/`` diff-friendly; ``ii export`` writes compact JSON.
+    ``slim`` is for a real run, whose full copy runs to gigabytes: heat values are rounded to
+    ``HEAT_DIGITS`` significant digits, and a clip that has a video keeps only the frame
+    images a page shows as a still (frame 0 and the frames tokens sit on). ``clip_ids``
+    limits the clips written; the features' example lists are cut to match.
     """
     data.mkdir(parents=True)
     write_json = functools.partial(_write_json, indent=indent)
@@ -107,6 +162,8 @@ def write_viewer_data(model: RunModel, data: Path, indent: int | None = None) ->
         detail = model.feature(feature_id)
         if detail is None:
             continue
+        if clip_ids is not None:
+            detail = {**detail, "top_clips": [top for top in detail.get("top_clips", []) if str(top["clip_id"]) in clip_ids]}
         write_json(feature_dir / f"{feature_id}.json", detail)
         viz = model.viz_file(feature_id)
         if viz is not None:
@@ -120,20 +177,26 @@ def write_viewer_data(model: RunModel, data: Path, indent: int | None = None) ->
         frames = clip_dir / "frames"
         frames.mkdir()
         n_frames = int(payload["n_frames"])
-        pack: dict[str, list] = {}
+        cells = model.heat_cells(clip_id)
+        if slim:
+            cells = {key: [_round_heat(value) if index % 3 == 2 else value for index, value in enumerate(row)] for key, row in cells.items()}
+        media = model.media_file(clip_id)
+        stills = {0} | {int(key.split(":", 1)[0]) for key in cells}
         for frame in range(n_frames):
+            if slim and media is not None and frame not in stills:
+                continue
             png = model.frame_png(clip_id, frame)
             if png:
                 (frames / f"{frame}.png").write_bytes(png)
-            for feature_id in feature_ids:
-                grid = model.heatmap(clip_id, frame, feature_id)
-                if grid and any(value > 0 for row in grid for value in row):
-                    pack[f"{frame}:{feature_id}"] = grid
-        write_json(clip_dir / "heat.json", pack)
-        media = model.media_file(clip_id)
+        grid = model.run_payload.get("grid") or {}
+        write_json(clip_dir / "heat.json", {"shape": [int(grid["h"]), int(grid["w"])], "cells": cells})
         if media is not None:
             path, _kind = media
             shutil.copy2(path, clip_dir / "media.mp4")
+
+
+def _round_heat(value: float) -> float:
+    return float(f"{value:.{HEAT_DIGITS}g}")
 
 
 def _write_json(path: Path, payload, indent: int | None = None) -> None:
@@ -159,14 +222,7 @@ def pick_steer_targets(model: RunModel, n_clips: int, n_features: int) -> list[t
     each window, the features that fire hardest there are taken, which is what the
     clip page lists first.
     """
-    priority: list[str] = []
-    for feature in model.run_payload["features"]:
-        if feature.get("badge") != "real" and not feature.get("candidate"):
-            continue
-        for top in (model.feature(int(feature["id"])) or {}).get("top_clips", [])[:2]:
-            if top["clip_id"] not in priority:
-                priority.append(top["clip_id"])
-    ordered = priority + [str(clip["clip_id"]) for clip in model.run_payload["clips"] if str(clip["clip_id"]) not in priority]
+    ordered = _clip_priority(model)
     targets: list[tuple[str, int, list[int]]] = []
     for clip_id in ordered:
         payload = model.clips.get(clip_id)

@@ -203,6 +203,8 @@ python -m http.server -d site/dinov2 8000
 
 The playground needs the model, so the export precomputes it: remove, scale, clamp and add at a few strengths, for the strongest features in each window, on `--steer-clips` clips (default 12, starting with the top clips of `real` and candidate features). The slider steps through those strengths. `--steer-features` sets features per window (default 6) and `--no-steer` turns the playground off. Like the live playground this is exploration only and never touches the run folder or the scoreboard. The fake run exports in about 10 seconds to 3 MB.
 
+A real run is larger, mostly video and frame images. `--max-clips N` carries only N clips (the top examples of `real` features first, then candidates), cuts each feature's example list to those clips, and the page says "showing N of M clips". The scores on the page are still the whole run's.
+
 `make demo-site` (or `ii export-site --out demo-site`) rebuilds the static site in `demo-site/`. Serve that directory with any static host. It does not start the viewer API.
 
 ## Layout

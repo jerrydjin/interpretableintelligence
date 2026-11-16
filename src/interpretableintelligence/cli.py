@@ -825,6 +825,14 @@ def export_cmd(
         int, typer.Option("--steer-features", min=1, help="Strongest features per clip window to precompute.")
     ] = 6,
     title: Annotated[str | None, typer.Option("--title", help="Page title, also used on the link preview.")] = None,
+    max_clips: Annotated[
+        int | None,
+        typer.Option(
+            "--max-clips",
+            min=1,
+            help="Carry only this many clips (top examples of verified features first), to keep a large run small enough to host.",
+        ),
+    ] = None,
 ) -> None:
     """Export a run as a static site: host the folder anywhere and share the link. No server needed."""
     from interpretableintelligence.explain import ExplainError
@@ -839,6 +847,7 @@ def export_cmd(
             steer_clips=steer_clips,
             steer_features=steer_features,
             title=title,
+            max_clips=max_clips,
             log=typer.echo,
         )
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ExplainError) as exc:
@@ -868,12 +877,19 @@ def export_site_cmd(
         Path,
         typer.Option("--groot", help="Directory with groot-1028-ablate-summary.json."),
     ] = Path("demo-data/groot"),
+    droid: Annotated[
+        Path | None,
+        typer.Option(
+            "--droid",
+            help="An `ii export` of a real run to publish at /droid/. Default: keep the copy already in the site.",
+        ),
+    ] = None,
 ) -> None:
     """Regenerate the static demo site from a fresh fake run and the vendored measurements."""
     from interpretableintelligence.export_site import export_site
 
     try:
-        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot)
+        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot, droid_dir=droid)
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
