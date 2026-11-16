@@ -25,6 +25,16 @@ You need git and [uv](https://docs.astral.sh/uv/getting-started/installation/) (
 
 `ii try` writes 30 practice clips to `clips/try`, runs the whole pipeline on the `fake` model into `runs/try` (about 15 seconds on a laptop), and opens the viewer with the playground on. The page starts on the verified feature with the biggest effect, at the held-out moment where it fires hardest, and the terminal suggests what to try first: remove that feature, then remove a decoy and compare. The practice model has three features planted on purpose, so you can check what the tool finds against the truth before you point it at a real model. A second `ii try` reuses the run and opens in a couple of seconds. `--no-open` skips the browser and `--verbose` prints the full pipeline log.
 
+Words you will see, for anyone new to mechanistic interpretability:
+
+- **Feature**: one pattern the model's activations encode at the instrumented layer, such as "gripper" or "striped texture". A **sparse autoencoder** (SAE, also called the dictionary) splits the activations into features, so each one fires on few tokens and can be switched off on its own.
+- **Ablation**: switching a feature off and measuring how far the model's prediction moves. That is the causal test; firing often is not.
+- **Unseen / held-out clip**: a clip the SAE never trained on. Labels and ablation effects are checked there, so a feature cannot pass by memorising its training clips.
+- **Verified** (badge `real`): passed every check. **Unverified**: missed at least one check, or was not checked yet. Both stay open to explore.
+- **Playground** (`--steer`): edit features yourself and watch the prediction move. It is for building intuition and never verifies anything.
+
+Commands here start with `uv run`, because `uv sync` installs `ii` into the project's `.venv` rather than on your PATH. Run `source .venv/bin/activate` once per shell to type plain `ii`; the hints the CLI prints follow whichever way you started it.
+
 Then try a real model on real video. You do not need clips of your own:
 
 ```bash
@@ -33,6 +43,8 @@ uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/dr
 ```
 
 `--no-score --steer` gets you to the playground fastest (about 10 minutes on a laptop CPU): every feature is explorable, but none is verified yet. Run the same command without `--no-score` to add the checks; it reuses what is done. Scoring a real model is the slow part and prints progress with a time estimate as it goes. On 100 DROID clips with DINOv2-small it takes about 40 minutes on a 4-core CPU, most of it the random controls: each feature that reaches them costs about 6 minutes there, which is why they only run for features that can still be verified. The controls are plain batched forward passes, so a GPU (a Mac's is picked automatically; `--remote` rents one) is the way to shorten them further; that has not been timed here.
+
+Both commands talk to huggingface.co and need no account. If it prints "You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN", that only concerns rate limits; you can ignore it.
 
 `ii get-clips` cuts a 4-second mp4 from the middle of each of the 100 episodes in [`lerobot/droid_100`](https://huggingface.co/datasets/lerobot/droid_100), real robot arms in real kitchens and offices, and keeps each episode's instruction in `clips/droid/clips.json`. `--n` and `--seconds` take fewer or longer clips. Any folder of your own mp4s works in its place.
 
@@ -218,6 +230,7 @@ A real run is larger, mostly video and frame images. `--max-clips N` carries onl
 | `src/interpretableintelligence/adapters/hf.py` | Generic Hugging Face vision adapter (`hf:<model>`) |
 | `src/interpretableintelligence/adapters/groot/adapter.py` | GR00T N1.7 adapter (`groot:<checkpoint>`) and its random `groot:tiny` stand-in |
 | `docs/FRICTION-vjepa2.md` | Jeff's setup log for the V-JEPA 2 port |
+| `docs/FRICTION-first-run.md` | A newcomer's first five minutes: where they got stuck and what changed |
 | `src/interpretableintelligence/sae.py` | ReLU / TopK SAE trainer and the seeded random-weights SAE control |
 | `src/interpretableintelligence/score.py` | Explained variance, loss recovered, ablations, random controls |
 | `src/interpretableintelligence/attribute.py` | Attribution-patching prefilter and the ablation comparison |

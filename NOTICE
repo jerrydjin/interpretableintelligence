@@ -67,6 +67,15 @@ V-JEPA 2
 Video Joint Embedding Predictive Architecture 2 (V-JEPA 2): MIT License
 
 ================================================================================
+DINOv2
+================================================================================
+
+facebook/dinov2-small (Meta AI): Apache-2.0
+  https://huggingface.co/facebook/dinov2-small
+The demo site's /droid/ page (demo-site/droid) ships activations, SAE features
+and precomputed edits of this model's outputs; it does not ship the weights.
+
+================================================================================
 Fonts (vendored, SIL Open Font License 1.1)
 ================================================================================
 

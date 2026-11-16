@@ -10,6 +10,7 @@ const state = {
   heatToken: 0,
   heatPack: null,
   heatClip: null,
+  allFrameFeatures: false,
   steer: { kind: "ablate", value: 0, result: null, busy: false, show: false, error: "", token: 0, idea: null },
 };
 
@@ -76,10 +77,25 @@ function fmtUnit(value) {
   return Number.isFinite(value) ? value.toFixed(3) : "—";
 }
 
+// A real model lists up to 40 features per frame, which pushes the Playground a few screens down.
+// Past FRAME_FEATURES_FOLD rows, show the strongest FRAME_FEATURES_SHOWN and the rest on request.
+const FRAME_FEATURES_FOLD = 12;
+const FRAME_FEATURES_SHOWN = 6;
+
 function fmtSmall(value) {
   if (!Number.isFinite(value)) return "—";
   if (value === 0) return "0";
   return Math.abs(value) >= 0.01 ? value.toFixed(3) : value.toExponential(1);
+}
+
+// The before/after error in words, so a newcomer need not compare two numbers in e-notation.
+function errorChange(clean, edited) {
+  if (clean === 0 && edited > 0) return " (the reference is the model's own unedited output, so it starts at 0)";
+  if (!Number.isFinite(clean) || !Number.isFinite(edited) || clean <= 0) return "";
+  const ratio = edited / clean;
+  if (ratio >= 0.95 && ratio <= 1.05) return " (about the same)";
+  if (ratio > 1) return ` (about ${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× the unedited error)`;
+  return ` (about ${Math.round((1 - ratio) * 100)}% lower)`;
 }
 
 function fmtFlag(value) {
@@ -317,7 +333,9 @@ function renderIndex() {
       featureGroup(
         "exploring",
         "Still exploring",
-        "Each missed at least one check. Open one to see which, and what experiment to try next.",
+        state.run.scoreboard === false
+          ? "None has been checked yet: this run was not scored. Open one to see where it fires and steer it."
+          : "Each missed at least one check or was not checked. Open one to see which, and what experiment to try next.",
         exploring,
       ),
     ]),
@@ -1221,8 +1239,23 @@ function renderFrame(options) {
   }
   list.dataset.feature = active ? String(active.id) : "";
   const peak = frame.features.reduce((best, feature) => Math.max(best, Number(feature.activation) || 0), 0);
-  list.replaceChildren(...(frame.features.length ? frame.features.map((feature) => renderFeatureRow(feature, active, peak)) : [
-    el("li", { class: "empty" }, "No feature fired on this frame."),
+  const rows = frame.features.map((feature) => renderFeatureRow(feature, active, peak));
+  const folded = !state.allFrameFeatures && rows.length > FRAME_FEATURES_FOLD;
+  if (folded) {
+    rows.forEach((row, index) => {
+      if (index >= FRAME_FEATURES_SHOWN && row.dataset.selected !== "true") row.hidden = true;
+    });
+    const more = el("button", { type: "button", class: "more-features", "data-testid": "more-features" },
+      `Show all ${rows.length} features firing on this frame`);
+    more.addEventListener("click", () => {
+      state.allFrameFeatures = true;
+      for (const row of list.querySelectorAll("[data-testid=frame-feature]")) row.hidden = false;
+      more.parentElement.remove();
+    });
+    rows.push(el("li", { class: "more" }, more));
+  }
+  list.replaceChildren(...(rows.length ? rows : [
+    el("li", { class: "empty" }, "No feature fired on this frame. Move the slider or pick another clip."),
   ]));
   state.activeFeature = active;
   paintSteer();
@@ -1586,7 +1619,9 @@ function steerPanel() {
     el("label", { class: "steer-toggle" }, [show, " Show where the prediction moved"]),
     el("div", { class: "steer-result", "data-testid": "steer-result" }),
     usable ? null : el("p", { class: "steer-warn", "data-testid": "steer-warn" },
-      "This run's SAE is not marked usable, so its features may not mean much yet. Steering still works."),
+      state.run.scoreboard === false
+        ? "This run is not scored yet, so no check has run and no feature is verified. Steering still works: explore freely, but treat what you see as a lead, not a finding."
+        : "This run's SAE is not marked usable, so its features may not mean much yet. Steering still works."),
     el("p", { class: "steer-note" }, "Exploration only. Steering never marks a feature real; only the scored gates do."),
   ].filter(Boolean));
 }
@@ -1651,6 +1686,7 @@ function paintSteer() {
       el("strong", {}, fmtSmall(sum.loss_clean)),
       " to ",
       el("strong", {}, fmtSmall(sum.loss_edited)),
+      errorChange(sum.loss_clean, sum.loss_edited),
       `. The feature fired on ${sum.tokens_where_feature_fired} of ${sum.tokens_total} ${state.clip?.layout === "actions" ? "tokens" : "patches"} in this window.`,
     ]),
   );

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -172,6 +173,19 @@ def random_weights_sae(config: SAEConfig, mean: torch.Tensor, seed: int, device:
     return model
 
 
+def _log_every(steps: int) -> int:
+    """Training logs about every tenth of the way, so a long run never looks stuck."""
+    return max(steps // 10, 1)
+
+
+def _time_left(started: float, done: int, total: int) -> str:
+    """``", about 3 min left"`` once a few steps have run; empty at the start and the end."""
+    if done < 2 or done >= total:
+        return ""
+    left = (time.perf_counter() - started) / done * (total - done)
+    return f", about {left:.0f}s left" if left < 90 else f", about {left / 60:.0f} min left"
+
+
 def train_sae(
     activations: torch.Tensor,
     config: SAEConfig,
@@ -194,6 +208,7 @@ def train_sae(
     batch = min(config.batch_size, n)
     model.train()
     last = ""
+    started = time.perf_counter()
     for step in range(config.steps):
         idx = torch.randint(0, n, (batch,), device=device)
         batch_x = data[idx]
@@ -205,10 +220,10 @@ def train_sae(
         opt.step()
         if config.normalize_decoder:
             model.unit_norm_decoder()
-        if log is not None and (step + 1 == config.steps or step % 500 == 0):
+        if log is not None and (step + 1 == config.steps or step % _log_every(config.steps) == 0):
             l0 = float((features.detach() > 0).float().sum(dim=-1).mean())
             last = f"step {step + 1}/{config.steps} mse={float(mse.detach()):.6f} l0={l0:.2f}"
-            log(last)
+            log(last + _time_left(started, step + 1, config.steps))
     model.eval()
     for param in model.parameters():
         param.requires_grad_(False)
@@ -243,6 +258,7 @@ def train_sae_fetched(
     batch = min(config.batch_size, n_rows)
     model.train()
     last = ""
+    started = time.perf_counter()
     for step in range(config.steps):
         idx = torch.randint(0, n_rows, (batch,), device=device)
         fetched = np.ascontiguousarray(fetch(idx.detach().cpu().numpy()), dtype=np.float32)
@@ -257,10 +273,10 @@ def train_sae_fetched(
         opt.step()
         if config.normalize_decoder:
             model.unit_norm_decoder()
-        if log is not None and (step + 1 == config.steps or step % 500 == 0):
+        if log is not None and (step + 1 == config.steps or step % _log_every(config.steps) == 0):
             l0 = float((features.detach() > 0).float().sum(dim=-1).mean())
             last = f"step {step + 1}/{config.steps} mse={float(mse.detach()):.6f} l0={l0:.2f}"
-            log(last)
+            log(last + _time_left(started, step + 1, config.steps))
     model.eval()
     for param in model.parameters():
         param.requires_grad_(False)

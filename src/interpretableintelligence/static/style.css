@@ -421,6 +421,19 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
 .badge-unverified { color: var(--ink-2); background: var(--well); }
 
 .empty { margin: 0; padding: 16px 0; }
+.frame-feature[hidden] { display: none; }
+.feature-list .more { list-style: none; }
+.more-features {
+  border: 0;
+  background: none;
+  padding: 10px 16px;
+  color: var(--ink-2);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line-2);
+}
+.more-features:hover { color: var(--ink); }
 
 /* ---- playground (under the feature list) -------------------------------- */
 .steer {

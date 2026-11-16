@@ -729,10 +729,23 @@ class RunModel:
         )
 
 
+def _nearby_runs(run_dir: Path) -> str:
+    """Name the run folders next to a mistyped one, or say how a run folder gets made."""
+    parent = run_dir.parent
+    try:
+        found = sorted(p.name for p in parent.iterdir() if (p / "manifest.json").is_file())
+    except OSError:
+        found = []
+    if found:
+        shown = ", ".join(found[:8]) + (", ..." if len(found) > 8 else "")
+        return f". Run folders in {parent}: {shown}"
+    return ". `ii run` (or `ii try`) writes one; pass the folder it printed."
+
+
 def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
-        raise FileNotFoundError(f"run folder not found: {run_dir}")
+        raise FileNotFoundError(f"run folder not found: {run_dir}{_nearby_runs(run_dir)}")
     missing = [rel for rel in _REQUIRED if not (run_dir / rel).is_file()]
     if missing:
         raise FileNotFoundError(f"{run_dir} is missing {', '.join(missing)}")
