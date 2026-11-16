@@ -104,7 +104,7 @@ f = relu(W_enc @ (x - b_dec) + b_enc)
 x_hat = W_dec @ f + b_dec
 ```
 
-Decoder columns are unit-norm. `sae/config.json` records `d_model`, `n_features`, `l1_coeff`, `ortho_coeff`, `lr`, `steps`, `batch_size`, `seed`, `normalize_decoder`, and `activation` (`relu` or `topk`). A `topk` SAE also records `k`, the number of features kept per token; its `l1_coeff` and `ortho_coeff` are 0. Training uses train-split activations only. The orthogonality term keeps one planted direction from splitting into two live features.
+Decoder columns are unit-norm. `sae/config.json` records `d_model`, `n_features`, `l1_coeff`, `ortho_coeff`, `lr`, `steps`, `batch_size`, `seed`, `normalize_decoder`, and `activation` (`relu`, `topk`, or `jumprelu`). A `topk` SAE also records `k`, the number of features kept per token; its `l1_coeff` and `ortho_coeff` are 0. A `jumprelu` SAE records `threshold` instead: `f = r * (r > threshold)` with `r = relu(W_enc @ (x - b_dec) + b_enc)`. That is how a BatchTopK SAE runs at inference, and `ii import` writes it (see "Imported runs"). Training uses train-split activations only. The orthogonality term keeps one planted direction from splitting into two live features.
 
 ## features/feature_acts.parquet
 
@@ -123,7 +123,7 @@ Columns, in order:
 `effect_kind` is one of:
 
 - `estimate`: activation × ∂(mean masked predictor MSE)/∂(feature activation), averaged over `h, w` in that frame. Straight-through: the forward value is the true layer activation, and the gradient flows through the decoder. One row for every feature, clip, window, and frame.
-- `ablation`: the feature is actually zeroed by subtracting `f_i * decoder_i` from the layer. On a full run, rows exist for the top 10 features per clip (or every feature, if the dictionary is smaller), ranked by mean absolute estimate on that clip, and for every frame of those features. `interpretableintelligence run --prefilter K` instead ablates exactly those K features on every clip and frame. The stored effect is the mean cosine distance of the predictor output over the masked spatial cells in that frame. This is the original single-feature score. The scoreboard's `ablation_effect` is the mean of these distances over held-out masked tokens.
+- `ablation`: the feature is actually zeroed by subtracting `f_i * decoder_i` from the layer. On a full run, rows exist for the top 10 features per clip (or every feature, if the dictionary is smaller), ranked by mean absolute estimate on that clip, and for every frame of those features. `interpretableintelligence run --prefilter K` instead ablates the shortlisted features that can still be verified (see `candidates.json` below), on every clip and frame. The stored effect is the mean cosine distance of the predictor output over the masked spatial cells in that frame. This is the original single-feature score. The scoreboard's `ablation_effect` is the mean of these distances over held-out masked tokens.
 - `loss_video`: same single-feature zeroing, scored as the change in the model's own masked prediction loss (edited MSE minus clean MSE) over every window of the clip. The stored number is the mean per-token loss increase inside that frame. The video-level effect is the token-weighted mean of the frame rows.
 - `loss_window`: the same loss change restricted to one window.
 - `group_loss_video`: the co-active group (default size 3) is zeroed together, and the loss change is taken over every window. Each member feature gets a copy of the group's per-frame loss increase.
@@ -166,6 +166,10 @@ The ranking of those scores and the shortlist expensive ablations should run on.
 ```
 
 `ranked` lists every feature once, ordered by descending `|mean score over clips|`. `candidates` is the first `prefilter_k` feature ids. `shortlist_only` is true: every candidate still has to be confirmed by a real ablation before it can count as causal. `seconds.ablation` and `seconds.random_controls` are null when `interpretableintelligence rank` did not ablate. A feature outside a `--prefilter` shortlist has `ablation_effect: null`, `random_percentile: null`, and `n_random: 0` in the scoreboard; `real` is then false.
+
+The ablation and its random controls are the expensive checks, so a shortlist does not spend them on a feature that can no longer be `real`. A shortlisted feature is ablated only when every check that needs no ablation already passes: the SAE is usable, `distinct_clips_top20 >= 5`, `absent_in_random_init` is true and `label_holds_heldout` is true (with a vision-model key, the shortlist is relabelled before this is decided). The others are recorded like a feature outside the shortlist. No threshold changes and the set of `real` features is the same as if every shortlisted feature had been ablated. When no shortlisted feature can be verified, all of them are ablated, so the run still has causal numbers to explore. Without a shortlist every feature is ablated, as before.
+
+`control/random_controls.json` keeps each ablated feature's control effects, keyed by everything they depend on (model, layer, clips, split, SAE weights, seed, device and thread count). A later scoring pass over the same SAE (a new concept list or label model, a different `--prefilter`, or a run that was interrupted) reads them back instead of running the controls again, and gets the same percentile. Like `acts/stream/`, it is a resume artefact and not part of the contract.
 
 ## features/features.jsonl
 
@@ -240,15 +244,15 @@ One record per run. No extra keys.
 
 ### Feature block
 
-`ablation_effect` is the mean cosine distance between the original predictor output and the output after the feature is zeroed, over held-out masked tokens. Masked rows come from `predict_masked` in row-major `(t, h, w)` order of the adapter mask. Cosine distance is `1 - cos`. A zero vector against a nonzero vector counts as distance 1; two zero vectors count as 0. It is `null` when `interpretableintelligence run --prefilter` did not ablate that feature. `random_percentile` is `null` in that case and `n_random` is 0. `null` is not a pass.
+`ablation_effect` is the mean cosine distance between the original predictor output and the output after the feature is zeroed, over held-out masked tokens. Masked rows come from `predict_masked` in row-major `(t, h, w)` order of the adapter mask. Cosine distance is `1 - cos`. A zero vector against a nonzero vector counts as distance 1; two zero vectors count as 0. It is `null` when `interpretableintelligence run --prefilter` did not ablate that feature (outside the shortlist, or already failing a check that needs no ablation). `random_percentile` is `null` in that case and `n_random` is 0. `null` is not a pass.
 
-`random_percentile` compares that effect to `n_random` (≥ 100) random features matched on held-out firing count and on `(decoder L2 norm × mean firing activation)`. Each control uses a random unit direction scaled to the same decoder norm, the same multiset of activation values, and a random subset of held-out tokens of the same size. The percentile is the percentage of control effects that are `<=` the feature's effect (ties do not count as a win for the control).
+`random_percentile` compares that effect to `n_random` (≥ 100) random features matched on held-out firing count and on `(decoder L2 norm × mean firing activation)`. Each control uses a random unit direction scaled to the same decoder norm, the same multiset of activation values, and a random subset of held-out tokens of the same size. The percentile is the percentage of control effects that are `<=` the feature's effect (ties do not count as a win for the control). Control effects are means of non-negative cosine distances, so a control's running mean only grows as held-out windows are added. Scoring stops a feature's controls once more than 5% of them already exceed its effect, because the gate can no longer pass. A failing feature then records the percentile it would have if no further control overtook it, which is an upper bound on the full value. A feature that can still pass always runs every control, so a passing percentile is always exact.
 
 `absent_in_random_init` reruns capture and SAE training with the same hyperparameters on `load(random_init=True)`. It is true when the feature's activation pattern has variance and no random-init feature has Pearson correlation ≥ `0.45` with it. A flat pattern is not absent: dead features share that pattern.
 
 `label_holds_heldout` is the labeller's held-out check. For the fake labeller (`fake-cue-v1`), the label is the planted cue with the highest train-token Pearson correlation, and only if that correlation is > `0.50`. The label holds when the same cue correlates ≥ `0.60` on held-out tokens. Otherwise the field is false. `null` means the check was not run. The `hf` adapter uses `clip-concepts-v2:openai/clip-vit-base-patch16`. Each concept's per-token strength is the CLIP similarity between the patch (MaskCLIP dense embedding, resized to the token grid and averaged per tubelet) and the prompt `a photo of {concept}.`. Because real-model features are sparse, the statistic is ROC AUC rather than Pearson: how well the concept's strength separates tokens where the feature fires (> `1e-5`) from tokens where it does not. The label is the concept with the highest train AUC, and only if that AUC is ≥ `0.80`; it holds when the same concept's held-out AUC is ≥ `0.80`. The concept list is built in, or one per line from `ii run hf --concepts FILE`. `vjepa2` (not `--tiny`) uses the same dense labeller on the frames as the model sees them (its centre crop). `groot` (not `groot:tiny`) has no image tokens, so its concept strength is window-level: the CLIP similarity between the window's whole observation frame and the prompt, given to every token of that window; the AUC rule and thresholds are the same. `--concepts FILE` works for all three.
 
-With a vision-model key set (README), the `hf` features that `ii run` scores (the prefilter shortlist, or the 32 with the highest attribution) are relabelled by `autointerp-v1:<provider>/<model>`. The label comes from a vision-language model shown up to 8 train frames (at most 2 per clip) where the feature fires most, with the strongest cell boxed and the activation map tinted. The held-out check shows the same model held-out frames with one cell boxed, given only the label: up to 10 cells where the feature fires (half its strongest held-out cells, half random) and as many where it does not (up to half in the same frames). The label holds when the model's 0 to 10 ratings separate the two with ROC AUC ≥ `0.80`. Fewer than 4 held-out firings, or fewer than 3 training frames, and it does not hold. Only spatial grids are relabelled.
+With a vision-model key set (README), the `hf` features that `ii run` scores (the prefilter shortlist, or the 32 with the highest attribution) are relabelled by `autointerp-v2:<provider>/<model>`. The label comes from a vision-language model shown up to 8 train frames (at most 2 per clip) where the feature fires most, with the strongest cell boxed and the activation map tinted. One reply is one sample and providers are not deterministic, so the model is asked 3 times (the same frames, in a different order) and the 3 candidate labels are compared on train clips only: each is rated on boxed cells from train frames the labels were not written from, and the one with the highest train ROC AUC becomes the label (`candidates` in `features/autointerp.json` records all 3). Only that label meets the held-out clips, once, so choosing between candidates cannot make the held-out check easier. Every reply is kept in `control/autointerp/` (a resume artefact, like `control/random_controls.json`), so scoring the same run again gives the same labels on any machine; a fresh run asks afresh, and a label near the bar can still land on either side of it. The held-out check shows the same model held-out frames with one cell boxed, given only the label: up to 20 cells where the feature fires (half its strongest held-out cells, half random) and as many where it does not (up to half in the same frames). The label holds when the model's 0 to 10 ratings separate the two with ROC AUC ≥ `0.80`. Fewer than 4 held-out firings, or fewer than 3 training frames, and it does not hold. Only spatial grids are relabelled.
 
 ### features/autointerp.json (optional)
 
@@ -262,6 +266,46 @@ Written by `ii run hf` when the vision labeller ran: `version`, `model`, `hold_m
 - `absent_in_random_init is true`
 
 `null` is not a pass. A high percentile alone is not a pass: a dead feature can tie a null control distribution and still score 100.
+
+## Imported runs
+
+`interpretableintelligence import --format <format> <source> <out>` writes a run folder from rollout logs captured outside `ii`. `<source>` is a directory or a `.tar`, `.tar.xz` or `.tar.gz` of one. The first format is `groot-v9`, the GR00T v9 rollcap-v0 layout (the `data-groot-1028-v1` release). An imported run is the version-0 tree above plus `manifest.import`. Everything that does not need the model is computed by the same code as `interpretableintelligence run`: activation shards, `feature_acts.parquet`, top examples, `ev_heldout`, `dead_frac`, `distinct_clips_top20`, the attribution files, and `real` through the four gates. What does need the model in the loop is `null`, with a reason, and never `0.0`. A validator treats a folder as imported exactly when `manifest.import` is present; without it, every rule above applies unchanged.
+
+### manifest.import
+
+```json
+{
+  "format": "groot-v9",
+  "cells": {"t": [0], "h": [0], "w": [0, 1, 3, 4]},
+  "clips": [{"clip_id": "ep-00000", "source_id": 0, "n_windows": 23, "success": true, "fail_kind": null}],
+  "nulls": {"scoreboard.sae.loss_recovered": "needs the GR00T action head ..."},
+  "source": {"layout": "rollcap-v0", "files": {"split.json": "<64 hex>"}, "archive": {"name": "...", "sha256": "<64 hex>", "bytes": 0}},
+  "notes": {},
+  "wall_s": 61.2
+}
+```
+
+- `cells` are the grid cells the source captured, as the product of the three sorted lists. Rows cover exactly these cells in row-major `(t, h, w)` order. A capture that kept every token lists the whole grid.
+- `clips` has one entry per `manifest.clips` entry, in the same order. `source_id` is the id the source's `split.json` uses for that clip. `n_windows` is that clip's own window count: an imported clip covers windows `0 .. n_windows - 1`, and clips may differ. Other keys are per-clip outcome fields kept from the source (for `groot-v9`: `seed`, `init_state_id`, `success`, `fail_kind`, `fail_t`, `fail_subkind`, `fail_rule`).
+- `nulls` maps each field the import left null to a non-empty reason. Every null listed below needs a reason, and a reason for a field that is not null is an error.
+- `source` is provenance: the source layout, sha256s of its key files, and the archive's name, sha256 and size when one was imported. `notes` are format-specific (the hook, the token layout, the SAE fold, where `model.sha` came from). `wall_s` is the import's wall time.
+
+### What changes for an imported run
+
+- **split.json** is the source's file, copied byte for byte. It is not re-serialised, and it does not follow the clip-level algorithm. It must be a JSON object with `train` and `heldout` lists of source ids (integers or strings), disjoint, together naming every `manifest.import.clips[].source_id`; other keys are the source's. `manifest.split.sha` is the sha256 of the file's bytes. `manifest.split.seed` and `heldout_frac` are `null` (with reasons) unless the source records them, and `scoreboard.run.seed` equals `manifest.split.seed`. `clips[].split` still matches the file. Held-out labels are never edited.
+- **clips[].sha256** is the sha256 of the source file the clip's rows came from (for `groot-v9`, the episode's `acts/shard-NNNNN.safetensors`), because the source has no clip pixels.
+- **Activation shards** hold each clip's own windows and the captured cells only, in manifest clip order, then window, then cell. Values are the source's, cast to float16. Nothing is padded or interpolated.
+- **Nullable fields.** `scoreboard.sae.loss_recovered`, `loss_sae`, and `loss_visible_mean` are null when the source cannot be spliced back into the model, and then `usable` is null too. `ev_heldout` may be null only if the source has no held-out rows (it is computed whenever it can be). `label_holds_heldout`, `ablation_effect`, `random_percentile`, and `absent_in_random_init` are null when no labeller, ablation or random-init capture ran; `n_random` is then 0. Each has a reason in `manifest.import.nulls`, under the key `scoreboard.sae.<field>` or `scoreboard.features.<field>`. `null` is still not a pass: with `usable` null, every feature is `real: false`.
+- **features/clip_effects.parquet** has the usual columns and zero rows when no effect could be measured; its reason is `nulls["features/clip_effects.parquet"]`. If an imported run does carry effect rows, they follow the version-0 rules.
+- **Attribution.** `attribution.parquet` may record objective `activation` (sum of |activation|, no backward), and `candidates.json` records the same objective. It is a shortlist; nothing in it was ablated.
+
+### groot-v9
+
+The mapping follows `interpretableintelligence run groot`. The adapter is `groot:<checkpoint>` and the layer is the hooked DiT block. Each clip is one episode, and each window is one policy call (`window = step // action_queue_steps`). The grid is `t=1, h=1, w=1+action_horizon` with `tubelet = action_queue_steps`, and `w` is the DiT token index (0 is the state token, `k` is action step `k - 1`). `cells.w` is the capture's `token_indices`. `fps` is env steps per second (LIBERO: 20, `--fps`), and `n_frames` is the env steps the episode executed.
+
+The source SAE is BatchTopK, run with a learned JumpReLU threshold on `(x - norm_mu) / norm_scale`. The normalisation is folded into the stored weights (`W_enc' = W_enc^T`, `b_enc' = norm_scale * b_enc`, `b_dec' = norm_mu + norm_scale * b_dec`, `W_dec' = W_dec^T`), and `threshold' = norm_scale * threshold`. Feature ids and active sets equal the source's, and values are `norm_scale` times the source's, in raw activation units.
+
+Failure labels are the pot-0 detector's (`fail_rule` starting `pot0-v1`, from `tools/derive_pot0_fail.py`). The importer refuses a capture without them and never reads the v9 active-object labels (`fail_kind_v9_active`, `fail_t_v9_active`). `model.sha` is `--model-sha` when given. Otherwise it is the sha `run groot` computes from the Hub's sha256 of the checkpoint weights, and if the Hub cannot be reached, a sha256 of the source's declared model and hook record. `notes.model_sha_source` says which.
 
 ## Adapter obligations the schema assumes
 
@@ -363,3 +407,39 @@ steering/scorecard.json
 - `beats_controls`: `p_value <= alpha` and `excess.ci_low > 0`. A null bound does not pass.
 
 Intervals are percentile intervals from `bootstrap` resamples of the episodes (clips) with replacement, seeded by `(seed, feature_id, kind)`. They are null with fewer than two episodes. A feature that never fires on a held-out window has `n_windows: 0`, null statistics, and `beats_controls: false`. `validate` recomputes `scorecard.json` from `effects.parquet` and the top-level settings and requires the stored file to match.
+
+## probe/ (optional)
+
+`interpretableintelligence probe` writes an offline failure probe. It works on a version-0 or version-1 folder, does not change `schema_version`, never reads or writes `scoreboard.json`'s gates, never edits `split.json`, and never sets `real`. `validate` checks it only when `probe/` exists.
+
+```
+probe/scores.parquet
+probe/probe.json
+```
+
+**Labels.** `--labels FILE` (default: `failures.json` in the manifest's `clips_dir`) is JSON with `episodes`, one per manifest clip: `{clip_id, failure, onset_s}`. A failed episode has `onset_s` in seconds from the clip start; a successful one has `onset_s: null`. Optional `source` names the labeller. Every clip needs exactly one label. `ii generate-clips --failure-labels planted|null` writes this file for fake clips.
+
+**Inputs.** Three, from the same activation shards: `trained_sae` (the run's SAE), `random_sae`, and `raw` (the layer activations). `random_sae` is `sae.random_weights_sae`: the trained SAE's architecture, `n_features`, `activation` and `k`, with the trainer's initial weights (unit-norm Gaussian decoder columns, tied encoder, zero encoder bias, `b_dec` at the train-row mean) and zero optimiser steps. It is deterministic in its seed (`--random-seed`, default the SAE config's `seed`, which makes it the trained SAE's own starting point).
+
+**Probe.** Bin `t` of window `k` ends at `(k * grid.t + t + 1) * grid.tubelet / fps` seconds (windows tile the clip back to back, as on `fake`). An episode's reference time is `onset_s` for a failure and `n_frames / fps` for a success; the probe sees only bins that end at or before `reference - lead_s`. An episode with no such bin is not scored (`labels.n_unscored`). Each input is max-pooled over the seen tokens, standardised with the train split's mean and standard deviation, and fit with an L2 logistic regression (`--l2`, bias unpenalised) on `split.json`'s train clips only. Held-out clips are scored once.
+
+**scores.parquet.** One row per (input, scored episode), train and held-out. Columns, in order:
+
+| column | type | meaning |
+| --- | --- | --- |
+| `input` | string | `trained_sae`, `random_sae`, or `raw`. |
+| `clip_id` | string | Episode. |
+| `split` | string | `train` or `heldout`, as in `split.json`. |
+| `failure` | bool | Label. |
+| `ref_s` | float64 | Onset (failure) or clip end (success). |
+| `cutoff_s` | float64 | `ref_s - lead_s`. |
+| `lead_s` | float64 | `ref_s` minus the end of the last bin the probe saw. |
+| `score` | float64 | Probe logit. |
+
+**probe.json.** Top-level keys: `schema_version` (1), `run_id`, `model_sha`, `layer`, `split_sha`, `adapter` (all matching the manifest), `target` (`failure`), `labels` (`source`, `sha256` of the file, `n_failures`, `n_episodes`, `n_unscored`), `pool` (`max`), `probe`, `lead_s`, `min_lead_s`, `bootstrap`, `confidence` (0.95), `alpha` (0.05), `seed`, `n_episodes` (held-out scored, failed, successful), `inputs`, `comparisons`, `sae_gate`, `positive`, `reason`, `real` (always false), `rollout_finding` (always false), and `note`.
+
+- `inputs.<name>`: `n_dims`, held-out `auroc` (failures scored above successes, ties half), its percentile interval `ci_low`/`ci_high`, and `lead_time_s` (the smallest `lead_s` among held-out failures). `trained_sae` adds `sae_usable` and `loss_recovered`, copied from `scoreboard.json` when it has them and null otherwise. `random_sae` adds `seed`, `init`, `weights_sha256`, and `sae_usable`, `loss_recovered`, `clip_effects` (always null: the control is never spliced, scored or ablated, and a missing measurement is null, never 0.0) and `real` (always false).
+- `comparisons.random_sae` and `comparisons.raw`: `delta` (trained minus baseline AUROC), its interval, `p_value`, and `beats`. The bootstrap resamples held-out episodes with replacement within each class, `bootstrap` times, seeded by `seed`; every input is scored on the same resample. `p_value` is `(1 + #{resamples with delta <= 0}) / (bootstrap + 1)`. `beats` is `delta > 0` and `p_value < alpha`.
+- `sae_gate` is `not_run` when the gate is skipped: no probe could be fit (the train split lacks a class), fewer than `PROBE_MIN_CLASS` (2) held-out episodes of either class, `lead_s` below `min_lead_s` (1 s), or a held-out lead time below it. Otherwise it is `pass` when both comparisons beat, else `fail`. `positive` is `sae_gate == "pass"`. Null never passes.
+
+`validate` recomputes `probe.json` from `scores.parquet` and the stored settings and requires the stored file to match.

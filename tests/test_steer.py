@@ -233,3 +233,65 @@ def test_playwright_playground_steers_and_draws_the_change(demo):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_playwright_feature_pages_reward_verified_and_lead_unverified_to_an_experiment(demo):
+    sync_api = pytest.importorskip("playwright.sync_api")
+    chrome = _chrome()
+    if chrome is None:
+        pytest.skip("Chrome is not installed; the feature page browser test cannot run")
+    model = load_run(demo.run, demo.clips)
+    enable_steering(model, demo.clips)
+    real = _real_ids(demo.run)[0]
+    scoreboard = json.loads((demo.run / "scoreboard.json").read_text(encoding="utf-8"))
+    lead = next(
+        feature["id"]
+        for feature in scoreboard["features"]
+        if not feature["real"] and feature["distinct_clips_top20"] >= 5 and feature["label_holds_heldout"]
+    )
+    httpd, url = _serve(model)
+    try:
+        with sync_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=chrome, headless=True, args=["--no-sandbox", "--disable-gpu"])
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
+
+            page.goto(f"{url}/#/features/{real}", wait_until="domcontentloaded")
+            standing = page.locator("[data-testid=standing]")
+            sync_api.expect(standing).to_have_attribute("data-real", "true")
+            sync_api.expect(standing.locator(".check-trail .trail-pass")).to_have_count(5)
+            sync_api.expect(page.locator("[data-testid=standing-count]")).to_have_text("All five checks passed")
+            sync_api.expect(page.locator("[data-testid=feature-page] [data-testid=badge]")).to_have_text("real")
+
+            page.goto(f"{url}/#/features/{lead}", wait_until="domcontentloaded")
+            standing = page.locator("[data-testid=standing]")
+            sync_api.expect(standing).to_have_attribute("data-real", "false")
+            sync_api.expect(page.locator("[data-testid=standing-next]")).to_contain_text("Your next experiment")
+            href = page.get_attribute("[data-testid=feature-watch]", "href")
+            assert f"feature={lead}" in href and "&try=" in href
+            # One click opens the playground with the experiment set up and run.
+            page.click("[data-testid=feature-watch]")
+            page.wait_for_selector("[data-testid=steer-mean]")
+            sync_api.expect(page.locator("[data-testid=frame-feature][data-selected=true]")).to_have_attribute(
+                "data-feature-id", str(lead)
+            )
+            assert page.input_value("[data-testid=steer-kind]") == href.split("&try=")[1].split(":")[0]
+            # The card always has a next idea, different from the one that just ran.
+            idea = page.locator("[data-testid=steer-idea]")
+            sync_api.expect(idea).to_be_visible()
+            sync_api.expect(idea).to_contain_text("Next, try")
+            sync_api.expect(page.locator("[data-testid=steer-verified]")).to_be_hidden()
+            first = page.input_value("[data-testid=steer-kind]")
+            page.click("[data-testid=steer-idea-run]")
+            sync_api.expect(page.locator("[data-testid=steer-kind]")).not_to_have_value(first)
+            sync_api.expect(page.locator("[data-testid=steer-run]")).to_have_text("Steer")
+            sync_api.expect(page.locator("[data-testid=steer-mean]")).to_be_visible()
+
+            # A verified feature is marked in the playground.
+            clip_id = model.run_payload["clips"][0]["clip_id"]
+            page.goto(f"{url}/#/clips/{clip_id}?frame=0&feature={real}", wait_until="domcontentloaded")
+            sync_api.expect(page.locator("[data-testid=steer-verified]")).to_be_visible()
+            sync_api.expect(page.locator("[data-testid=steer-idea]")).to_have_attribute("data-kind", "verified")
+            browser.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

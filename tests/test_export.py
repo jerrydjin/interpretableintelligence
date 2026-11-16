@@ -9,6 +9,7 @@ import json
 import threading
 from pathlib import Path
 
+import numpy as np
 import pytest
 from test_steer import _chrome, _real_ids
 from typer.testing import CliRunner
@@ -16,6 +17,7 @@ from typer.testing import CliRunner
 from interpretableintelligence.cli import app
 from interpretableintelligence.export_run import STEER_PRESETS, export_run, steer_key
 from interpretableintelligence.steer import Steerer
+from interpretableintelligence.view import load_run
 
 runner = CliRunner()
 
@@ -133,3 +135,42 @@ def test_playwright_static_playground_under_a_subpath(demo, site: Path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_heat_pack_holds_the_same_cells_as_the_live_heatmap(demo, site: Path):
+    model = load_run(demo.run, demo.clips)
+    run = json.loads((site / "data" / "run.json").read_text(encoding="utf-8"))
+    clip_id = run["clips"][0]["clip_id"]
+    pack = json.loads((site / "data" / "clips" / clip_id / "heat.json").read_text(encoding="utf-8"))
+    height, width = pack["shape"]
+    assert pack["cells"]
+    expected = 0
+    for frame in range(run["clips"][0]["n_frames"]):
+        for feature in run["features"]:
+            live = model.heatmap(clip_id, frame, feature["id"])
+            cells = pack["cells"].get(f"{frame}:{feature['id']}")
+            if not live or not any(value > 0 for row in live for value in row):
+                assert cells is None
+                continue
+            expected += 1
+            grid = [[0.0] * width for _ in range(height)]
+            for h, w, value in zip(cells[0::3], cells[1::3], cells[2::3]):
+                grid[h][w] = value
+            assert grid == pytest.approx(np.array(live), rel=1e-3)
+    assert expected == len(pack["cells"])
+
+
+def test_max_clips_keeps_the_verified_examples_and_says_so(demo, tmp_path: Path):
+    out = tmp_path / "small"
+    summary = export_run(demo.run, out, clips_dir=demo.clips, steer=False, max_clips=4)
+    run = json.loads((out / "data" / "run.json").read_text(encoding="utf-8"))
+    kept = {clip["clip_id"] for clip in run["clips"]}
+    assert summary.clips == len(kept) == 4
+    assert run["export"]["clips_shown"] == 4 and run["export"]["clips_total"] > 4
+    assert {path.name for path in (out / "data" / "clips").iterdir() if path.is_dir()} == kept
+    full = load_run(demo.run, demo.clips)
+    for feature_id in _real_ids(demo.run):
+        detail = json.loads((out / "data" / "features" / f"{feature_id}.json").read_text(encoding="utf-8"))
+        assert detail["top_clips"], "a verified feature lost every example"
+        assert {top["clip_id"] for top in detail["top_clips"]} <= kept
+        assert detail["top_clips"][0]["clip_id"] == full.feature(feature_id)["top_clips"][0]["clip_id"]

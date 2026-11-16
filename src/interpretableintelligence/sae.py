@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +31,10 @@ class SAEConfig:
     activation: str = "relu"
     # Active features per token for ``activation="topk"`` (Gao et al. 2024).
     k: int | None = None
+    # Inference cutoff for ``activation="jumprelu"``: a feature is kept only
+    # where its ReLU pre-activation is strictly above this value. This is how a
+    # BatchTopK SAE is evaluated, so imported BatchTopK dictionaries use it.
+    threshold: float | None = None
 
     def as_dict(self) -> dict:
         out = {
@@ -45,25 +51,38 @@ class SAEConfig:
         }
         if self.activation == "topk":
             out["k"] = self.k
+        if self.activation == "jumprelu":
+            out["threshold"] = self.threshold
         return out
 
 
-ACTIVATIONS = ("relu", "topk")
+ACTIVATIONS = ("relu", "topk", "jumprelu")
 
 
 class SAE(torch.nn.Module):
-    """``relu``: L1-sparse ReLU SAE. ``topk``: keep the ``k`` largest ReLU pre-activations per token."""
+    """``relu``: L1-sparse ReLU SAE. ``topk``: keep the ``k`` largest ReLU pre-activations per token.
+    ``jumprelu``: keep the ReLU pre-activations strictly above ``threshold``."""
 
-    def __init__(self, d_model: int, n_features: int, activation: str = "relu", k: int | None = None) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        n_features: int,
+        activation: str = "relu",
+        k: int | None = None,
+        threshold: float | None = None,
+    ) -> None:
         super().__init__()
         if activation not in ACTIVATIONS:
             raise ValueError(f"SAE activation must be one of {ACTIVATIONS}, got {activation!r}")
         if activation == "topk" and (k is None or not 1 <= int(k) <= n_features):
             raise ValueError(f"topk SAE needs 1 <= k <= n_features, got k={k}")
+        if activation == "jumprelu" and (threshold is None or not math.isfinite(float(threshold)) or float(threshold) < 0):
+            raise ValueError(f"jumprelu SAE needs a finite threshold >= 0, got {threshold}")
         self.d_model = d_model
         self.n_features = n_features
         self.activation = activation
         self.k = None if k is None else int(k)
+        self.threshold = None if threshold is None else float(threshold)
         self.W_enc = torch.nn.Parameter(torch.empty(n_features, d_model))
         self.b_enc = torch.nn.Parameter(torch.empty(n_features))
         self.W_dec = torch.nn.Parameter(torch.empty(d_model, n_features))
@@ -71,6 +90,8 @@ class SAE(torch.nn.Module):
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         pre = F.relu((x - self.b_dec) @ self.W_enc.T + self.b_enc)
+        if self.activation == "jumprelu":
+            return pre * (pre > self.threshold)
         if self.activation != "topk":
             return pre
         top = pre.topk(self.k, dim=-1)
@@ -133,6 +154,38 @@ def untrained_sae(config: SAEConfig, mean: torch.Tensor, device: torch.device) -
     return model
 
 
+def random_weights_sae(config: SAEConfig, mean: torch.Tensor, seed: int, device: torch.device) -> SAE:
+    """Untrained control SAE: the trained SAE's architecture, width and ``k``, zero optimiser steps.
+
+    Deterministic in ``seed``: the same ``(config, mean, seed)`` gives bit-identical
+    weights. Weights come from :func:`untrained_sae` with ``seed`` in place of
+    ``config.seed``, so ``seed == config.seed`` is the trained SAE before its first step.
+    ``mean`` is the float32 mean of the train rows (``b_dec``'s initial value), the only
+    thing the control takes from the data. Nothing here is optimised, and the caller's
+    torch RNG is left untouched.
+    """
+    devices = [device] if device.type == "cuda" else []
+    with torch.random.fork_rng(devices=devices):
+        model = untrained_sae(replace(config, seed=int(seed)), mean, device)
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
+    return model
+
+
+def _log_every(steps: int) -> int:
+    """Training logs about every tenth of the way, so a long run never looks stuck."""
+    return max(steps // 10, 1)
+
+
+def _time_left(started: float, done: int, total: int) -> str:
+    """``", about 3 min left"`` once a few steps have run; empty at the start and the end."""
+    if done < 2 or done >= total:
+        return ""
+    left = (time.perf_counter() - started) / done * (total - done)
+    return f", about {left:.0f}s left" if left < 90 else f", about {left / 60:.0f} min left"
+
+
 def train_sae(
     activations: torch.Tensor,
     config: SAEConfig,
@@ -155,6 +208,7 @@ def train_sae(
     batch = min(config.batch_size, n)
     model.train()
     last = ""
+    started = time.perf_counter()
     for step in range(config.steps):
         idx = torch.randint(0, n, (batch,), device=device)
         batch_x = data[idx]
@@ -166,10 +220,10 @@ def train_sae(
         opt.step()
         if config.normalize_decoder:
             model.unit_norm_decoder()
-        if log is not None and (step + 1 == config.steps or step % 500 == 0):
+        if log is not None and (step + 1 == config.steps or step % _log_every(config.steps) == 0):
             l0 = float((features.detach() > 0).float().sum(dim=-1).mean())
             last = f"step {step + 1}/{config.steps} mse={float(mse.detach()):.6f} l0={l0:.2f}"
-            log(last)
+            log(last + _time_left(started, step + 1, config.steps))
     model.eval()
     for param in model.parameters():
         param.requires_grad_(False)
@@ -204,6 +258,7 @@ def train_sae_fetched(
     batch = min(config.batch_size, n_rows)
     model.train()
     last = ""
+    started = time.perf_counter()
     for step in range(config.steps):
         idx = torch.randint(0, n_rows, (batch,), device=device)
         fetched = np.ascontiguousarray(fetch(idx.detach().cpu().numpy()), dtype=np.float32)
@@ -218,10 +273,10 @@ def train_sae_fetched(
         opt.step()
         if config.normalize_decoder:
             model.unit_norm_decoder()
-        if log is not None and (step + 1 == config.steps or step % 500 == 0):
+        if log is not None and (step + 1 == config.steps or step % _log_every(config.steps) == 0):
             l0 = float((features.detach() > 0).float().sum(dim=-1).mean())
             last = f"step {step + 1}/{config.steps} mse={float(mse.detach()):.6f} l0={l0:.2f}"
-            log(last)
+            log(last + _time_left(started, step + 1, config.steps))
     model.eval()
     for param in model.parameters():
         param.requires_grad_(False)
@@ -253,8 +308,9 @@ def load_sae(directory: Path, device: torch.device) -> tuple[SAE, SAEConfig]:
         normalize_decoder=bool(raw["normalize_decoder"]),
         activation=str(raw["activation"]),
         k=None if raw.get("k") is None else int(raw["k"]),
+        threshold=None if raw.get("threshold") is None else float(raw["threshold"]),
     )
-    model = SAE(config.d_model, config.n_features, config.activation, config.k)
+    model = SAE(config.d_model, config.n_features, config.activation, config.k, config.threshold)
     state = load_file(str(directory / "weights.safetensors"), device="cpu")
     model.load_state_dict(state)
     model.to(device)

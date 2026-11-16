@@ -118,6 +118,218 @@ def wilson(k: int, n: int, z: float = 1.96) -> list[float]:
     return [round(max(0.0, c - h), 4), round(min(1.0, c + h), 4)]
 
 
+# --------------------------------------------------------------------------- sequential inference (pure)
+# The Wilson interval above treats n as fixed. Here n is chosen by the SPRT, so a condition that stopped early on a run
+# of failures is over-represented among "fall" stops, and Wilson / fixed-n binomial tests are not valid. Below: exact
+# inference under the plan's own stopping rule. The SPRT's log-likelihood ratio after n episodes depends only on
+# (n, S_n), so the probability that a run stops at (n, s) is paths(n, s) * p^s (1-p)^(n-s), where paths(n, s) counts the
+# success/failure orderings that reach (n, s) without having stopped before (each test freezes once it crosses). We
+# enumerate those exactly (dynamic programme over n <= cap), order outcomes by the sample proportion s/n (the MLE /
+# sample-mean ordering), and invert the two one-sided exact tests: an equal-tailed confidence set that is valid however
+# early the run stopped, and one-sided p-values against the plan's p0.
+_VERDICTS_STOPPED = ("rise", "fall", "no_effect", "no_rise", "no_fall", "cap_undecided")
+
+
+def _sprt_key(sprt: dict) -> tuple:
+    return (float(sprt["p0"]), float(sprt["p1_rise"]), float(sprt["p1_fall"]), float(sprt["alpha"]), float(sprt["beta"]),
+            int(sprt["cap"]), sprt.get("stop_rule", "h1_or_both_h0"))
+
+
+def _closed_llr(n: int, s: int, p0: float, p1: float) -> float:
+    return s * math.log(p1 / p0) + (n - s) * math.log((1.0 - p1) / (1.0 - p0))
+
+
+_STOP_CACHE: dict[tuple, list[tuple[int, int, str, int]]] = {}
+
+
+def sprt_stop_points(sprt: dict) -> list[tuple[int, int, str, int]]:
+    """Every way the plan's SPRT (sequential_decision, same stop rule) can stop: [(n, s, verdict, n_paths)], exact.
+
+    sum over points of n_paths * p^s * (1-p)^(n-s) == 1 for every p. The boundaries are compared with the closed-form
+    LLR s*log(p1/p0) + (n-s)*log((1-p1)/(1-p0)); sequential_decision sums the same steps one by one, and the two agree
+    unless an LLR lands within float rounding of a boundary (min_boundary_gap reports the closest one)."""
+    key = _sprt_key(sprt)
+    if key in _STOP_CACHE:
+        return _STOP_CACHE[key]
+    p0, p1r, p1f, a, b, cap, rule = key
+    lo, hi = sprt_bounds(a, b)
+    # state: (s, rise decision, fall decision) -> number of paths; decision in (None, "H0", "H1")
+    live: dict[tuple, int] = {(0, None, None): 1}
+    stops: dict[tuple[int, int, str], int] = {}
+    for n in range(1, cap + 1):
+        nxt: dict[tuple, int] = {}
+        for (s0, dr0, df0), c in live.items():
+            for y in (1, 0):
+                s = s0 + y
+                dec = {"rise": dr0, "fall": df0}
+                for name, p1 in (("rise", p1r), ("fall", p1f)):
+                    if dec[name] is None:
+                        llr = _closed_llr(n, s, p0, p1)
+                        dec[name] = "H1" if llr >= hi else ("H0" if llr <= lo else None)
+                decided = [k for k in ("rise", "fall") if dec[k] is not None]
+                h1 = [k for k in decided if dec[k] == "H1"]
+                stop = ((rule == "either_test_decides" and decided) or (rule == "both_tests_decide" and len(decided) == 2)
+                        or (rule == "h1_or_both_h0" and (h1 or len(decided) == 2)))
+                if stop or n == cap:
+                    if dec["rise"] == "H1":
+                        v = "rise"
+                    elif dec["fall"] == "H1":
+                        v = "fall"
+                    elif dec["rise"] == "H0" and dec["fall"] == "H0":
+                        v = "no_effect"
+                    elif stop:
+                        v = "no_" + ("rise" if dec["rise"] == "H0" else "fall")
+                    else:
+                        v = "cap_undecided"
+                    stops[(n, s, v)] = stops.get((n, s, v), 0) + c
+                else:
+                    k = (s, dec["rise"], dec["fall"])
+                    nxt[k] = nxt.get(k, 0) + c
+        live = nxt
+        if not live:
+            break
+    out = sorted((n, s, v, c) for (n, s, v), c in stops.items())
+    _STOP_CACHE[key] = out
+    return out
+
+
+def min_boundary_gap(sprt: dict) -> float:
+    """Smallest |closed-form LLR - boundary| over all (n, s) the SPRT can visit; > ~1e-9 means sprt_stop_points and
+    sequential_decision cannot disagree through float rounding."""
+    p0, p1r, p1f, a, b, cap, _ = _sprt_key(sprt)
+    lo, hi = sprt_bounds(a, b)
+    return min(abs(_closed_llr(n, s, p0, p1) - bd) for n in range(1, cap + 1) for s in range(n + 1)
+               for p1 in (p1r, p1f) for bd in (lo, hi))
+
+
+def _stop_arrays(sprt: dict):
+    pts = sprt_stop_points(sprt)
+    n = np.array([q[0] for q in pts], float)
+    s = np.array([q[1] for q in pts], float)
+    logc = np.array([math.log(q[3]) for q in pts], float)
+    return pts, n, s, logc
+
+
+def _stop_probs(sprt: dict, p: np.ndarray) -> np.ndarray:
+    """[len(p), n_points] probability of stopping at each point, for each p in [0, 1]."""
+    _pts, n, s, logc = _stop_arrays(sprt)
+    p = np.atleast_1d(np.asarray(p, float))[:, None]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lp = np.where(s > 0, s * np.log(p), 0.0) + np.where(n - s > 0, (n - s) * np.log1p(-p), 0.0)
+    return np.exp(logc + lp)
+
+
+def _tails(sprt: dict, n_obs: int, s_obs: int, p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Upper P_p(S/N >= s_obs/n_obs) and lower P_p(S/N <= s_obs/n_obs) at the stop, under the plan's stopping rule."""
+    _pts, n, s, _ = _stop_arrays(sprt)
+    P = _stop_probs(sprt, p)
+    ge = s * n_obs >= s_obs * n        # exact rational comparison of s/n with s_obs/n_obs
+    le = s * n_obs <= s_obs * n
+    return np.minimum(1.0, P[:, ge].sum(1)), np.minimum(1.0, P[:, le].sum(1))
+
+
+def _root(f, a: float, b: float, it: int = 60) -> float:
+    """Boundary between f(a) True and f(b) False (bisection)."""
+    for _ in range(it):
+        m = 0.5 * (a + b)
+        if f(m):
+            a = m
+        else:
+            b = m
+    return 0.5 * (a + b)
+
+
+def sequential_ci(n: int, s: int, sprt: dict, conf: float = 0.95, grid: int = 2001) -> list[float]:
+    """Exact equal-tailed confidence interval for p that stays valid under the plan's early stopping:
+    {p : P_p(S/N >= s/n) > (1-conf)/2 and P_p(S/N <= s/n) > (1-conf)/2}. Both tails are monotone in p for these
+    designs (checked in tests), so the set is an interval; endpoints are refined by bisection and rounded outward."""
+    if not any(q[0] == n and q[1] == s for q in sprt_stop_points(sprt)):
+        raise ValueError(f"(n={n}, s={s}) is not a point where this SPRT can stop")
+    half = (1.0 - conf) / 2.0
+    ps = np.linspace(0.0, 1.0, grid)
+    up, low = _tails(sprt, n, s, ps)
+    ok = (up > half) & (low > half)
+    if not ok.any():
+        raise RuntimeError("empty confidence set")
+    i0, i1 = int(np.argmax(ok)), int(len(ok) - 1 - np.argmax(ok[::-1]))
+    lo_b = 0.0 if i0 == 0 else _root(lambda q: not (_tails(sprt, n, s, [q])[0][0] > half), ps[i0 - 1], ps[i0])
+    hi_b = 1.0 if i1 == grid - 1 else _root(lambda q: _tails(sprt, n, s, [q])[1][0] > half, ps[i1], ps[i1 + 1])
+    return [math.floor(lo_b * 1e4) / 1e4, math.ceil(hi_b * 1e4) / 1e4]
+
+
+def sequential_pvalues(n: int, s: int, sprt: dict) -> dict:
+    """Exact one-sided p-values against the plan's p0 under its stopping rule (valid however early the run stopped):
+    rise = P_p0(S/N >= s/n), fall = P_p0(S/N <= s/n); two_sided = min(1, 2 * min)."""
+    up, low = _tails(sprt, n, s, [float(sprt["p0"])])
+    r, f = float(up[0]), float(low[0])
+    return {"rise": round(r, 6), "fall": round(f, 6), "two_sided": round(min(1.0, 2 * min(r, f)), 6)}
+
+
+def sequential_inference(n: int, s: int, sprt: dict, conf: float = 0.95) -> dict:
+    return {"ci95": sequential_ci(n, s, sprt, conf), "p_vs_p0": sequential_pvalues(n, s, sprt), "p0": float(sprt["p0"]),
+            "ordering": "sample proportion s/n at the stop (MLE ordering)",
+            "method": "exact: enumerated stopping points of the plan's SPRT (h1/h0 boundaries, cap), inverted tails"}
+
+
+def holm(pvals: dict[str, float]) -> dict[str, float]:
+    """Holm step-down adjusted p-values (family = the keys)."""
+    ks = sorted(pvals, key=lambda k: pvals[k])
+    m, out, run = len(ks), {}, 0.0
+    for j, k in enumerate(ks):
+        run = max(run, min(1.0, (m - j) * pvals[k]))
+        out[k] = round(run, 6)
+    return {k: out[k] for k in pvals}
+
+
+def control_comparison(cand: tuple[int, int], controls: dict[str, tuple[int, int, str | None]]) -> dict:
+    """Candidate (n, s) against its matched random controls {cid: (n, s, verdict)}.
+
+    Statistic: the success proportion s/n at the stop. Every condition runs the same SPRT design, so ordering by s/n is
+    the same as ordering by the exact sequential fall p-value. p_fall = (1 + #controls with s/n <= candidate) / (1 + K)
+    is the permutation-style p-value for "a random feature does at least as badly as the candidate"; p_rise is the
+    mirror image (at least as well). With K = 10 the smallest attainable value is 1/11 = 0.0909."""
+    cn, cs = cand
+    K = len(controls)
+    worse = sorted(c for c, (n, s, _) in controls.items() if s * cn <= cs * n)
+    better = sorted(c for c, (n, s, _) in controls.items() if s * cn >= cs * n)
+    fell = sorted(c for c, (_n, _s, v) in controls.items() if v == "fall")
+    rose = sorted(c for c, (_n, _s, v) in controls.items() if v == "rise")
+    return {"n_controls": K, "controls_fell": len(fell), "controls_fell_ids": fell, "controls_rose": len(rose),
+            "n_controls_at_least_as_bad": len(worse), "controls_at_least_as_bad_ids": worse,
+            "frac_controls_at_least_as_bad": round(len(worse) / K, 4) if K else None,
+            "p_perm_fall": round((1 + len(worse)) / (1 + K), 6), "n_controls_at_least_as_good": len(better),
+            "p_perm_rise": round((1 + len(better)) / (1 + K), 6),
+            "beats_every_control_rise": bool(K) and all(s * cn < cs * n for n, s, _ in controls.values()),
+            "statistic": "success proportion s/n at the SPRT stop (same order as the sequential fall p-value)",
+            "min_attainable_p": round(1 / (1 + K), 6)}
+
+
+def arm_inference(rows: dict[str, dict], conds: dict[str, dict], alpha: float = 0.05) -> dict:
+    """(b) per-arm control comparison and (c) Holm across candidates, from per-condition {cid: {n, successes, verdict}}.
+
+    Holm families (m = number of candidates): sequential rise p, sequential fall p, permutation rise p, permutation
+    fall p. Reported only; nothing here sets a verdict or `real`."""
+    cands = [c for c, d in conds.items() if d["kind"] == "candidate"]
+    out: dict[str, Any] = {"alpha": alpha, "candidates": {}}
+    for c in cands:
+        arm = conds[c]["arm"]
+        ctrl = {k: (rows[k]["n"], rows[k]["successes"], rows[k].get("verdict")) for k, d in conds.items()
+                if d["kind"] == "control" and d["arm"] == arm and k in rows and rows[k]["n"]}
+        out["candidates"][c] = {"arm": arm, "n": rows[c]["n"], "successes": rows[c]["successes"],
+                                "verdict": rows[c].get("verdict"), "p_seq": rows[c]["sequential"]["p_vs_p0"],
+                                "vs_controls": control_comparison((rows[c]["n"], rows[c]["successes"]), ctrl)}
+    fam = {"p_seq_rise": lambda d: d["p_seq"]["rise"], "p_seq_fall": lambda d: d["p_seq"]["fall"],
+           "p_perm_rise": lambda d: d["vs_controls"]["p_perm_rise"], "p_perm_fall": lambda d: d["vs_controls"]["p_perm_fall"]}
+    out["holm"] = {}
+    for name, get in fam.items():
+        adj = holm({c: get(d) for c, d in out["candidates"].items()})
+        out["holm"][name] = adj
+        for c, v in adj.items():
+            out["candidates"][c].setdefault("holm", {})[name] = v
+    out["holm_note"] = f"Holm step-down across the {len(cands)} candidates, separately for each p-value family"
+    return out
+
+
 def mcnemar_exact_p(n10: int, n01: int) -> float:
     n = n10 + n01
     if n == 0:
@@ -632,6 +844,7 @@ class AblationState:
              "n_max": c["n_max"], "schedule_position": self.order.index(cid), "failed": c.get("_failed"),
              "finished": self.finished(cid)}
         s["sprt"] = self.decision(cid) if c["sprt"] else {"none": "fixed n, no SPRT" if c["kind"] == "baseline" else "sanity check, no SPRT"}
+        s["sequential"] = self.sequential(cid)
         if cid != "baseline" and "baseline" in self.conds:
             base = self.used("baseline")
             bn, bk = len(base), sum(base.values())
@@ -656,6 +869,17 @@ class AblationState:
                                                             if r.get("edit_stats")), default=None)}
         return s
 
+    def sequential(self, cid: str) -> dict | None:
+        """Exact early-stopping-valid interval and p-values for an SPRT condition that has stopped (None otherwise: a
+        running or failed condition is not at a stopping point of the design, and fixed-n conditions keep Wilson)."""
+        c = self.conds[cid]
+        if not c["sprt"] or c.get("_failed"):
+            return None
+        d = self.decision(cid)
+        if not d["stopped"]:
+            return None
+        return sequential_inference(d["n_used"], sum(self.used(cid).values()), self.plan["sprt"])
+
     def write_summaries(self, extra: dict | None = None) -> dict:
         per = {}
         for cid in self.order:
@@ -669,10 +893,59 @@ class AblationState:
                          | {"verdict": (per[c]["sprt"] or {}).get("verdict"),
                             "delta_paired": ((per[c].get("vs_baseline") or {}).get("paired_shared_seeds") or {}).get("delta"),
                             "n_shared": ((per[c].get("vs_baseline") or {}).get("paired_shared_seeds") or {}).get("n_shared")}
+                         | table_sequential_columns(per[c].get("sequential"))
                          for c in self.order],
                **(extra or {})}
+        top["arms"] = arms_block(top["table"], self.conds, self.plan["sprt"])
         _atomic_json(self.out / "summary.json", top)
         return top
+
+
+def table_sequential_columns(seq: dict | None) -> dict:
+    """The columns the top-level table carries next to wilson95."""
+    if not seq:
+        return {"seq95": None, "p_seq_rise": None, "p_seq_fall": None}
+    return {"seq95": seq["ci95"], "p_seq_rise": seq["p_vs_p0"]["rise"], "p_seq_fall": seq["p_vs_p0"]["fall"]}
+
+
+def arms_block(table: list[dict], conds: dict[str, dict], sprt: dict, alpha: float = 0.05) -> dict | None:
+    """(b) + (c) from the top-level table rows, once every candidate and control has stopped (else None)."""
+    rows = {r["cond"]: r for r in table}
+    need = [c for c, d in conds.items() if d["kind"] in ("candidate", "control")]
+    if any(rows.get(c, {}).get("seq95") is None for c in need):
+        return None
+    per = {c: {"n": rows[c]["n"], "successes": rows[c]["successes"], "verdict": rows[c]["verdict"],
+               "sequential": {"p_vs_p0": {"rise": rows[c]["p_seq_rise"], "fall": rows[c]["p_seq_fall"]}}} for c in need}
+    return arm_inference(per, {c: conds[c] for c in need}, alpha) | {
+        "sequential_method": "exact, under the plan's SPRT stopping rule; seq95 = equal-tailed 95% interval, p_seq_* vs p0",
+        "p0": float(sprt["p0"]), "sets_verdicts": False}
+
+
+def threshold_crossings(top: dict, alpha: float = 0.05) -> dict:
+    """What, in a finished summary, would bear on a rise finding (research rules 1-3) and what is merely below alpha.
+
+    "rise" lists anything pointing toward a finding: an SPRT rise verdict on a candidate, a Holm-adjusted sequential rise
+    p < alpha, a permutation rise p <= alpha, or a candidate beating every matched control. "below_alpha" lists every
+    other p-value under alpha (falls), which do not bear on real=true. Nothing here changes a verdict."""
+    rise, below = [], []
+    arms = top.get("arms") or {}
+    for c, d in (arms.get("candidates") or {}).items():
+        if d["verdict"] == "rise":
+            rise.append(f"{c}: SPRT verdict rise")
+        if d["holm"]["p_seq_rise"] < alpha:
+            rise.append(f"{c}: Holm sequential rise p {d['holm']['p_seq_rise']}")
+        if d["vs_controls"]["p_perm_rise"] <= alpha:
+            rise.append(f"{c}: permutation rise p {d['vs_controls']['p_perm_rise']}")
+        if d["vs_controls"]["beats_every_control_rise"]:
+            rise.append(f"{c}: beats every matched control (rise direction)")
+        for fam, v in d["holm"].items():
+            if "fall" in fam and v < alpha:
+                below.append(f"{c}: Holm {fam} {v}")
+    for r in top.get("table", []):
+        for k in ("p_seq_rise", "p_seq_fall"):
+            if r.get(k) is not None and r[k] < alpha:
+                (rise if ("cand" in r["cond"] and k == "p_seq_rise") else below).append(f"{r['cond']}: {k} {r[k]} (verdict {r['verdict']})")
+    return {"alpha": alpha, "rise": rise, "below_alpha": below}
 
 
 def _atomic_json(path: Path, obj):

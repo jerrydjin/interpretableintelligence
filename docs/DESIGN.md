@@ -32,7 +32,8 @@ All fonts are vendored as woff2 under the SIL OFL in `static/fonts/`, so the vie
 | `--ink`, `--ink-2`, `--ink-3` | `#141413`, `#5e5d59`, `#8f8d86` | Text, from strongest to quietest |
 | `--signal` | `#e8582a` (ember) | Activation. The only colour for "where a feature fires" |
 | `--steer` | `#3a5bd9` (cobalt) | Steering and the playground |
-| `--real` | `#2f6b4b` | Only on the verified tick |
+| `--real` (+ `--real-wash`, `--real-line`) | `#2f6b4b` | Only where something is verified: the tick, a passed check, the check ring, a verified feature's standing card and the playground's "Verified feature" mark |
+| `--unv-bg` (sand) | `#f7efdc` | The next experiment for a feature that is not verified yet |
 
 The heatmap reads `--signal-rgb` and `--steer-rgb` from the stylesheet. `isoTerrain()` in `app.js` hard-codes its block colours, so update it alongside them.
 
@@ -44,6 +45,7 @@ The heatmap reads `--signal-rgb` and `--steer-rgb` from the stylesheet. `isoTerr
 - The signature graphic is **isometric activation blocks**: a feature's activation on its top frame, drawn as a little terrain beside the frame.
 - The logo is two isometric columns, the two i's drawn as activations: a short ember one and a tall ink one.
 - There is one button shape, an ink pill (`.button`). The playground's Steer button uses it too.
+- The **check ring** is the verified seal: one arc per check (dictionary, many clips, name holds, beats random, learned), green when passed. A verified feature closes the ring and a tick pops into the middle; anything else shows `4/5` in the middle. The arcs draw in once, and not at all under `prefers-reduced-motion`.
 
 ## Plain words first, numbers on request
 
@@ -62,7 +64,11 @@ The feature page's "The numbers" section (the score tiles and the full top-clip 
 
 - **Explore** (a clip): clips | player | what the model notices. Each clip in the rail has a thumbnail of its first frame, and held-out clips are tagged "unseen". The playground sits under the feature list, so the order reads: watch, pick, steer. With no feature in the URL, the first **verified** feature on the frame is selected, so a newcomer starts on something real.
 - **Features**: the hardest moments (when the run has them), then a dictionary callout, then two card grids, **Verified** and **Still exploring**. Each card shows the frame where the feature fires hardest beside its isometric blocks. Cards load their art when they scroll into view, so a run with thousands of features stays fast.
-- **A feature**: the title and verdict, one "Watch it fire" button (or "Watch and steer it"), the hero, then three sections in order: what the checks say, where it fires hardest (six frames), and the numbers.
+- **A feature**: the title and verdict, then the **standing card**, the hero, then three sections in order: what the checks say, where it fires hardest (six frames), and the numbers. The standing card is the reward or the invitation. It shows the check ring and a trail of the five checks, then two columns.
+  - Verified (green wash): what the badge earns (it beat its random look-alikes on unseen clips, `ii explain` can cite it, the next bar is `ii steer-scorecard` or a rollout), and an edit to try in the playground.
+  - Not verified (white, next experiment on sand): what held it back (the first failed check in order, else the first one that did not run), and the next experiment from `guide.js`.
+  - Its one button opens the top clip with a playground edit set up and run (`?try=scale:3`), or just watches the clip when the playground is off. A failed check never ends the page: there is always something to do next.
+- **Playground**: a verified feature gets a green "Verified feature" mark and a green idea card; any other feature gets an "An experiment to try" card on sand. Both come from `IIGuide.experiments()`, which picks two edits from what the checks said. After one runs, the card says "Next, try" and offers the other, so there is always a next experiment.
 - **Below 1180px** the clip rail becomes a strip that scrolls sideways inside itself. **Below 860px** everything is one column and the header drops the status. **Below 560px** the wordmark shows only the logo. No page may scroll sideways at 390px; a test checks this.
 
 ## The demo site
@@ -101,6 +107,8 @@ The Playwright tests in `tests/test_view.py`, `test_steer.py` and `test_guide.py
 - A visible ablation chip on frame-feature rows.
 - A steer caption containing "prediction change".
 - A `guide-verdict` element containing "Verified".
+- Exactly one `[data-testid=badge]` on a feature page: the check ring and the playground's verified mark are not badges.
+- The `standing`, `standing-next`, `standing-count`, `check-trail`, `steer-idea`, `steer-idea-run` and `steer-verified` test ids.
 - `data-real` on `[data-testid=guide]`.
 - A visible top-clip table.
 - The exact `frame-readout` text (`frame 6 · t 1 · window 0`) and `sae-summary` text. Both may be hidden behind the Numbers switch, but their text must not change.

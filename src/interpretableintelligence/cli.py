@@ -21,6 +21,10 @@ from interpretableintelligence.thresholds import (
     DEFAULT_ROLLOUT_WORKERS,
     DEFAULT_RANDOM_SAE,
     DEFAULT_SEED,
+    MIN_CLIPS,
+    PROBE_BOOTSTRAP,
+    PROBE_L2,
+    PROBE_MIN_LEAD_S,
     PICK_DISCOVERY_EPISODES,
     STEER_BOOST_FACTOR,
     STEER_BOOTSTRAP,
@@ -81,18 +85,36 @@ def generate_clips_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write synthetic clips into.")],
     n: Annotated[int, typer.Option("--n", min=1, help="Number of clips.")] = 30,
     seed: Annotated[int, typer.Option("--seed", help="Generator seed.")] = 0,
+    failure_labels: Annotated[
+        str | None,
+        typer.Option(
+            "--failure-labels",
+            help="Also write failures.json for `ii probe`: 'planted' (fails when the stripe peak is in the first half) or 'null' (seeded coin, no signal).",
+        ),
+    ] = None,
 ) -> None:
     """Write deterministic synthetic clips for the fake adapter."""
-    from interpretableintelligence.adapters.fake import generate_clips
+    from interpretableintelligence.adapters.fake import FAILURE_LABELS_FILE, generate_clips
+    from interpretableintelligence.adapters.fake import failure_labels as make_labels
+    from interpretableintelligence.artifacts import write_json
 
+    try:
+        labels = None if failure_labels is None else make_labels(n, seed, failure_labels)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     generate_clips(out, n=n, seed=seed)
     typer.echo(f"wrote {n} clips to {out}")
+    if labels is not None:
+        write_json(Path(out) / FAILURE_LABELS_FILE, labels)
+        failed = sum(1 for episode in labels["episodes"] if episode["failure"])
+        typer.echo(f"wrote {failure_labels} failure labels ({failed}/{n} fail) to {Path(out) / FAILURE_LABELS_FILE}")
 
 
 @app.command("get-clips")
 def get_clips_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the clips into.")] = Path("clips/droid"),
-    n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode.")] = 100,
+    n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode. `ii run` needs at least 20.")] = 100,
     seconds: Annotated[float, typer.Option("--seconds", min=0.5, help="Length of each clip.")] = 4.0,
 ) -> None:
     """Download real robot video to try a real model on: short clips from DROID (MIT licence).
@@ -100,20 +122,37 @@ def get_clips_cmd(
     One 175 MB download, cached after the first time. Each clip is cut from the middle of a robot
     episode in a real kitchen or office and saved as an mp4.
     """
+    from interpretableintelligence.first_run import cli_command
     from interpretableintelligence.sample_clips import DATASET, LICENSE, fetch_droid_clips
 
     try:
         entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo)
     except (ValueError, RuntimeError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
+        if "connection" in str(exc).lower() or "internet" in str(exc).lower():
+            typer.echo(
+                "The first download needs internet access to huggingface.co. Later runs read the cached copy.",
+                err=True,
+            )
         raise typer.Exit(code=1) from exc
+    ii = cli_command()
     typer.echo(f"wrote {len(entries)} clips from {DATASET} ({LICENSE} licence) to {out}")
     typer.echo("")
+    if len(entries) < MIN_CLIPS:
+        typer.echo(f"Note: `{ii} run` needs at least {MIN_CLIPS} clips. Run this again with --n {MIN_CLIPS} or more first.")
+        typer.echo("")
     typer.echo("Next, find the features a real vision model uses on them, and open the playground:")
-    typer.echo(f"  ii run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
-    typer.echo("That takes about 10 minutes on a laptop CPU. Every feature is explorable but none is verified yet.")
+    typer.echo(f"  {ii} run hf --model facebook/dinov2-small --clips {out} --out runs/droid --no-score --steer")
+    typer.echo("That takes about 10 minutes on a laptop CPU (it downloads DINOv2-small, about 90 MB, once).")
+    typer.echo("Every feature is explorable, but none is verified yet: --no-score skips the checks.")
     typer.echo("To run the checks that mark features verified, run the same command without --no-score.")
-    typer.echo("It reuses what is done and adds the scoring, which takes longer (up to an hour on a CPU).")
+    typer.echo("It reuses what is done and adds the scoring, which takes longer (about 40 minutes on a 4-core CPU).")
+
+
+def _cli() -> str:
+    from interpretableintelligence.first_run import cli_command
+
+    return cli_command()
 
 
 def _adapter_name(adapter: str, model: str | None, blocks: str | None, tiny: bool = False) -> str:
@@ -162,7 +201,7 @@ def run(
         str,
         typer.Argument(help="Adapter: fake, vjepa2, hf (any Hugging Face vision model; pass --model), or groot (NVIDIA GR00T N1.7)."),
     ],
-    clips: Annotated[Path, typer.Option("--clips", exists=True, file_okay=False, help="Clip directory.")],
+    clips: Annotated[Path, typer.Option("--clips", file_okay=False, help="Clip directory (at least 20 clips).")],
     out: Annotated[Path, typer.Option("--out", help="Run folder, e.g. runs/demo.")],
     model: Annotated[
         str | None,
@@ -283,6 +322,14 @@ def run(
     from interpretableintelligence.remote.backends import RemoteSetupError
 
     modes = tuple(part.strip() for part in extra_effects.split(",") if part.strip())
+    if not clips.is_dir():
+        typer.echo(f"error: clips folder not found: {clips}", err=True)
+        maker = "generate-clips" if adapter == "fake" else "get-clips"
+        typer.echo(
+            f"Make one with `{_cli()} {maker} --out {clips}`, or pass a folder of your own videos (at least 20).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     try:
         if not remote and (gpu is not None or max_cost is not None):
             raise ValueError("--gpu and --max-cost only apply with --remote")
@@ -534,7 +581,10 @@ def rollouts(
     run_dir: Annotated[Path, typer.Argument(help="Run folder. Rollouts are written under rollouts/.")],
     policy: Annotated[
         str,
-        typer.Option("--policy", help="Policy+simulator name. This lane ships 'fake' and 'fake-null'."),
+        typer.Option(
+            "--policy",
+            help="Policy+simulator: fake, fake-null, groot-1028 (LIBERO-plus v9 ablation), groot-mock (CI replay).",
+        ),
     ] = "fake",
     episodes: Annotated[
         int,
@@ -575,6 +625,36 @@ def rollouts(
         int,
         typer.Option("--batch-size", min=1, help="New episodes per active arm between early-stop checks."),
     ] = DEFAULT_ROLLOUT_BATCH,
+    plan: Annotated[
+        Path | None,
+        typer.Option("--plan", exists=True, dir_okay=False, help="groot ablate_plan.json (default: bundled 1028 plan)."),
+    ] = None,
+    verify_slice: Annotated[
+        bool,
+        typer.Option(
+            "--verify-slice",
+            help="GR00T only: run the 8-episode verification slice (recon-only, baseline, cand-720, 2 controls).",
+        ),
+    ] = False,
+    only: Annotated[
+        str,
+        typer.Option(
+            "--only",
+            help="GR00T only: comma-separated v9 condition ids (e.g. baseline,recon-only,A-cand-720).",
+        ),
+    ] = "",
+    sae: Annotated[
+        Path | None,
+        typer.Option("--sae", exists=True, dir_okay=False, help="GR00T SAE subset weights for live v9 runs."),
+    ] = None,
+    v9_out: Annotated[
+        Path | None,
+        typer.Option(
+            "--v9-out",
+            file_okay=False,
+            help="Import existing v9 ablation logs from this directory instead of re-running.",
+        ),
+    ] = None,
     pick: Annotated[
         int | None,
         typer.Option(
@@ -600,8 +680,29 @@ def rollouts(
 ) -> None:
     """Compare baseline and intervened task success. Resume skips episodes already written."""
     from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
+    from interpretableintelligence.rollout_groot import execute_groot_rollouts, format_groot_report, is_groot_policy
 
     try:
+        if is_groot_policy(policy):
+            if pick is not None or random_sae:
+                raise ValueError("--pick and --random-sae are not available for GR00T policies yet (research rule 4 known gap)")
+            only_ids = [part.strip() for part in only.split(",") if part.strip()] or None
+            summary = execute_groot_rollouts(
+                run_dir,
+                policy=policy,
+                plan_path=plan,
+                verify_slice=verify_slice,
+                only=only_ids,
+                workers=workers,
+                alpha=alpha,
+                min_episodes=min_episodes,
+                batch_size=batch_size,
+                sae_path=sae,
+                v9_out=v9_out,
+            )
+            typer.echo(format_groot_report(summary))
+            typer.echo(f"wrote {run_dir / 'rollouts'}")
+            return
         feature_ids = parse_feature_ids(features) if features.strip() or pick is None else []
         summary = execute_rollouts(
             run_dir,
@@ -681,6 +782,56 @@ def steer_scorecard_cmd(
     typer.echo(f"wrote {run_dir / 'steering'}")
 
 
+@app.command("probe")
+def probe_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder. The result is written under probe/.")],
+    labels: Annotated[
+        Path | None,
+        typer.Option(
+            "--labels",
+            exists=True,
+            dir_okay=False,
+            help="Episode failure labels (JSON: episodes[] of clip_id, failure, onset_s). Default: failures.json in the run's clips_dir.",
+        ),
+    ] = None,
+    lead: Annotated[
+        float,
+        typer.Option("--lead-s", help=f"Seconds before onset the probe must stop looking. The gate needs at least {PROBE_MIN_LEAD_S:g}."),
+    ] = PROBE_MIN_LEAD_S,
+    seed: Annotated[int, typer.Option("--seed", help="Bootstrap seed.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Paired bootstrap resamples of held-out episodes.")] = PROBE_BOOTSTRAP,
+    l2: Annotated[float, typer.Option("--l2", help="L2 penalty of the logistic probe (same for every input).")] = PROBE_L2,
+    random_seed: Annotated[
+        int | None,
+        typer.Option("--random-seed", help="Seed of the random-weights SAE control. Default: the trained SAE's seed (its own untrained start)."),
+    ] = None,
+) -> None:
+    """Held-out failure probe: trained SAE latents vs a random-weights SAE and raw activations.
+
+    Fits one logistic probe per input on split.json's train clips, scores held-out clips, and passes
+    sae_gate only if the trained SAE beats both baselines on AUROC (paired bootstrap p < 0.05) at a lead
+    of at least 1 s. Never changes scoreboard.json, never sets real, and is not a rollout finding.
+    """
+    from interpretableintelligence.probe import execute_probe, format_report
+
+    try:
+        result = execute_probe(
+            run_dir,
+            labels_path=labels,
+            lead_s=lead,
+            seed=seed,
+            bootstrap=bootstrap,
+            l2=l2,
+            random_seed=random_seed,
+            log=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(format_report(result))
+    typer.echo(f"wrote {run_dir / 'probe'}")
+
+
 @app.command("export")
 def export_cmd(
     run_dir: Annotated[Path, typer.Argument(help="Run folder to export.")],
@@ -700,6 +851,14 @@ def export_cmd(
         int, typer.Option("--steer-features", min=1, help="Strongest features per clip window to precompute.")
     ] = 6,
     title: Annotated[str | None, typer.Option("--title", help="Page title, also used on the link preview.")] = None,
+    max_clips: Annotated[
+        int | None,
+        typer.Option(
+            "--max-clips",
+            min=1,
+            help="Carry only this many clips (top examples of verified features first), to keep a large run small enough to host.",
+        ),
+    ] = None,
 ) -> None:
     """Export a run as a static site: host the folder anywhere and share the link. No server needed."""
     from interpretableintelligence.explain import ExplainError
@@ -714,6 +873,7 @@ def export_cmd(
             steer_clips=steer_clips,
             steer_features=steer_features,
             title=title,
+            max_clips=max_clips,
             log=typer.echo,
         )
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ExplainError) as exc:
@@ -743,16 +903,53 @@ def export_site_cmd(
         Path,
         typer.Option("--groot", help="Directory with groot-1028-ablate-summary.json."),
     ] = Path("demo-data/groot"),
+    droid: Annotated[
+        Path | None,
+        typer.Option(
+            "--droid",
+            help="An `ii export` of a real run to publish at /droid/. Default: keep the copy already in the site.",
+        ),
+    ] = None,
 ) -> None:
     """Regenerate the static demo site from a fresh fake run and the vendored measurements."""
     from interpretableintelligence.export_site import export_site
 
     try:
-        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot)
+        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot, droid_dir=droid)
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"wrote {dest}")
+
+
+@app.command("import")
+def import_cmd(
+    source: Annotated[Path, typer.Argument(help="Capture to import: a directory, or a .tar / .tar.xz / .tar.gz of one.")],
+    out: Annotated[Path, typer.Argument(help="Run folder to write. Must not exist or must be empty.")],
+    format_name: Annotated[str, typer.Option("--format", help="Source layout. Known: groot-v9.")],
+    model_sha: Annotated[
+        str | None,
+        typer.Option(
+            "--model-sha",
+            help="manifest.model.sha to record. Default: the same sha ii run groot computes (needs the Hugging Face Hub), "
+            "else a digest of the declared model; the manifest records which.",
+        ),
+    ] = None,
+    fps: Annotated[float, typer.Option("--fps", help="Env steps per second, recorded as clips[].fps (LIBERO: 20).")] = 20.0,
+) -> None:
+    """Import rollout logs captured outside ii into a run folder that ii validate accepts.
+
+    split.json is copied byte for byte. Metrics that need the model in the loop are null, each with a reason in
+    manifest.import.nulls, and every feature stays real: false.
+    """
+    from interpretableintelligence.importers import import_run
+
+    try:
+        import_run(format_name, source, out, log=typer.echo, model_sha=model_sha, fps=fps)
+    except (ValueError, FileNotFoundError, FileExistsError, KeyError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"next: ii validate {out}")
 
 
 @app.command("compare")

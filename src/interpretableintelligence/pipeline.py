@@ -67,6 +67,7 @@ from interpretableintelligence.store import (
     cache_matches_layout,
 )
 from interpretableintelligence.thresholds import (
+    DISTINCT_CLIPS_TOP20,
     DEAD_ACT_EPS,
     DEFAULT_HELDOUT_FRAC,
     DEFAULT_LAYER,
@@ -84,11 +85,15 @@ from interpretableintelligence.thresholds import (
     LABEL_HOLD_MIN_CORR,
     MIN_CLIPS,
     N_RANDOM_FEATURES,
+    RANDOM_PERCENTILE_MIN,
     PATTERN_ABSENT_MAX_CORR,
     TOP_K_ABLATION_PER_CLIP,
     TOP_K_EXAMPLES,
 )
 from interpretableintelligence.view import bind_server, enable_steering, load_run
+
+# Torch's own default (physical cores it may use), read before any run changes it.
+_DEFAULT_THREADS = max(1, torch.get_num_threads())
 
 STAGES = ("capture", "sae", "features", "score", "view")
 REPORT_BEGIN = "--- interpretableintelligence cost report ---"
@@ -243,15 +248,18 @@ def execute_pipeline(
     prefilter = None if prefilter is None else int(prefilter)
     extra_effects = check_extra_effects(extra_effects)
 
-    # One thread keeps runs bit-reproducible; II_THREADS trades that for speed on a CPU-only box.
-    torch.set_num_threads(max(1, int(os.environ.get("II_THREADS", "1"))))
+    torch.set_num_threads(_cpu_threads(adapter_name))
     device = pick_device()
     clips_dir = Path(clips_dir)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     meta = list_clip_meta(clips_dir)
     if len(meta) < MIN_CLIPS:
-        raise ValueError(f"need at least {MIN_CLIPS} clips, found {len(meta)} in {clips_dir}")
+        raise ValueError(
+            f"need at least {MIN_CLIPS} clips, found {len(meta)} in {clips_dir}. Some clips are held out to "
+            "check each feature on video the model was not trained on, so a run needs enough of them. "
+            "No clips of your own? `ii get-clips` downloads 100 short robot clips."
+        )
 
     cache = ActivationCache.open(cache_dir, enabled=use_cache)
     adapter_cls = get_adapter(adapter_name)
@@ -275,10 +283,16 @@ def execute_pipeline(
     n_features = config.n_features
     if prefilter is None and n_features > SCORE_ALL_MAX_FEATURES:
         prefilter = DEFAULT_PREFILTER_K
-        log(
-            f"{n_features} SAE features: scoring the {prefilter} with the largest attribution "
-            "(pass --prefilter K to change). The rest stay unverified."
-        )
+        if score:
+            log(
+                f"{n_features} SAE features: scoring the {prefilter} with the largest attribution "
+                "(pass --prefilter K to change). The rest stay unverified."
+            )
+        else:
+            log(
+                f"{n_features} SAE features. --no-score: nothing is checked now, so every feature stays "
+                f"unverified. Run again without --no-score to check the {prefilter} with the largest attribution."
+            )
     sae_inputs = _with_kind(capture_inputs, "sae", sae=config.as_dict())
 
     if _capture_ready(out, capture_inputs, grid, len(meta)):
@@ -371,6 +385,15 @@ def execute_pipeline(
                 extra_effects=extra_effects,
                 concepts_file=concepts_file,
                 cache=cache,
+                controls_key=_with_kind(
+                    feature_inputs,
+                    "random_controls",
+                    stats_sha=file_sha256(stats_path),
+                    seed=int(seed),
+                    n_random=N_RANDOM_FEATURES,
+                    device=str(device),
+                    threads=int(torch.get_num_threads()),
+                ),
             )
             measured["rows"] = effect_rows
             measured["tokens"] = int(read_json(out / "acts" / "stream" / "meta.json")["n"])
@@ -384,6 +407,7 @@ def execute_pipeline(
         view_inputs = _with_kind(view_inputs, "view", scoreboard_sha=file_sha256(out / "scoreboard.json"))
     httpd = None
     thread = None
+    _url = None
     if _view_ready(out, view_inputs):
         log("skip view")
         if serve:
@@ -409,6 +433,8 @@ def execute_pipeline(
         log(line)
     if not serve:
         log("viewer not started")
+    for line in _closing_lines(out, _url if thread is not None else None, score=score, steer=steer):
+        log(line)
     try:
         if thread is not None:
             thread.join()
@@ -421,6 +447,22 @@ def execute_pipeline(
                 thread.join(timeout=5)
             httpd.server_close()
     return {"report": report, "scoreboard": scoreboard, "manifest": manifest}
+
+
+def _cpu_threads(adapter_name: str) -> int:
+    """Torch CPU threads for a run.
+
+    The fake acceptance run is tiny matmuls and keeps one thread, so its
+    reference scoreboard is stable. Real models are dominated by large
+    matmuls and use every core (one thread was 3 to 4 times slower on a
+    4-core CPU). ``II_THREADS`` overrides both.
+    """
+    override = os.environ.get("II_THREADS", "").strip()
+    if override:
+        return max(1, int(override))
+    if adapter_name == "fake":
+        return 1
+    return _DEFAULT_THREADS
 
 
 def _report(manifest: dict, gpu_cost_per_hour: float | None) -> dict:
@@ -443,6 +485,35 @@ def _report(manifest: dict, gpu_cost_per_hour: float | None) -> dict:
         elapsed = sum(float(stage["wall_s"]) for stage in stages.values())
         report["cost_per_hour_footage"] = footage_cost(elapsed, video_s, float(gpu_cost_per_hour))
     return report
+
+
+def _closing_lines(out: Path, url: str | None, *, score: bool, steer: bool) -> list[str]:
+    """Where to look and what the run does and does not show, after the cost report scrolls past."""
+    lines = [""]
+    if url:
+        lines.append(f"Viewer: {url}{' (playground on)' if steer else ''}. Press Ctrl+C to stop.")
+    if not score:
+        lines.append(
+            "Nothing is verified yet: --no-score skipped the checks. Every feature is open to explore."
+        )
+        lines.append("To check features, run the same command without --no-score; it reuses what is done.")
+        return lines
+    board = _read_scoreboard(out) or {}
+    features = [f for f in board.get("features") or [] if isinstance(f, dict)]
+    if not features:
+        return lines
+    real = sum(1 for f in features if f.get("real") is True)
+    measured = sum(1 for f in features if f.get("ablation_effect") is not None)
+    if real:
+        lines.append(f"{real} of {len(features)} features passed every check: verified, marked real in the viewer.")
+    else:
+        lines.append("No feature passed every check, so none is verified. 'Features' in the viewer shows what each missed.")
+    if measured < len(features):
+        lines.append(
+            f"The ablation check ran on {measured} of them. It skips features outside --prefilter and ones that "
+            "already failed a cheaper check; they stay unverified but explorable."
+        )
+    return lines
 
 
 def _progress(log, stage: str, done: int, total: int, started: float) -> None:
@@ -694,6 +765,7 @@ def _score(
     extra_effects: tuple[str, ...] = (),
     concepts_file: Path | None = None,
     cache: ActivationCache | None = None,
+    controls_key: dict | None = None,
 ) -> tuple[dict, int]:
     stats = json.loads((out / "features" / "stats.json").read_text(encoding="utf-8"))
     manifest = read_json(out / "manifest.json")
@@ -704,6 +776,15 @@ def _score(
         raise RuntimeError("feature stats do not match the SAE")
     control_inputs = {"kind": "control", "capture": capture_inputs, "sae": config.as_dict()}
     control_dir = out / "control"
+    laps: dict[str, float] = {}
+    lap_started = time.perf_counter()
+
+    def lap(name: str) -> None:
+        nonlocal lap_started
+        now = time.perf_counter()
+        laps[name] = laps.get(name, 0.0) + now - lap_started
+        lap_started = now
+
     if _control_acts_ready(control_dir / "acts", control_inputs, manifest["grid"], len(meta)):
         log("score: reuse random-init activations")
     else:
@@ -732,6 +813,7 @@ def _score(
         del control_model
         _write_complete(control_dir / "sae" / "complete.json", control_inputs, {})
     control_model, _control_config = load_sae(control_dir / "sae", device)
+    lap("random-init model and SAE")
     labels, absent = _correlate(
         out / "acts",
         control_dir / "acts",
@@ -743,6 +825,7 @@ def _score(
         concepts=_concept_source(adapter, concepts_file, device, log, tiny),
     )
     del control_model
+    lap("labels and random-init comparison")
 
     membership = {item["clip_id"]: item for item in manifest["clips"]}
     heldout_meta = [item for item in meta if membership[item["clip_id"]]["split"] == "heldout"]
@@ -761,6 +844,7 @@ def _score(
     )
 
     _clear_cache(adapter)
+    lap("SAE usability")
     top_k = min(TOP_K_ABLATION_PER_CLIP, n_features)
     effects_path = out / "features" / "clip_effects.parquet"
     effect_writer = _ColumnBatch(effects_path, _EFFECT_SCHEMA)
@@ -779,9 +863,16 @@ def _score(
             reported_k = min(DEFAULT_PREFILTER_K, n_features)
         else:
             reported_k = min(int(prefilter), n_features)
-            selected = set(ranked_ids[:reported_k])
             log(f"prefilter K={reported_k}  candidates={ranked_ids[:reported_k]}")
-        _autointerp(adapter, model, meta, out, labels, selected, ranked_ids, device, seed, log)
+        # Checks that need no ablation and no labeller: a feature failing one can never be verified.
+        free_ok = [
+            bool(usable and int(stats["features"][fid]["distinct_clips_top20"]) >= DISTINCT_CLIPS_TOP20 and absent[fid])
+            for fid in range(n_features)
+        ]
+        selected = _causal_shortlist(
+            adapter, model, meta, out, labels, ranked_ids, None if prefilter is None else reported_k,
+            free_ok, device, seed, log,
+        )
         chosen = {
             clip_id: [int(index) for index in np.argsort(-np.asarray(scores), kind="stable")[:top_k]]
             for clip_id, scores in rank.items()
@@ -826,6 +917,8 @@ def _score(
         real_labels = []
         control_seconds = 0.0
         controls_done = 0
+        controls_reused = 0
+        control_store = _ControlStore(out / "control" / "random_controls.json", controls_key)
         for feature_id in range(n_features):
             info = stats["features"][feature_id]
             labelled = labels[feature_id]
@@ -846,18 +939,26 @@ def _score(
                         f"score: {N_RANDOM_FEATURES} random controls for feature {feature_id} "
                         f"({controls_done}/{len(selected)})"
                     )
-                fires = _fire_values(connection, fire_source, feature_id)
-                percentile = _random_percentile(
-                    adapter=adapter,
-                    sae=model,
-                    feature_id=feature_id,
-                    real_effect=effect,
-                    fires=fires,
-                    pool=pool,
-                    meta=meta,
-                    heldout_meta=heldout_meta,
-                    seed=int(seed),
-                )
+                percentile = control_store.lookup(feature_id, effect)
+                if percentile is not None:
+                    controls_reused += 1
+                else:
+                    fires = _fire_values(connection, fire_source, feature_id)
+                    control_samples: list[float] = []
+                    percentile = _random_percentile(
+                        adapter=adapter,
+                        sae=model,
+                        feature_id=feature_id,
+                        real_effect=effect,
+                        fires=fires,
+                        pool=pool,
+                        meta=meta,
+                        heldout_meta=heldout_meta,
+                        seed=int(seed),
+                        n_tokens=int(held_count[feature_id]) if STOP_CONTROLS_ON_FAIL else None,
+                        keep=control_samples,
+                    )
+                    control_store.record(feature_id, effect, percentile, control_samples)
                 control_seconds += time.perf_counter() - started_controls
                 n_random = N_RANDOM_FEATURES
             absent_flag = bool(absent[feature_id])
@@ -947,10 +1048,13 @@ def _score(
             },
         ),
     )
+    if controls_reused:
+        log(f"score: reused the random controls of {controls_reused} features from an earlier scoring pass")
     log(
         f"attribution {attribution_seconds:.3f}s  ablation {ablation_seconds:.3f}s  "
         f"random_controls {control_seconds:.3f}s"
     )
+    log("score: before the causal checks: " + "  ".join(f"{name} {seconds:.0f}s" for name, seconds in laps.items()))
     log(f"wrote {out}  real={len(real_labels)} {real_labels}")
     return scoreboard, int(effects)
 
@@ -1027,7 +1131,7 @@ def _correlate(
     seen = 0
     cues = concepts
     auroc = _AurocLabels(n_features, n_cues) if getattr(concepts, "statistic", "pearson") == "auroc" else None
-    chunk = _chunk_rows(n_features, model.d_model)
+    chunk = _score_chunk_rows(n_features, model.d_model)
     with RowSource(main_acts) as main, RowSource(control_acts) as control:
         if main.n != control.n or main.d_model != control.d_model:
             raise RuntimeError("random-init activations are not aligned with the run")
@@ -1103,27 +1207,7 @@ def _correlate(
                 "label_holds_heldout": bool(held >= LABEL_HOLD_MIN_CORR),
             }
         )
-    absent = []
-    for feature_id in range(n_features):
-        std = _std(sum_main[feature_id], sum_main2[feature_id], n_tokens)
-        if std <= DEAD_ACT_EPS:
-            absent.append(False)
-            continue
-        best = 0.0
-        for other in range(n_features):
-            other_std = _std(sum_ctrl[other], sum_ctrl2[other], n_tokens)
-            if other_std <= DEAD_ACT_EPS:
-                continue
-            corr = _corr(
-                sum_main[feature_id],
-                sum_ctrl[other],
-                sum_main2[feature_id],
-                sum_ctrl2[other],
-                cross[feature_id, other],
-                n_tokens,
-            )
-            best = max(best, corr)
-        absent.append(bool(best < PATTERN_ABSENT_MAX_CORR))
+    absent = _absent_flags(sum_main, sum_main2, sum_ctrl, sum_ctrl2, cross, n_tokens)
     return labels, absent
 
 
@@ -1199,42 +1283,53 @@ def _ablation_rows(
                 baseline, _target = adapter.predict_masked(clip, window)
                 baselines.append(baseline.detach())
                 masks.append(adapter.mask(window).detach())
-            # Every feature's edit on a window runs as one batch when the adapter supports it.
-            edits = [ablate_edit(sae, feature_id) for feature_id in feature_ids]
-            dists_by_window = []
-            for window, baseline in zip(windows, baselines, strict=True):
+            for start in range(0, len(feature_ids), ABLATION_BATCH):
+                group = feature_ids[start : start + ABLATION_BATCH]
+                edits = [ablate_edit(sae, feature_id) for feature_id in group]
+                # One batched, downstream-only pass per window for the whole group.
+                # Rows and sums still go feature by feature, window by window.
+                dists_by_window = []
                 with torch.no_grad():
-                    edited_all = _predict_many(adapter, clip, window, edits)
-                dists_by_window.append(
-                    [cosine_distance(baseline, edited).detach().cpu() for edited in edited_all]
-                )
-            for slot, feature_id in enumerate(feature_ids):
-                for window, mask, dists in zip(windows, masks, dists_by_window, strict=True):
-                    dist = dists[slot]
-                    if heldout:
-                        held_total[feature_id] += float(dist.sum())
-                        held_count[feature_id] += int(dist.numel())
-                    if feature_id not in record_ids:
-                        continue
-                    coords = mask.detach().cpu().nonzero(as_tuple=False)
-                    for t_index in range(int(adapter.grid().t)):
-                        selected = coords[:, 0] == t_index
-                        value = float(dist[selected].mean()) if int(selected.sum()) else 0.0
-                        writer.add(
-                            feature_id=np.asarray([feature_id], dtype=np.int32),
-                            clip_id=[clip.clip_id],
-                            window=np.asarray([int(window.index)], dtype=np.int16),
-                            t=np.asarray([t_index], dtype=np.int16),
-                            effect=np.asarray([value], dtype=np.float32),
-                            effect_kind=["ablation"],
-                        )
+                    for window, baseline in zip(windows, baselines, strict=True):
+                        edited_many = _predict_many(adapter, clip, window, edits)
+                        dists_by_window.append([cosine_distance(baseline, edited).detach().cpu() for edited in edited_many])
+                for slot, feature_id in enumerate(group):
+                    _ablation_feature_rows(
+                        adapter, clip, windows, masks, [dists[slot] for dists in dists_by_window],
+                        feature_id, heldout, record_ids, held_total, held_count, writer,
+                    )
 
         _with_clip(adapter, item, visit)
         _progress(log, "score: ablations", done, len(meta), started)
     return held_total, held_count
 
 
-def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, meta, heldout_meta, seed: int) -> float:
+def _ablation_feature_rows(adapter, clip, windows, masks, dists, feature_id, heldout, record_ids, held_total, held_count, writer) -> None:
+    """Held-out sums and per-frame ``ablation`` rows for one feature on one clip."""
+    for window, mask, dist in zip(windows, masks, dists, strict=True):
+        if heldout:
+            held_total[feature_id] += float(dist.sum())
+            held_count[feature_id] += int(dist.numel())
+        if feature_id not in record_ids:
+            continue
+        coords = mask.detach().cpu().nonzero(as_tuple=False)
+        for t_index in range(int(adapter.grid().t)):
+            selected = coords[:, 0] == t_index
+            value = float(dist[selected].mean()) if int(selected.sum()) else 0.0
+            writer.add(
+                feature_id=np.asarray([feature_id], dtype=np.int32),
+                clip_id=[clip.clip_id],
+                window=np.asarray([int(window.index)], dtype=np.int16),
+                t=np.asarray([t_index], dtype=np.int16),
+                effect=np.asarray([value], dtype=np.float32),
+                effect_kind=["ablation"],
+            )
+
+
+def _random_percentile(
+    *, adapter, sae, feature_id, real_effect, fires, pool, meta, heldout_meta, seed: int, n_tokens: int | None = None,
+    keep: list[float] | None = None,
+) -> float:
     """Percentile of ``real_effect`` among ``N_RANDOM_FEATURES`` matched random directions.
 
     Every trial draws its directions and positions up front, in the same RNG
@@ -1242,8 +1337,21 @@ def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, me
     unedited prediction is computed once per window, and every trial's edit is
     measured against that. Per-trial sums still add clips and windows in the
     same order, so the samples are unchanged.
+
+    ``n_tokens`` is the held-out token count every trial ends on (the feature's
+    own ablation saw the same windows). With it, the controls stop as soon as
+    the percentile gate is certain to fail: cosine distances are never
+    negative, so a running sum only grows, and a trial whose partial mean
+    already beats ``real_effect`` will beat it at the end. The verdict is the
+    same; the returned value is then an upper bound on the full percentile
+    (see :func:`_percentile_upper_bound`). A feature that can still pass always
+    runs every control, so a pass is always the exact percentile.
+
+    ``keep`` receives the control effects when every control ran to the end.
     """
     if fires.size == 0:
+        if keep is not None:
+            keep.extend([0.0] * N_RANDOM_FEATURES)
         return percentile_le(real_effect, np.zeros(N_RANDOM_FEATURES, dtype=np.float64))
     decoder = sae.W_dec[:, feature_id].detach()
     dec_norm = float(decoder.norm().clamp(min=1e-8))
@@ -1278,26 +1386,149 @@ def _random_percentile(*, adapter, sae, feature_id, real_effect, fires, pool, me
                     baseline, _target = adapter.predict_masked(clip, window)
                     edits = []
                     for direction, by_clip in trials:
-                        positions = by_clip.get(clip_key, [])
+                        edits.append(_control_edit(by_clip.get(clip_key, []), direction))
+                    # Slices line up with the adapter's own batches, so each forward
+                    # sees the same inputs as one call with every edit. Checking
+                    # between slices lets a certain fail stop mid-window.
+                    step = _edits_per_batch(adapter, window) or len(edits)
+                    for start in range(0, len(edits), step):
+                        edited_many = _predict_many(adapter, clip, window, edits[start : start + step])
+                        for trial, edited in enumerate(edited_many, start=start):
+                            dist = cosine_distance(baseline, edited)
+                            totals[trial] += float(dist.sum())
+                            counts[trial] += int(dist.numel())
+                        if _fail_is_certain(totals, n_tokens, real_effect):
+                            raise _ControlsDecided
 
-                        def edit(acts: torch.Tensor, positions=positions, direc=direction) -> torch.Tensor:
-                            out = acts.clone()
-                            for ti, hi, wi, value in positions:
-                                out[ti, hi, wi] = out[ti, hi, wi] - value * direc
-                            return out
-
-                        edits.append(edit)
-                    for trial, edited in enumerate(_predict_many(adapter, clip, window, edits)):
-                        dist = cosine_distance(baseline, edited)
-                        totals[trial] += float(dist.sum())
-                        counts[trial] += int(dist.numel())
-
-        _with_clip(adapter, item, visit)
+        try:
+            _with_clip(adapter, item, visit)
+        except _ControlsDecided:
+            return _percentile_upper_bound(totals, n_tokens, real_effect)
     samples = np.array(
         [0.0 if count == 0 else total / count for total, count in zip(totals, counts, strict=True)],
         dtype=np.float64,
     )
+    if keep is not None:
+        keep.extend(float(value) for value in samples)
     return percentile_le(real_effect, samples)
+
+
+class _ControlStore:
+    """Finished random-control results for one SAE, kept across score reruns.
+
+    A feature's control effects depend on the model, the SAE, the held-out
+    clips and the seed, not on its label or on which features share the
+    shortlist. So relabelling (a new concept list or label model), a different
+    ``--prefilter`` or a run that was interrupted reuses them instead of
+    paying for the forwards again. ``inputs`` names everything the samples
+    depend on; a store written for other inputs is ignored.
+
+    A full set of control effects answers any ``real_effect``. A stopped
+    feature (certain fail) only kept an upper bound, which is reused only for
+    the identical ``real_effect``. A resume artefact, not part of the run contract.
+    """
+
+    def __init__(self, path: Path | None, inputs: dict | None) -> None:
+        self.path = path
+        self.inputs = inputs
+        self.features: dict[str, dict] = {}
+        if path is None or inputs is None or not path.is_file():
+            return
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            if _canon(saved.get("inputs")) == _canon(inputs) and isinstance(saved.get("features"), dict):
+                self.features = saved["features"]
+        except (OSError, ValueError, AttributeError):
+            self.features = {}
+
+    def lookup(self, feature_id: int, real_effect: float) -> float | None:
+        row = self.features.get(str(int(feature_id)))
+        if not isinstance(row, dict):
+            return None
+        samples = row.get("samples")
+        if isinstance(samples, list) and len(samples) == N_RANDOM_FEATURES:
+            return percentile_le(real_effect, np.asarray(samples, dtype=np.float64))
+        if row.get("real_effect") == real_effect and isinstance(row.get("upper_bound"), float):
+            return float(row["upper_bound"])
+        return None
+
+    def record(self, feature_id: int, real_effect: float, percentile: float, samples: list[float]) -> None:
+        if self.path is None or self.inputs is None:
+            return
+        row: dict = {"real_effect": float(real_effect)}
+        if len(samples) == N_RANDOM_FEATURES:
+            row["samples"] = samples
+        else:
+            row["upper_bound"] = float(percentile)
+        self.features[str(int(feature_id))] = row
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(self.path, {"inputs": self.inputs, "features": self.features})
+        except OSError:
+            pass
+
+
+# Stop a feature's random controls once its percentile gate is certain to fail.
+# Verdicts are unchanged; a failing feature then records an upper bound.
+STOP_CONTROLS_ON_FAIL = True
+
+
+class _ControlsDecided(Exception):
+    """Raised inside a clip visit once the percentile gate is certain to fail."""
+
+
+def _controls_beating(totals: list[float], n_tokens: int, real_effect: float) -> int:
+    """Trials whose running mean already exceeds ``real_effect``; final means can only be larger."""
+    return sum(1 for total in totals if total / n_tokens > real_effect)
+
+
+def _percentile_upper_bound(totals: list[float], n_tokens: int, real_effect: float) -> float:
+    """``percentile_le`` if every trial not yet beating the feature ends up at or below it."""
+    beaten = _controls_beating(totals, n_tokens, real_effect)
+    return float(100.0 * ((len(totals) - beaten) / len(totals)))
+
+
+def _fail_is_certain(totals: list[float], n_tokens: int | None, real_effect: float) -> bool:
+    if not n_tokens or not math.isfinite(real_effect):
+        return False
+    return _percentile_upper_bound(totals, n_tokens, real_effect) < RANDOM_PERCENTILE_MIN
+
+
+# Feature ablations measured per batched pass in ``_ablation_rows``. Bounds the
+# edited outputs held at once when every feature of a small SAE is ablated.
+ABLATION_BATCH = 32
+
+
+def _control_edit(positions: list[tuple[int, int, int, float]], direction: torch.Tensor):
+    """Subtract ``value * direction`` at each ``(t, h, w)`` in one indexed op.
+
+    Positions within a trial are distinct tokens, so this is elementwise the
+    same float32 arithmetic as updating them one at a time.
+    """
+    if not positions:
+        return lambda acts: acts.clone()
+    device = direction.device
+    ti = torch.tensor([p[0] for p in positions], dtype=torch.long, device=device)
+    hi = torch.tensor([p[1] for p in positions], dtype=torch.long, device=device)
+    wi = torch.tensor([p[2] for p in positions], dtype=torch.long, device=device)
+    values = torch.tensor([p[3] for p in positions], dtype=torch.float32, device=device)
+    delta = values[:, None] * direction
+
+    def edit(acts: torch.Tensor) -> torch.Tensor:
+        out = acts.clone()
+        out[ti, hi, wi] = out[ti, hi, wi] - delta.to(out.dtype)
+        return out
+
+    return edit
+
+
+def _edits_per_batch(adapter, window) -> int | None:
+    """Edits per batched forward in the adapter's ``predict_masked_many``, if it says."""
+    many = getattr(adapter, "predict_masked_many", None)
+    size = getattr(adapter, "edits_per_batch", None)
+    if many is None or size is None:
+        return None
+    return max(1, int(size(window)))
 
 
 def _predict_many(adapter, clip, window, edits) -> list[torch.Tensor]:
@@ -1491,33 +1722,101 @@ def _concept_inputs(adapter_name: str, concepts_file, tiny: bool = False) -> dic
     return inputs
 
 
-def _autointerp(adapter, sae, meta, out: Path, labels: list[dict], selected, ranked_ids, device, seed, log) -> None:
-    """Replace the CLIP labels of the features being scored with explain-then-simulate labels.
+def _autointerp_client(adapter, out: Path | None = None):
+    """The vision-model client for explain-then-simulate labels, or ``None``.
 
     Only for hf and only when a vision-model key is set (``autointerp.client_from_env``).
-    The label still has to hold on held-out clips at the same AUROC bar. A provider
-    error keeps the CLIP labels and says so; it never fails the run.
+    With ``out``, every reply is also kept in the run folder (``control/autointerp/``,
+    a resume artefact). Providers do not answer the same question the same way
+    twice, so without this a rescore on another machine, or after the user's
+    cache is cleared, could take a verified feature's label away. A run's labels
+    now come back the same wherever it is scored again.
     """
     if not adapter.name.startswith("hf:"):
-        return
-    from interpretableintelligence.autointerp import MAX_FEATURES, client_from_env, label_features
+        return None
+    from interpretableintelligence.autointerp import CachedClient, client_from_env
 
     client = client_from_env()
-    if client is None:
-        return
-    targets = sorted(selected) if selected is not None else sorted(ranked_ids[: min(MAX_FEATURES, len(ranked_ids))])
-    log(f"score: auto-interp labels from {client.name} for {len(targets)} features")
+    if client is None or out is None:
+        return client
+    return CachedClient(client, Path(out) / "control" / "autointerp")
+
+
+def _autointerp_label(client, adapter, sae, meta, out: Path, labels: list[dict], targets, device, seed, log) -> list[dict] | None:
+    """Replace the labels of ``targets`` with explain-then-simulate labels; returns their evidence rows.
+
+    The label still has to hold on held-out clips at the same AUROC bar. A provider
+    error keeps the labels the features had and returns ``None``; it never fails the run.
+    """
+    from interpretableintelligence.autointerp import label_features
+
     try:
         new, evidence = label_features(
             client=client, adapter=adapter, meta=meta, acts_dir=out / "acts", sae=sae,
-            feature_ids=targets, device=device, seed=int(seed), log=log,
+            feature_ids=sorted(targets), device=device, seed=int(seed), log=log,
         )
     except RuntimeError as exc:
         log(f"score: auto-interp failed ({exc}); keeping CLIP labels")
-        return
+        return None
     for feature_id, row in new.items():
         labels[feature_id] = row
-    write_json(out / "features" / "autointerp.json", evidence)
+    return [dict(evidence, features=[])] + list(evidence["features"])
+
+
+def _causal_shortlist(
+    adapter, sae, meta, out: Path, labels: list[dict], ranked_ids, k: int | None, free_ok: list[bool], device, seed, log
+) -> set[int] | None:
+    """Which features get the ablation and its random controls. ``None`` scores every feature.
+
+    The causal checks are the expensive part of scoring: a feature that passes
+    them costs ``N_RANDOM_FEATURES`` edited forwards of every held-out window.
+    A shortlisted feature that already fails a check that needs no ablation
+    (unusable SAE, too few distinct clips, present at random init, label not
+    holding) cannot be verified whatever its controls say, so its slot is not
+    spent: it stays unmeasured, like a feature outside the shortlist. No gate
+    changes, and the features that end up ``real`` are the same ones.
+
+    With a vision-model key the shortlist is relabelled first, so the label
+    check is known before any ablation. When no shortlisted feature can be
+    verified, the whole shortlist is scored as before, so the run still ends
+    with causal numbers to explore.
+    """
+    from interpretableintelligence.autointerp import MAX_FEATURES
+
+    client = _autointerp_client(adapter, out)
+    evidence: list[dict] = []
+    if k is None:
+        if client is not None:
+            targets = ranked_ids[: min(MAX_FEATURES, len(ranked_ids))]
+            log(f"score: auto-interp labels from {client.name} for {len(targets)} features")
+            evidence = _autointerp_label(client, adapter, sae, meta, out, labels, targets, device, seed, log) or []
+        _write_autointerp(out, evidence)
+        return None
+    top = list(ranked_ids[:k])
+    if client is not None:
+        log(f"score: auto-interp labels from {client.name} for {len(top)} features")
+        evidence = _autointerp_label(client, adapter, sae, meta, out, labels, top, device, seed, log) or []
+    _write_autointerp(out, evidence)
+    verifiable = [fid for fid in top if free_ok[fid] and labels[fid]["label_holds_heldout"]]
+    if verifiable:
+        log(
+            f"score: {len(verifiable)} of the {len(top)} shortlisted features pass every check that needs no "
+            f"ablation; running the causal checks on them: {verifiable}"
+        )
+        return set(verifiable)
+    log(
+        "score: no shortlisted feature passes the checks that need no ablation (usable SAE, distinct clips, "
+        f"absent at random init, label holds), so none can be verified. Scoring all {len(top)} to explore."
+    )
+    return set(top)
+
+
+def _write_autointerp(out: Path, evidence: list[dict]) -> None:
+    if not evidence:
+        return
+    document = dict(evidence[0])
+    document["features"] = sorted(evidence[1:], key=lambda row: int(row["id"]))
+    write_json(out / "features" / "autointerp.json", document)
 
 
 def _concept_source(adapter, concepts_file, device, log, tiny: bool = False):
@@ -1733,6 +2032,40 @@ def _accumulate_labels(label_n, sum_a, sum_a2, sum_c, sum_c2, sum_ac, feats, cue
         sum_ac[split_id] += acts.T @ cue_rows
 
 
+def _absent_flags(sum_main, sum_main2, sum_ctrl, sum_ctrl2, cross, n: int) -> list[bool]:
+    """``absent_in_random_init`` for every feature, from the correlation sums.
+
+    The same arithmetic as ``_corr`` and ``_std`` on each (feature, random-init
+    feature) pair, in the same order, one row of pairs at a time. The pairwise
+    Python loop took minutes at a few thousand features.
+    """
+    n_features = int(sum_main.shape[0])
+    if n <= 0:
+        return [False] * n_features
+    sum_main = np.asarray(sum_main, dtype=np.float64)
+    sum_ctrl = np.asarray(sum_ctrl, dtype=np.float64)
+    mean_a = sum_main / n
+    mean_b = sum_ctrl / n
+    std_a = np.sqrt(np.maximum(np.asarray(sum_main2, dtype=np.float64) / n - mean_a * mean_a, 0.0))
+    std_b = np.sqrt(np.maximum(np.asarray(sum_ctrl2, dtype=np.float64) / n - mean_b * mean_b, 0.0))
+    da = np.sqrt(np.maximum(np.asarray(sum_main2, dtype=np.float64) - n * mean_a * mean_a, 0.0))
+    db = np.sqrt(np.maximum(np.asarray(sum_ctrl2, dtype=np.float64) - n * mean_b * mean_b, 0.0))
+    live = (std_b > DEAD_ACT_EPS) & (db >= 1e-12)
+    absent = []
+    for feature_id in range(n_features):
+        if std_a[feature_id] <= DEAD_ACT_EPS:
+            absent.append(False)
+            continue
+        best = 0.0
+        if da[feature_id] >= 1e-12 and bool(live.any()):
+            corr = (np.asarray(cross[feature_id], dtype=np.float64)[live] - (n * mean_a[feature_id]) * mean_b[live]) / (
+                da[feature_id] * db[live]
+            )
+            best = max(best, float(corr.max()))
+        absent.append(bool(best < PATTERN_ABSENT_MAX_CORR))
+    return absent
+
+
 def _corr(sum_a, sum_b, sum_a2, sum_b2, sum_ab, n: int) -> float:
     if n <= 0:
         return 0.0
@@ -1751,6 +2084,19 @@ def _std(sum_, sum2, n: int) -> float:
     mean = float(sum_) / n
     var = float(sum2) / n - mean * mean
     return math.sqrt(max(var, 0.0))
+
+
+def _score_chunk_rows(n_features: int, d_model: int) -> int:
+    """Rows per chunk in the score stage's correlation pass.
+
+    ``_chunk_rows`` gives a 3072-feature SAE 81 rows at a time, so the pass
+    spent most of its time on per-call overhead (2500 tiny encodes). Up to
+    ``STREAM_CHUNK`` rows the dense float64 activations stay under about 64 MB
+    each. Small dictionaries (the fake acceptance run) already used
+    ``STREAM_CHUNK`` and are unchanged.
+    """
+    by_feature = max(1, 8_000_000 // max(int(n_features), 1))
+    return max(_chunk_rows(n_features, d_model), min(STREAM_CHUNK, by_feature))
 
 
 def _chunk_rows(n_features: int, d_model: int) -> int:

@@ -662,6 +662,32 @@ class RunModel:
                 grid[h][w] = value
         return grid
 
+    def heat_cells(self, clip_id: str) -> dict[str, list]:
+        """Every non-empty heatmap of one clip, as ``"frame:feature" -> [h, w, value, ...]``.
+
+        The same cells :meth:`heatmap` returns, read in one query for the whole clip
+        instead of one per frame and feature, which is what an export of a wide SAE needs.
+        """
+        clip = self.manifest_clips.get(clip_id)
+        if clip is None or self.acts is None:
+            return {}
+        n_frames = int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else 0
+        height, width = int(self.grid["h"]), int(self.grid["w"])
+        by_token: dict[tuple[int, int], dict[int, list]] = {}
+        for window, t, feature_id, h, w, value in self.acts.clip_cells(clip_id):
+            if 0 <= h < height and 0 <= w < width:
+                by_token.setdefault((int(window), int(t)), {}).setdefault(int(feature_id), []).append((int(h), int(w), float(value)))
+        pack: dict[str, list] = {}
+        for frame in range(n_frames):
+            starts, stride = _starts_covering(clip, self.grid, self.extra, frame)
+            window, tubelet_index = frame_to_token(frame, starts, self.grid, stride)
+            if tubelet_index is None:
+                continue
+            for feature_id, cells in sorted(by_token.get((int(window), int(tubelet_index)), {}).items()):
+                if any(value > 0 for _h, _w, value in cells):
+                    pack[f"{frame}:{feature_id}"] = [item for cell in sorted(cells) for item in cell]
+        return pack
+
     def _top_for(self, feature_id: int) -> list[dict]:
         rows = []
         for clip_id, window, tubelet_index, h, w, value in self.acts.top_clips(feature_id):
@@ -703,10 +729,23 @@ class RunModel:
         )
 
 
+def _nearby_runs(run_dir: Path) -> str:
+    """Name the run folders next to a mistyped one, or say how a run folder gets made."""
+    parent = run_dir.parent
+    try:
+        found = sorted(p.name for p in parent.iterdir() if (p / "manifest.json").is_file())
+    except OSError:
+        found = []
+    if found:
+        shown = ", ".join(found[:8]) + (", ..." if len(found) > 8 else "")
+        return f". Run folders in {parent}: {shown}"
+    return ". `ii run` (or `ii try`) writes one; pass the folder it printed."
+
+
 def load_run(run_dir: Path, clips_dir: Path | None = None) -> RunModel:
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
-        raise FileNotFoundError(f"run folder not found: {run_dir}")
+        raise FileNotFoundError(f"run folder not found: {run_dir}{_nearby_runs(run_dir)}")
     missing = [rel for rel in _REQUIRED if not (run_dir / rel).is_file()]
     if missing:
         raise FileNotFoundError(f"{run_dir} is missing {', '.join(missing)}")
@@ -1243,6 +1282,19 @@ class _Acts:
             ).fetchall()
             self._cells.put(key, rows)
             return rows
+
+    def clip_cells(self, clip_id: str) -> list[tuple]:
+        """``(window, t, feature_id, h, w, value)`` for every cell that fired in one clip."""
+        with self._lock:
+            return self._con.execute(
+                """
+                SELECT "window", "t", feature_id, h, w, max(value)::DOUBLE
+                FROM read_parquet(?)
+                WHERE clip_id = ?
+                GROUP BY "window", "t", feature_id, h, w
+                """,
+                [self.acts_path, self._clip_param(str(clip_id), self.clip_is_int)],
+            ).fetchall()
 
     def top_clips(self, feature_id: int) -> list[tuple]:
         key = int(feature_id)

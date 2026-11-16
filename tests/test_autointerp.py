@@ -145,6 +145,93 @@ def test_a_constant_simulator_cannot_pass_the_gate(monkeypatch):
     assert evidence["features"][0]["auroc_heldout"] == 0.5 < LABEL_HOLD_MIN_AUROC
 
 
+class _Picky:
+    """One explanation is right, the others are not; ratings follow the label it is given."""
+
+    name = "stub/vision"
+
+    def __init__(self) -> None:
+        import threading
+
+        self.lock = threading.Lock()
+        self.explains = 0
+        self.rated: list[tuple[str, int]] = []  # (label, clip) for every rated image
+
+    def complete(self, prompt: str, images: list[bytes]) -> str:
+        if prompt.startswith("These"):
+            with self.lock:
+                self.explains += 1
+                first = self.explains == 1
+            return json.dumps({"label": "a blank wall" if first else "top left corner", "description": "."})
+        good = "top left corner" in prompt
+        scores = []
+        for image in images:
+            clip, h, w = (int(part) for part in image.decode().split(":"))
+            with self.lock:
+                self.rated.append(("good" if good else "bad", clip))
+            scores.append(10 if good and (h, w) == (0, 0) else 5 if not good else 0)
+        return json.dumps(scores)
+
+
+def test_the_label_is_chosen_on_train_clips_and_meets_held_out_once(monkeypatch):
+    tokens, _column = _tokens()
+
+    class Grid:
+        t, h, w, tubelet = 4, 4, 4, 1
+
+    class Adapter:
+        def grid(self):
+            return Grid()
+
+    monkeypatch.setattr(autointerp, "gather_tokens", lambda *a, **k: tokens)
+    monkeypatch.setattr(autointerp._Frames, "get", lambda self, c, wi, t: np.full((8, 8, 3), c, np.uint8))
+    monkeypatch.setattr(autointerp, "render", lambda frame, cell, grid_hw, heat=None: f"{int(frame[0, 0, 0])}:{cell[0]}:{cell[1]}".encode())
+    stub = _Picky()
+    labels, evidence = autointerp.label_features(
+        client=stub, adapter=Adapter(), meta=[], acts_dir=None, sae=None, feature_ids=[3], device=None, seed=0, log=lambda _m: None
+    )
+    record = evidence["features"][0]
+    # Three candidate explanations of the same strongest frames; one that predicts the feature wins.
+    assert sorted(c["label"] for c in record["candidates"]) == ["a blank wall", "top left corner", "top left corner"]
+    by_label = {c["label"]: c for c in record["candidates"]}
+    assert by_label["top left corner"]["auroc_train"] == 1.0
+    assert [c["label"] for c in record["candidates"] if c["chosen"]] == ["top left corner"]
+    assert by_label["a blank wall"]["auroc_train"] == 0.5 and not by_label["a blank wall"]["chosen"]
+    assert labels[3] == {"label": "top left corner", "label_model": f"{AUTOINTERP_VERSION}:stub/vision", "label_holds_heldout": True}
+    assert record["auroc_heldout"] == 1.0
+    # The losing label never sees a held-out clip (clips 4 and 5), and the winner is rated there exactly once.
+    assert all(clip < 4 for label, clip in stub.rated if label == "bad")
+    held = [clip for label, clip in stub.rated if label == "good" and clip >= 4]
+    assert len(held) == len(record["simulation"])
+    # The training cells used to choose are not the frames the labels were written from.
+    assert stub.explains == autointerp.N_CANDIDATES
+
+
+def test_train_selection_cannot_rescue_a_label_that_fails_held_out(monkeypatch):
+    tokens, column = _tokens()
+    # On held-out clips the feature fires somewhere else, so no training-clip label can hold.
+    held = tokens.split == 1
+    moved = np.where(held & (tokens.h == 3) & (tokens.w == 3), 1.0, 0.0).astype(np.float32)
+    tokens.acts[:, 0] = np.where(held, moved, column)
+
+    class Grid:
+        t, h, w, tubelet = 4, 4, 4, 1
+
+    class Adapter:
+        def grid(self):
+            return Grid()
+
+    monkeypatch.setattr(autointerp, "gather_tokens", lambda *a, **k: tokens)
+    monkeypatch.setattr(autointerp._Frames, "get", lambda self, c, wi, t: np.full((8, 8, 3), c, np.uint8))
+    monkeypatch.setattr(autointerp, "render", lambda frame, cell, grid_hw, heat=None: f"{int(frame[0, 0, 0])}:{cell[0]}:{cell[1]}".encode())
+    labels, evidence = autointerp.label_features(
+        client=_Picky(), adapter=Adapter(), meta=[], acts_dir=None, sae=None, feature_ids=[3], device=None, seed=0, log=lambda _m: None
+    )
+    assert labels[3]["label"] == "top left corner"
+    assert labels[3]["label_holds_heldout"] is False
+    assert evidence["features"][0]["auroc_heldout"] < LABEL_HOLD_MIN_AUROC
+
+
 def test_ii_run_hf_uses_the_vision_labeller_when_a_key_is_set(tmp_path, monkeypatch):
     from transformers import AutoModel, ViTConfig
 
@@ -177,7 +264,43 @@ def test_ii_run_hf_uses_the_vision_labeller_when_a_key_is_set(tmp_path, monkeypa
     assert validate_run(out) == []
     evidence = json.loads((out / "features" / "autointerp.json").read_text(encoding="utf-8"))
     assert evidence["model"] == "stub/vision" and len(evidence["features"]) == 2
+    # Every reply is kept with the run, so scoring it again elsewhere gives the same labels.
+    kept = list((out / "control" / "autointerp").glob("*.json"))
+    assert kept and len(kept) <= len(stub.calls)
     features = [json.loads(line) for line in (out / "features" / "features.jsonl").read_text(encoding="utf-8").splitlines()]
     relabelled = [f for f in features if f["label_model"].startswith(AUTOINTERP_VERSION)]
     assert sorted(f["id"] for f in relabelled) == sorted(f["id"] for f in evidence["features"])
     assert not any(f["real"] for f in relabelled)  # a constant simulator never verifies anything
+
+
+def test_a_rate_limit_is_waited_out_not_fatal(monkeypatch):
+    import io
+    import urllib.error
+
+    waits: list[float] = []
+    attempts = {"n": 0}
+
+    class Reply(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def urlopen(request, timeout=None):
+        attempts["n"] += 1
+        if attempts["n"] <= 6:
+            headers = {"Retry-After": "7"} if attempts["n"] == 1 else {}
+            raise urllib.error.HTTPError(request.full_url, 429, "rate limit", headers, io.BytesIO(b"slow down"))
+        return Reply(b'{"ok": true}')
+
+    monkeypatch.setattr(autointerp.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(autointerp._Http, "sleep", staticmethod(waits.append))
+    http = autointerp._Http("https://example.invalid/v1", {})
+    assert http.post({"a": 1}) == {"ok": True}
+    # The provider's Retry-After is honoured, then the wait doubles, never past a minute.
+    assert waits == [7.0, 4.0, 8.0, 16.0, 32.0, 60.0]
+
+    attempts["n"] = -100  # never recovers: the error is reported, with the provider's words
+    with pytest.raises(RuntimeError, match="429"):
+        http.post({"a": 1})

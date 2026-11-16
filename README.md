@@ -25,6 +25,16 @@ You need git and [uv](https://docs.astral.sh/uv/getting-started/installation/) (
 
 `ii try` writes 30 practice clips to `clips/try`, runs the whole pipeline on the `fake` model into `runs/try` (about 15 seconds on a laptop), and opens the viewer with the playground on. The page starts on the verified feature with the biggest effect, at the held-out moment where it fires hardest, and the terminal suggests what to try first: remove that feature, then remove a decoy and compare. The practice model has three features planted on purpose, so you can check what the tool finds against the truth before you point it at a real model. A second `ii try` reuses the run and opens in a couple of seconds. `--no-open` skips the browser and `--verbose` prints the full pipeline log.
 
+Words you will see, for anyone new to mechanistic interpretability:
+
+- **Feature**: one pattern the model's activations encode at the instrumented layer, such as "gripper" or "striped texture". A **sparse autoencoder** (SAE, also called the dictionary) splits the activations into features, so each one fires on few tokens and can be switched off on its own.
+- **Ablation**: switching a feature off and measuring how far the model's prediction moves. That is the causal test; firing often is not.
+- **Unseen / held-out clip**: a clip the SAE never trained on. Labels and ablation effects are checked there, so a feature cannot pass by memorising its training clips.
+- **Verified** (badge `real`): passed every check. **Unverified**: missed at least one check, or was not checked yet. Both stay open to explore.
+- **Playground** (`--steer`): edit features yourself and watch the prediction move. It is for building intuition and never verifies anything.
+
+Commands here start with `uv run`, because `uv sync` installs `ii` into the project's `.venv` rather than on your PATH. Run `source .venv/bin/activate` once per shell to type plain `ii`; the hints the CLI prints follow whichever way you started it.
+
 Then try a real model on real video. You do not need clips of your own:
 
 ```bash
@@ -32,7 +42,9 @@ uv run ii get-clips --out clips/droid          # 100 short robot clips from DROI
 uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid --no-score --steer
 ```
 
-`--no-score --steer` gets you to the playground fastest (about 10 minutes on a laptop CPU): every feature is explorable, but none is verified yet. Run the same command without `--no-score` to add the checks; it reuses what is done. Scoring a real model is the slow part, up to an hour on a CPU, and it now prints progress with a time estimate as it goes.
+`--no-score --steer` gets you to the playground fastest (about 10 minutes on a laptop CPU): every feature is explorable, but none is verified yet. Run the same command without `--no-score` to add the checks; it reuses what is done. Scoring a real model is the slow part and prints progress with a time estimate as it goes. On 100 DROID clips with DINOv2-small it takes about 40 minutes on a 4-core CPU, most of it the random controls: each feature that reaches them costs about 6 minutes there, which is why they only run for features that can still be verified. The controls are plain batched forward passes, so a GPU (a Mac's is picked automatically; `--remote` rents one) is the way to shorten them further; that has not been timed here.
+
+Both commands talk to huggingface.co and need no account. If it prints "You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN", that only concerns rate limits; you can ignore it.
 
 `ii get-clips` cuts a 4-second mp4 from the middle of each of the 100 episodes in [`lerobot/droid_100`](https://huggingface.co/datasets/lerobot/droid_100), real robot arms in real kitchens and offices, and keeps each episode's instruction in `clips/droid/clips.json`. `--n` and `--seconds` take fewer or longer clips. Any folder of your own mp4s works in its place.
 
@@ -58,7 +70,7 @@ uv run interpretableintelligence run fake --clips clips/demo --prefilter 3 --out
 uv run python scripts/compare_attribution_vs_ablation.py runs/demo --k 3
 ```
 
-`--prefilter K` on `interpretableintelligence run` still trains, labels, and checks the random-init gate for every feature, and runs the held-out ablation plus the 100 matched random controls only for the top K. Omit it to score every feature. `--extra-effects loss,group` adds full-video loss rows for single features and for co-active groups; the cosine scoreboard stays. A finished run always writes the attribution files. `scripts/compare_attribution_vs_ablation.py` prints Spearman and top-K overlap for that attribution next to the same numbers for activation magnitude. Attribution has to beat the magnitude baseline.
+`--prefilter K` on `interpretableintelligence run` still trains, labels, and checks the random-init gate for every feature, and runs the held-out ablation plus the 100 matched random controls only for the top K, and among those only for the features that can still be verified: one that already fails a check needing no ablation (label does not hold, too few distinct clips, present at random init, unusable SAE) is left unmeasured, because the controls are the expensive part and could not change its verdict. If none of the K can be verified, all K are measured. Omit `--prefilter` to score every feature. `--extra-effects loss,group` adds full-video loss rows for single features and for co-active groups; the cosine scoreboard stays. A finished run always writes the attribution files. `scripts/compare_attribution_vs_ablation.py` prints Spearman and top-K overlap for that attribution next to the same numbers for activation magnitude. Attribution has to beat the magnitude baseline.
 
 `runs/demo/scoreboard.json` should mark exactly three features real, labelled `stripe`, `pulse`, and `corner`. The decoys `flicker`, `band`, and `speckle` fire on many clips and keep their labels on held-out clips, but they do not move the predictor, so they are not real.
 
@@ -117,11 +129,11 @@ Anything else stops before downloading weights with the reason and what to try: 
 
 A generic encoder has no masked-prediction head, so for `hf` the "prediction" is the model's own final patch tokens. Every token is scored, the target is the clean output, and the visible-mean baseline replaces every token with the average token. An ablation effect therefore reads as "how far does removing this feature move the model's output". Image models see each sampled frame (8 by default) as its own image; video models see the window at once. Frames are resized to the model's square input without cropping, so the heatmap covers the whole frame. The input side comes from the model's preprocessor config when the model accepts it (DINOv2: 224 px, although its config says 518), else from the model config. Prefix tokens (CLS, registers) pass through unedited.
 
-The SAE for `hf` is a TopK SAE (32 active features per token) with 8 features per activation dimension (3072 for DINOv2-small); `fake` and `vjepa2` keep the 12-feature L1 acceptance dictionary, whose orthogonality penalty sums over every feature pair and would swamp reconstruction at that width. `--sae-features N` overrides either. When the SAE has more than 64 features, `ii run` scores the 10 features with the largest attribution unless `--prefilter K` says otherwise, because each scored feature costs a held-out ablation plus its matched random controls. Unscored features stay unverified and are still explorable in the playground.
+The SAE for `hf` is a TopK SAE (32 active features per token) with 8 features per activation dimension (3072 for DINOv2-small); `fake` and `vjepa2` keep the 12-feature L1 acceptance dictionary, whose orthogonality penalty sums over every feature pair and would swamp reconstruction at that width. `--sae-features N` overrides either. When the SAE has more than 64 features, `ii run` scores the 10 features with the largest attribution unless `--prefilter K` says otherwise, because each scored feature costs a held-out ablation plus its matched random controls. Unscored features stay unverified and are still explorable in the playground. Finished controls are kept in the run folder (`control/random_controls.json`), so scoring again with other labels (`--concepts`, another label model) or a different `--prefilter`, or after an interruption, does not pay for them twice.
 
 Labels for `hf` come from a local CLIP model (`openai/clip-vit-base-patch16`, downloaded on first use). Each concept in a list of everyday objects, parts, surfaces and textures gets a per-token similarity map, and a feature is labelled with the concept that best separates the tokens where it fires from those where it does not (ROC AUC ≥ 0.80 on train clips). The label holds only if that AUC is also ≥ 0.80 on held-out clips. Pass `--concepts my_concepts.txt` (one per line) to label with your own vocabulary.
 
-A fixed word list rarely fits what a real model learns (parts of things, edges, the robot itself), so with a vision-model key set, `ii run hf` labels the features it scores by explain-then-simulate instead. A vision-language model sees the training frames where a feature fires most, boxed, and names what they share. It then rates held-out boxes (half where the feature fires, half where it does not, some in the same frames) given only that label. The label holds only if those ratings reach ROC AUC ≥ 0.80, the same bar. The keys are `ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, or `OPENAI_API_KEY` with `II_LABEL_BASE_URL` for any OpenAI-compatible endpoint. `II_LABEL_PROVIDER` picks one when several are set (`none` turns this off), and `II_LABEL_MODEL` changes the model. Replies are cached under `~/.cache/interpretableintelligence/autointerp` (or `II_LABEL_CACHE`). The evidence for every label is in `features/autointerp.json`. With no key, the CLIP labeller runs as before.
+A fixed word list rarely fits what a real model learns (parts of things, edges, the robot itself), so with a vision-model key set, `ii run hf` labels the features it scores by explain-then-simulate instead. A vision-language model sees the training frames where a feature fires most, boxed, and names what they share. It is asked three times, and the name that best predicts the feature on other training clips is kept, because a single reply varied from run to run. It then rates held-out boxes (half where the feature fires, half where it does not, some in the same frames) given only that label. The label holds only if those ratings reach ROC AUC ≥ 0.80, the same bar. The keys are `ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, or `OPENAI_API_KEY` with `II_LABEL_BASE_URL` for any OpenAI-compatible endpoint. `II_LABEL_PROVIDER` picks one when several are set (`none` turns this off), and `II_LABEL_MODEL` changes the model. Replies are cached under `~/.cache/interpretableintelligence/autointerp` (or `II_LABEL_CACHE`). The evidence for every label is in `features/autointerp.json`. With no key, the CLIP labeller runs as before.
 
 ### NVIDIA GR00T N1.7 (robot policy)
 
@@ -136,6 +148,15 @@ The adapter is `groot:<checkpoint>`, and `--model` defaults to `nvidia/gr00t17-l
 GR00T also needs a wrist camera, the robot state and an instruction. Put them in a sidecar next to each clip, `<stem>.groot.json`: `{"task": "...", "state": [[8 floats per frame]], "wrist": "<stem>.wrist.npy"}`. Without one the model still runs, on the main frame twice, a zero state and an empty instruction, and warns that its actions are off-distribution.
 
 Weights stream in at half precision (6.3 GB). On a 4-core CPU the model loads in about a minute and each window takes a few seconds; a GPU is much faster. `ii run groot --tiny` runs a GR00T-shaped random network instead, with no download; it is for tests and is not GR00T. Closed-loop LIBERO rollouts for GR00T still go through `adapters/groot/v9/`.
+
+#### Import an existing GR00T capture
+
+```bash
+uv run ii import --format groot-v9 groot-1028-v9-n100.tar.xz runs/groot-1028
+uv run ii validate runs/groot-1028
+```
+
+`ii import` turns rollout logs captured outside `ii` into a run folder. `groot-v9` reads the v9 Colab capture layout (rollcap-v0), such as the task-1028 release: 100 episodes, block-5 activations, and the BatchTopK SAE trained on them. It takes the directory or the tarball and needs no GPU and no model download (about a minute on a laptop for 1028). The mapping is the one `ii run groot` uses: one clip per episode, one window per policy call, `w` = DiT token. The SAE keeps its feature ids. `split.json` is copied byte for byte. Failure labels are the pot-0 detector's (`fail_rule` `pot0-v1`), kept per clip in `manifest.import.clips`. Metrics that need the model in the loop (loss recovered, ablations, matched random features, the random-init control, effect rows) are `null`, each with a reason in `manifest.import.nulls`. So `usable` is null and every feature stays `real: false`. `SCHEMA.md` ("Imported runs") is the contract.
 
 #### Steering scorecard
 
@@ -172,7 +193,7 @@ uv run ii compare runs/cmp-dinov2 runs/cmp-groot --out site/compare
 
 Each LIBERO clip is 16 frames, so a vision model and GR00T read it as exactly one window and see the same moment. `ii compare` takes each feature's largest activation in each shared clip (clips are matched by file hash), pairs features across models that are each other's best partner by Pearson r, and keeps a pair only if r beats the 99th percentile of the best r after shuffling clip order. It writes `compare.json` and a static `index.html`. A match is correlational. Only scoreboard-`real` features are marked verified; a run that has not been scored can still be compared, and all its features show as exploratory. When clips carry GR00T sidecars, each shared concept is described by the instruction most of its top moments come from; otherwise by a CLIP hint, which is a reading aid and never a label.
 
-`vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. `II_THREADS=N` lets a CPU-only run use N threads at the cost of bit-reproducibility.
+`vjepa2` and `groot` runs now get CLIP concept labels too (`groot` at window level, since its tokens are actions, not patches), so their features can pass the label gate. `--sae-features` above 64 trains a TopK SAE for any adapter. Real models use every CPU core by default and the `fake` run keeps one thread so its scoreboard is reproducible; `II_THREADS=N` overrides both.
 
 ### No GPU? Run on a hosted one
 
@@ -194,6 +215,8 @@ python -m http.server -d site/dinov2 8000
 
 The playground needs the model, so the export precomputes it: remove, scale, clamp and add at a few strengths, for the strongest features in each window, on `--steer-clips` clips (default 12, starting with the top clips of `real` and candidate features). The slider steps through those strengths. `--steer-features` sets features per window (default 6) and `--no-steer` turns the playground off. Like the live playground this is exploration only and never touches the run folder or the scoreboard. The fake run exports in about 10 seconds to 3 MB.
 
+A real run is larger, mostly video and frame images. `--max-clips N` carries only N clips (the top examples of `real` features first, then candidates), cuts each feature's example list to those clips, and the page says "showing N of M clips". The scores on the page are still the whole run's.
+
 `make demo-site` (or `ii export-site --out demo-site`) rebuilds the static site in `demo-site/`. Serve that directory with any static host. It does not start the viewer API.
 
 ## Layout
@@ -207,7 +230,8 @@ The playground needs the model, so the export precomputes it: remove, scale, cla
 | `src/interpretableintelligence/adapters/hf.py` | Generic Hugging Face vision adapter (`hf:<model>`) |
 | `src/interpretableintelligence/adapters/groot/adapter.py` | GR00T N1.7 adapter (`groot:<checkpoint>`) and its random `groot:tiny` stand-in |
 | `docs/FRICTION-vjepa2.md` | Jeff's setup log for the V-JEPA 2 port |
-| `src/interpretableintelligence/sae.py` | ReLU SAE trainer |
+| `docs/FRICTION-first-run.md` | A newcomer's first five minutes: where they got stuck and what changed |
+| `src/interpretableintelligence/sae.py` | ReLU / TopK SAE trainer and the seeded random-weights SAE control |
 | `src/interpretableintelligence/score.py` | Explained variance, loss recovered, ablations, random controls |
 | `src/interpretableintelligence/attribute.py` | Attribution-patching prefilter and the ablation comparison |
 | `src/interpretableintelligence/pipeline.py` | Resumable capture, SAE, features, score, and viewer |
@@ -219,9 +243,11 @@ The playground needs the model, so the export precomputes it: remove, scale, cla
 | `src/interpretableintelligence/view.py` | Local clip viewer over a finished run folder |
 | `src/interpretableintelligence/steer.py` | Playground steering behind `view --steer` |
 | `src/interpretableintelligence/steer_scorecard.py` | `ii steer-scorecard`: remove and boost features against matched controls, `steering/` |
+| `src/interpretableintelligence/probe.py` | `ii probe`: held-out failure probe on trained-SAE latents vs a random-weights SAE and raw activations, `probe/` |
 | `src/interpretableintelligence/contract_view.py` | Read-API payloads matched by `interpretableintelligence-server` |
 | `src/interpretableintelligence/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
 | `src/interpretableintelligence/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |
+| `src/interpretableintelligence/importers/` | `ii import`: rollout logs captured elsewhere to a run folder (`groot-v9` first) |
 | `SCHEMA.md` | Run-folder contract |
 | `ARCHITECTURE.md` | What this lane owns, and the next lanes |
 | `server/` | Rust read API (`interpretableintelligence-server`) over the run folder |
