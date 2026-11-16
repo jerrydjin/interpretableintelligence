@@ -42,6 +42,7 @@ import time
 import urllib.error
 import urllib.request
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -60,6 +61,8 @@ SIMULATE_BATCH = 5
 MIN_HELDOUT_POSITIVES = 4
 # Without a prefilter shortlist, label at most this many features (the highest attribution).
 MAX_FEATURES = 32
+# Features asked about at once. The calls are network waits, so threads are enough.
+LABEL_WORKERS = 8
 IMAGE_PX = 320
 # Reasoning models spend tokens before answering; too few and the answer comes back empty.
 MAX_TOKENS = 4000
@@ -483,54 +486,80 @@ def label_features(
     frames = _Frames(adapter, meta)
     labels: dict[int, dict] = {}
     evidence: list[dict] = []
+    # Render every image first (one decoded clip at a time), then ask the model
+    # about the features side by side: the wait is the provider's, not ours.
+    jobs: list[dict] = []
     for column_index, feature_id in enumerate(feature_ids):
         column = tokens.acts[:, column_index]
         rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(feature_id), 29]))
         train = np.flatnonzero(tokens.split == 0)
         examples = sorted(pick_top(tokens, column, train, k=N_EXPLAIN, per_clip=2), key=lambda row: int(tokens.clip[row]))
         record: dict = {"id": int(feature_id), "label": "", "description": "", "auroc_heldout": None, "holds": False}
+        job: dict = {"id": int(feature_id), "record": record, "explain": None}
+        jobs.append(job)
         if len(examples) < 3:
             record["note"] = "fires in fewer than 3 training frames"
-            labels[int(feature_id)] = {"label": "", "label_model": model_name, "label_holds_heldout": False}
-            evidence.append(record)
             continue
-        images = [
+        job["explain"] = [
             render(frames.get(*_frame_key(tokens, row)), (int(tokens.h[row]), int(tokens.w[row])), (grid.h, grid.w), _heat(tokens, column, row, grid))
             for row in examples
         ]
-        label, description = parse_label(client.complete(EXPLAIN_PROMPT.format(n=len(images)), images))
-        record.update(label=label, description=description, explain_examples=[list(_frame_key(tokens, row)) for row in examples])
+        job["examples"] = [list(_frame_key(tokens, row)) for row in examples]
         rows, truth = simulation_set(tokens, column, rng)
-        n_pos = int(sum(truth))
-        scores: list[float] = []
-        if label and n_pos >= MIN_HELDOUT_POSITIVES:
+        job["rows"], job["truth"] = rows, truth
+        job["cells"] = [
+            {"frame": list(_frame_key(tokens, row)), "cell": [int(tokens.h[row]), int(tokens.w[row])], "fires": bool(fires)}
+            for row, fires in zip(rows, truth, strict=True)
+        ]
+        job["batches"] = []
+        if int(sum(truth)) >= MIN_HELDOUT_POSITIVES:
             order = sorted(range(len(rows)), key=lambda i: _frame_key(tokens, rows[i]))
-            by_index: dict[int, float] = {}
             for start in range(0, len(order), SIMULATE_BATCH):
                 batch = order[start : start + SIMULATE_BATCH]
-                batch_images = [
+                images = [
                     render(frames.get(*_frame_key(tokens, rows[i])), (int(tokens.h[rows[i]]), int(tokens.w[rows[i]])), (grid.h, grid.w))
                     for i in batch
                 ]
+                job["batches"].append((batch, images))
+
+    def ask(job: dict) -> None:
+        record = job["record"]
+        if job["explain"] is None:
+            return
+        label, description = parse_label(client.complete(EXPLAIN_PROMPT.format(n=len(job["explain"])), job["explain"]))
+        record.update(label=label, description=description, explain_examples=job["examples"])
+        truth = job["truth"]
+        n_pos = int(sum(truth))
+        scores: list[float] = []
+        if label and n_pos >= MIN_HELDOUT_POSITIVES:
+            by_index: dict[int, float] = {}
+            for batch, images in job["batches"]:
                 prompt = SIMULATE_PROMPT.format(label=label.replace('"', "'"), description=description, n=len(batch))
-                parsed = parse_scores(client.complete(prompt, batch_images), len(batch))
+                parsed = parse_scores(client.complete(prompt, images), len(batch))
                 for offset, i in enumerate(batch):
                     # An unreadable reply scores every image 0: it can only hurt the label.
                     by_index[i] = 0.0 if parsed is None else parsed[offset]
-            scores = [by_index[i] for i in range(len(rows))]
+            scores = [by_index[i] for i in range(len(truth))]
             value = auroc(np.asarray(scores), np.asarray(truth))
             record["auroc_heldout"] = value
             record["holds"] = bool(value >= LABEL_HOLD_MIN_AUROC)
         elif label:
             record["note"] = f"only {n_pos} held-out firings; the label cannot be tested"
         record["simulation"] = [
-            {"frame": list(_frame_key(tokens, row)), "cell": [int(tokens.h[row]), int(tokens.w[row])], "fires": bool(fires), "score": score}
-            for row, fires, score in zip(rows, truth, scores or [None] * len(rows), strict=True)
+            dict(cell, score=score) for cell, score in zip(job["cells"], scores or [None] * len(truth), strict=True)
         ]
-        labels[int(feature_id)] = {"label": label, "label_model": model_name, "label_holds_heldout": bool(record["holds"])}
+
+    with ThreadPoolExecutor(max_workers=max(1, min(LABEL_WORKERS, len(jobs)))) as pool:
+        # list() re-raises a provider error from any feature.
+        list(pool.map(ask, jobs))
+    for job in jobs:
+        record = job["record"]
+        labels[job["id"]] = {"label": record["label"], "label_model": model_name, "label_holds_heldout": bool(record["holds"])}
         evidence.append(record)
+        if job["explain"] is None:
+            continue
         auc_text = "-" if record["auroc_heldout"] is None else f"{record['auroc_heldout']:.2f}"
-        log(f"autointerp feature {feature_id}: {label or '-'!r}  held-out AUROC {auc_text}  holds={record['holds']}")
+        log(f"autointerp feature {job['id']}: {record['label'] or '-'!r}  held-out AUROC {auc_text}  holds={record['holds']}")
     return labels, {
         "version": AUTOINTERP_VERSION,
         "model": client.name,
