@@ -545,15 +545,15 @@ def test_droid_playground_is_the_vendored_export_read_only():
     assert "Read-only" in banner
     total = run.get("export", {}).get("clips_total", len(run["clips"]))
     assert f"on {total} real robot clips" in banner
-    assert f"this page shows {len(run['clips'])} of them" in banner
+    assert f"This page shows {len(run['clips'])} of them, {len(run['steer']['clips'])} with the playground" in banner
     assert f"{len(real_run)} feature{'s' if len(real_run) != 1 else ''} passed every offline check" in banner
-    assert "exploration, never evidence" in banner
+    assert "Steering here is exploration, never evidence." in banner
     assert "says nothing about what happens in a robot rollout" in banner
     for command in source["commands"]:
         assert command in banner
     results = (ROOT / "results" / "index.html").read_text(encoding="utf-8")
-    real = results.index('data-testid="real-sections"')
-    assert real < results.index('href="/droid/"') < results.index('data-testid="synthetic-sections"')
+    main = results[results.index("<main"):]
+    assert main.index('data-testid="real-sections"') < main.index('href="/droid/"') < main.index('data-testid="synthetic-sections"')
     home = (ROOT / "index.html").read_text(encoding="utf-8")
     assert 'href="/droid/" data-testid="playground-cta"' in home
     assert "/droid/" in _nav(home)

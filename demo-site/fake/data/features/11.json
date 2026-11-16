@@ -9,7 +9,7 @@
  "distinct_clips_top20": 20,
  "label_holds_heldout": true,
  "ablation_effect": 2.483526865641276e-09,
- "random_percentile": 0.0,
+ "random_percentile": 14.000000000000002,
  "n_random": 100,
  "absent_in_random_init": true,
  "real": false,

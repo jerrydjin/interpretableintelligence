@@ -434,24 +434,24 @@ def _droid_info(source: Path, run: dict) -> dict:
     }
 
 
-def _droid_summary(info: dict) -> str:
+def _droid_headline(info: dict) -> str:
     real = info["real"]
-    verified = f"{real} feature{'s' if real != 1 else ''} passed every offline check"
-    return (
-        f"{info['model']} on {info['clips']} real robot clips: {verified}. "
-        "Open it in the browser, nothing to install; the playground is precomputed and read-only."
-    )
+    return f"{info['model']} on {info['clips']} real robot clips: {real} feature{'s' if real != 1 else ''} passed every offline check."
+
+
+def _droid_summary(info: dict) -> str:
+    return f"{_droid_headline(info)} Try it in the browser with nothing to install; the playground is precomputed and read-only."
 
 
 def _droid_banner(info: dict) -> str:
     commands = "\n".join(info["commands"])
     return (
         '  <section class="score-line droid-banner" data-testid="droid-banner">\n'
-        f'    <p><span class="badge badge-unverified">Read-only</span> {escape(_droid_summary(info))} '
-        f"The scoreboard covers all {info['clips']} clips; this page shows {info['shown']} of them. "
-        "A real badge means a feature passed the offline scoreboard gates on held-out clips; it says nothing "
-        "about what happens in a robot rollout. The playground's slider steps through edits computed ahead of "
-        f"time on {info['steer_clips']} clips: exploration, never evidence.</p>\n"
+        f'    <p><span class="badge badge-unverified">Read-only</span> {escape(_droid_headline(info))} '
+        f"This page shows {info['shown']} of them, {info['steer_clips']} with the playground computed ahead of time: "
+        "nothing to install, no model running. A real badge means a feature passed the offline scoreboard gates "
+        "on held-out clips; it says nothing about what happens in a robot rollout. Steering here is exploration, "
+        "never evidence.</p>\n"
         "    <details><summary>Run it yourself</summary>"
         f"<pre class=\"quickstart\"><code>{escape(commands)}</code></pre></details>\n"
         "  </section>\n"

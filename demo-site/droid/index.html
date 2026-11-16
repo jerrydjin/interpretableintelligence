@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" data-ii-root="data">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f5">
+  <title>DINOv2 on DROID · interpretableintelligence</title>
+  <meta name="description" content="Explore the features a sparse autoencoder found inside facebook/dinov2-small: where each one fires, what removing it does, and 1 that passed every check. No install needed.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="DINOv2 on DROID · interpretableintelligence">
+  <meta property="og:description" content="Explore the features a sparse autoencoder found inside facebook/dinov2-small: where each one fires, what removing it does, and 1 that passed every check. No install needed.">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="DINOv2 on DROID · interpretableintelligence">
+  <meta name="twitter:description" content="Explore the features a sparse autoencoder found inside facebook/dinov2-small: where each one fires, what removing it does, and 1 that passed every check. No install needed.">
+  <link rel="stylesheet" href="static/style.css">
+  <link rel="stylesheet" href="/static/demo.css">
+  <link rel="icon" href="/favicon.ico">
+</head>
+<body>
+  <nav class="demo-bar" aria-label="Demo sections"><a class="demo-home" href="/">Home</a><a href="/explore/">Explore</a><a href="/droid/" aria-current="page">Playground</a><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
+  <header class="top" data-testid="run-header">
+    <div class="brand-row">
+      <a class="wordmark" href="#/" aria-label="interpretable intelligence">
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
+        <span class="wordmark-text">interpretable intelligence</span>
+      </a>
+      <span id="run-id" class="run-id" data-testid="run-id"></span>
+      <nav class="nav">
+        <a href="#/" data-nav="explore">Explore</a>
+        <a href="#/features" data-testid="nav-features" data-nav="features">Features</a>
+        <a href="#/steering" data-testid="nav-steering" data-nav="steering" hidden>Steering</a>
+      </nav>
+    </div>
+    <div class="meta">
+      <span id="run-status" class="run-status" data-testid="run-status"></span>
+      <span class="meta-numbers num">
+        <span id="run-model" data-testid="run-model"></span>
+        <span id="run-layer" data-testid="run-layer"></span>
+        <span id="split-sizes" data-testid="split-sizes"></span>
+        <span id="sae-summary" data-testid="sae-summary"></span>
+      </span>
+      <button type="button" class="numbers-toggle" data-testid="numbers-toggle" aria-pressed="false" title="Show the raw measurements next to the plain-language view">
+        <span class="switch" aria-hidden="true"></span>Numbers
+      </button>
+    </div>
+  </header>
+  <section class="score-line droid-banner" data-testid="droid-banner">
+    <p><span class="badge badge-unverified">Read-only</span> DINOv2-small on 100 real robot clips: 1 feature passed every offline check. This page shows 8 of them, 8 with the playground computed ahead of time: nothing to install, no model running. A real badge means a feature passed the offline scoreboard gates on held-out clips; it says nothing about what happens in a robot rollout. Steering here is exploration, never evidence.</p>
+    <details><summary>Run it yourself</summary><pre class="quickstart"><code>uv run ii get-clips --out clips/droid
+uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid
+uv run ii export runs/droid --clips clips/droid --out site/droid --max-clips 8</code></pre></details>
+  </section>
+  <main id="app"></main>
+  <div id="live-status" class="live-status" data-testid="live-status" role="status" aria-live="polite" hidden></div>
+  <script src="static/guide.js"></script>
+  <script src="static/app.js"></script>
+</body>
+</html>
