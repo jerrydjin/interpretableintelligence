@@ -294,7 +294,133 @@
     return { scored: scored.length, lines };
   }
 
-  const api = { THRESHOLDS, sae, feature, statusNote, summary };
+  // ---- what to try in the playground ----------------------------------------
+  //
+  // Two playground edits per situation, the most telling first. The viewer shows
+  // the first one the reader has not just run, so there is always a next one.
+  // Steering is exploration: none of these can change the badge.
+
+  const SHORT = {
+    usable: "Dictionary",
+    distinct_clips_top20: "Many clips",
+    label_holds_heldout: "Name holds",
+    random_percentile: "Beats random",
+    absent_in_random_init: "Learned",
+  };
+
+  const IDEAS = {
+    verified: [
+      {
+        title: "Turn it up",
+        text: "Scale it to 3× and see where the prediction moves. Removing it already beat every random look-alike; this shows what it adds.",
+        kind: "scale",
+        value: 3,
+      },
+      {
+        title: "Switch it off",
+        text: "Remove it and compare the glow with where it fires. A verified feature should move the prediction where it is active.",
+        kind: "ablate",
+        value: 0,
+      },
+    ],
+    random_percentile: [
+      {
+        title: "Push harder",
+        text: "Removing it alone looked like noise. Scale it to 3× and see whether a bigger push moves the prediction.",
+        kind: "scale",
+        value: 3,
+      },
+      {
+        title: "Force it on",
+        text: "Clamp it on every patch, even where it is silent. If the prediction still barely moves, it may only matter alongside other features.",
+        kind: "clamp",
+        value: 1,
+      },
+    ],
+    label_holds_heldout: [
+      {
+        title: "Name it yourself",
+        text: "Remove it and watch where the prediction moves. The place that changes is a clue to what it stands for.",
+        kind: "ablate",
+        value: 0,
+      },
+      {
+        title: "Exaggerate it",
+        text: "Scale it to 3×. Whatever grows in the glow is what the model reads from it.",
+        kind: "scale",
+        value: 3,
+      },
+    ],
+    distinct_clips_top20: [
+      {
+        title: "Try it somewhere new",
+        text: "Clamp it on across this frame, even where it is silent, and see what it would add to a clip it rarely fires on.",
+        kind: "clamp",
+        value: 1,
+      },
+      {
+        title: "Switch it off",
+        text: "Remove it here. If nothing moves, it may only matter on its few clips.",
+        kind: "ablate",
+        value: 0,
+      },
+    ],
+    absent_in_random_init: [
+      {
+        title: "Place or thing?",
+        text: "Remove it here, then on another clip. If the same patches change both times, it tracks a position in the frame, not an object.",
+        kind: "ablate",
+        value: 0,
+      },
+      {
+        title: "Force it on",
+        text: "Clamp it on every patch and see whether the change still sits in one corner of the frame.",
+        kind: "clamp",
+        value: 1,
+      },
+    ],
+    unmeasured: [
+      {
+        title: "Do the check by hand",
+        text: "Scoring never switched it off. Remove it here and see how far the prediction moves.",
+        kind: "ablate",
+        value: 0,
+      },
+      {
+        title: "Turn it up",
+        text: "Scale it to 3× and see what it adds.",
+        kind: "scale",
+        value: 3,
+      },
+    ],
+  };
+
+  // The gate that decides the next experiment: the first failed one, else the first one that did not run.
+  function blocking(read) {
+    const gates = read.gates.filter((gate) => gate.key !== "usable");
+    return gates.find((gate) => gate.passed === false) || gates.find((gate) => gate.passed === null) || null;
+  }
+
+  function experiments(record, ctx) {
+    const read = feature(record, ctx || {});
+    if (read.real) return { key: "verified", ideas: IDEAS.verified };
+    const gate = blocking(read);
+    const key = gate && IDEAS[gate.key] && gate.passed === false ? gate.key : "unmeasured";
+    return { key, gate: gate ? gate.key : null, ideas: IDEAS[key] };
+  }
+
+  // Checks passed, in gate order, for the feature page's check trail.
+  function trail(record, ctx) {
+    const read = feature(record, ctx || {});
+    const marks = read.gates.map((gate) => ({
+      key: gate.key,
+      name: SHORT[gate.key] || gate.key,
+      mark: gate.passed === true ? "pass" : gate.passed === false ? "fail" : "skip",
+    }));
+    return { passed: marks.filter((m) => m.mark === "pass").length, total: marks.length, marks };
+  }
+
+  const api = { THRESHOLDS, sae, feature, statusNote, summary, experiments, trail, blocking };
   root.IIGuide = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

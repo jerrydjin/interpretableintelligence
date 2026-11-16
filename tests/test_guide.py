@@ -124,3 +124,34 @@ def test_status_notes_and_index_summary():
     lines = {line["key"]: line["count"] for line in out["summary"]["lines"]}
     assert lines == {"random_percentile": 2, "label_holds_heldout": 2, "absent_in_random_init": 2, "distinct_clips_top20": 1}
     assert out["summary"]["scored"] == 3
+
+
+def test_every_feature_gets_a_playground_experiment_and_a_check_trail():
+    unscored = {"id": 3, "label": "", "badge": "unverified", "scored": True}
+    only_random = dict(REAL, badge="unverified", random_percentile=10.0)
+    out = _run_guide(
+        "const ctx = { sae: { usable: true, loss_recovered: 0.97 } };\n"
+        "console.log(JSON.stringify({"
+        f"real: g.experiments({json.dumps(REAL)}, ctx),"
+        f"random: g.experiments({json.dumps(only_random)}, ctx),"
+        f"failing: g.experiments({json.dumps(FAILING)}, ctx),"
+        f"unscored: g.experiments({json.dumps(unscored)}, {{}}),"
+        f"realTrail: g.trail({json.dumps(REAL)}, ctx),"
+        f"randomTrail: g.trail({json.dumps(only_random)}, ctx),"
+        "}));"
+    )
+    kinds = {"ablate", "scale", "clamp", "add"}
+    for key in ("real", "random", "failing", "unscored"):
+        ideas = out[key]["ideas"]
+        assert len(ideas) >= 2, key
+        assert all(idea["kind"] in kinds and idea["title"] and idea["text"] for idea in ideas), key
+        assert len({(idea["kind"], idea["value"]) for idea in ideas}) == len(ideas), key
+    assert out["real"]["key"] == "verified"
+    assert out["random"]["key"] == "random_percentile"
+    assert out["random"]["ideas"][0] == {**out["random"]["ideas"][0], "kind": "scale", "value": 3}
+    # The first failed gate in check order decides it, not the dictionary.
+    assert out["failing"]["key"] == "distinct_clips_top20"
+    assert out["unscored"]["key"] == "unmeasured"
+    assert out["realTrail"]["passed"] == out["realTrail"]["total"] == 5
+    assert [mark["mark"] for mark in out["randomTrail"]["marks"]] == ["pass", "pass", "pass", "fail", "pass"]
+    assert out["randomTrail"]["passed"] == 4
