@@ -120,15 +120,14 @@ def write_viewer_data(model: RunModel, data: Path, indent: int | None = None) ->
         frames = clip_dir / "frames"
         frames.mkdir()
         n_frames = int(payload["n_frames"])
+        heatmaps = model.frame_heatmaps(clip_id, feature_ids)
         pack: dict[str, list] = {}
         for frame in range(n_frames):
             png = model.frame_png(clip_id, frame)
             if png:
                 (frames / f"{frame}.png").write_bytes(png)
-            for feature_id in feature_ids:
-                grid = model.heatmap(clip_id, frame, feature_id)
-                if grid and any(value > 0 for row in grid for value in row):
-                    pack[f"{frame}:{feature_id}"] = grid
+            for feature_id, grid in (heatmaps[frame] if frame < len(heatmaps) else {}).items():
+                pack[f"{frame}:{feature_id}"] = grid
         write_json(clip_dir / "heat.json", pack)
         media = model.media_file(clip_id)
         if media is not None:

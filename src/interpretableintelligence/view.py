@@ -662,6 +662,39 @@ class RunModel:
                 grid[h][w] = value
         return grid
 
+    def frame_heatmaps(self, clip_id: str, feature_ids: list[int], cells: dict | None = None) -> list[dict[int, list]]:
+        """``heatmap`` for every frame of a clip and every feature in ``feature_ids``, from one query.
+
+        Item ``frame`` maps feature id to its grid, in ``feature_ids`` order, for the features
+        with a positive cell on that frame; the grids equal what ``heatmap`` returns.
+        """
+        clip = self.manifest_clips.get(clip_id)
+        if clip is None or self.acts is None:
+            return []
+        n_frames = int(clip["n_frames"]) if _is_int(clip.get("n_frames")) else 0
+        height, width = int(self.grid["h"]), int(self.grid["w"])
+        cells = self.acts.clip_cells(clip_id) if cells is None else cells
+        by_token: dict[tuple[int, int], set[int]] = {}
+        for window, tubelet_index, feature_id in cells:
+            by_token.setdefault((window, tubelet_index), set()).add(feature_id)
+        out: list[dict[int, list]] = []
+        for frame in range(n_frames):
+            starts, stride = _starts_covering(clip, self.grid, self.extra, frame)
+            window, tubelet_index = frame_to_token(frame, starts, self.grid, stride)
+            maps: dict[int, list] = {}
+            present = by_token.get((window, tubelet_index), set()) if tubelet_index is not None else set()
+            for feature_id in feature_ids:
+                if feature_id not in present:
+                    continue
+                grid = [[0.0 for _ in range(width)] for _ in range(height)]
+                for h, w, value in cells[(window, tubelet_index, feature_id)]:
+                    if 0 <= h < height and 0 <= w < width:
+                        grid[h][w] = value
+                if any(value > 0 for row in grid for value in row):
+                    maps[feature_id] = grid
+            out.append(maps)
+        return out
+
     def _top_for(self, feature_id: int) -> list[dict]:
         rows = []
         for clip_id, window, tubelet_index, h, w, value in self.acts.top_clips(feature_id):
@@ -1243,6 +1276,28 @@ class _Acts:
             ).fetchall()
             self._cells.put(key, rows)
             return rows
+
+    def clip_cells(self, clip_id: str) -> dict[tuple[int, int, int], list[tuple]]:
+        """Every ``cells`` row of one clip in one query: ``(window, t, feature_id) -> [(h, w, value)]``.
+
+        A static export needs every frame's heatmap for every feature. Asking ``cells`` per
+        feature is one query each, which on a real SAE (thousands of features) takes hours.
+        Not cached: the caller walks one clip once.
+        """
+        with self._lock:
+            rows = self._con.execute(
+                """
+                SELECT "window", "t", feature_id, h, w, max(value)::DOUBLE
+                FROM read_parquet(?)
+                WHERE clip_id = ?
+                GROUP BY "window", "t", feature_id, h, w
+                """,
+                [self.acts_path, self._clip_param(str(clip_id), self.clip_is_int)],
+            ).fetchall()
+        cells: dict[tuple[int, int, int], list[tuple]] = {}
+        for window, tubelet_index, feature_id, h, w, value in rows:
+            cells.setdefault((int(window), int(tubelet_index), int(feature_id)), []).append((h, w, value))
+        return cells
 
     def top_clips(self, feature_id: int) -> list[tuple]:
         key = int(feature_id)

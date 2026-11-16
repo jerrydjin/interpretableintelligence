@@ -86,6 +86,29 @@ def test_real_features_top_clips_are_precomputed(demo, site: Path):
         assert detail["top_clips"][0]["clip_id"] in run["steer"]["clips"]
 
 
+def test_frame_heatmaps_match_the_per_feature_heatmap(demo):
+    """The export reads one clip's cells in one query; the grids are the ones ``heatmap`` serves."""
+    from interpretableintelligence.view import load_run
+
+    model = load_run(demo.run, demo.clips)
+    ids = [int(feature["id"]) for feature in model.run_payload["features"]]
+    checked = 0
+    for clip in model.run_payload["clips"][:4]:
+        clip_id = str(clip["clip_id"])
+        maps = model.frame_heatmaps(clip_id, ids)
+        assert len(maps) == int(model.clips[clip_id]["n_frames"])
+        for frame, by_feature in enumerate(maps):
+            expected = {}
+            for feature_id in ids:
+                grid = model.heatmap(clip_id, frame, feature_id)
+                if grid and any(value > 0 for row in grid for value in row):
+                    expected[feature_id] = grid
+            assert list(by_feature) == list(expected)
+            assert by_feature == expected
+            checked += len(expected)
+    assert checked > 0
+
+
 def test_refuses_to_overwrite_a_folder_it_did_not_write(demo, tmp_path: Path):
     out = tmp_path / "mine"
     out.mkdir()
