@@ -30,6 +30,8 @@ dependencies = [
 robots = []
 # `ii run --remote`: the Modal client. Runs bill to your own Modal account (docs/REMOTE.md).
 remote = ["modal>=1.0"]
+# `ii export-live`: torch.onnx needs the onnx package to write the browser pack.
+live = ["onnx>=1.17"]
 
 [project.scripts]
 interpretableintelligence = "interpretableintelligence.cli:app"
@@ -38,6 +40,8 @@ ii = "interpretableintelligence.cli:app"
 [dependency-groups]
 dev = [
     "httpx>=0.27",
+    "onnx>=1.17",
+    "onnxruntime>=1.20",
     "playwright>=1.49",
     "pytest>=8",
 ]

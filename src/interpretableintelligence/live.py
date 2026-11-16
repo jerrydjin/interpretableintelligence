@@ -194,6 +194,10 @@ def export_live(
     from interpretableintelligence.sae import load_sae
     from interpretableintelligence.artifacts import read_json
 
+    try:
+        import onnx  # noqa: F401  (torch.onnx writes the graphs through it)
+    except ImportError as exc:
+        raise LiveExportError("ii export-live needs the onnx package: uv sync --extra live, or pip install onnx") from exc
     run_dir = Path(run_dir)
     out_dir = Path(out_dir)
     manifest = read_json(run_dir / "manifest.json")
