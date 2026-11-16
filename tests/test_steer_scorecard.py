@@ -191,9 +191,9 @@ def test_playwright_scorecard_page_and_feature_section(demo, tmp_path):
         sync_api.expect(rows.first.locator("[data-testid=steering-verdict]")).to_have_text("Beats random edits")
         sync_api.expect(rows.first.locator("svg.steer-strip circle")).to_have_count(1)
         sync_api.expect(page.locator("[data-testid=steering-note]")).to_contain_text("does not change any badge")
-        # The viewer's type rules: no monospace, no uppercase labels; raw numbers wait for the switch.
+        # The viewer's type rules: monospace only for code, no uppercase labels; raw numbers wait for the switch.
         styles = page.evaluate(
-            """() => [...document.querySelectorAll('[data-testid=steering-page] *')].map((node) => {
+            """() => [...document.querySelectorAll('[data-testid=steering-page] *')].filter((node) => !node.closest('code, pre')).map((node) => {
                 const style = getComputedStyle(node);
                 return [style.fontFamily, style.textTransform];
             })"""

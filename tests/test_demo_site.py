@@ -232,7 +232,7 @@ def test_product_page_is_the_front_door():
     assert "ablate_v9.py" in page
     assert f"{summary['episodes_logged']} rollouts." in text
     assert (
-        "On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar."
+        "On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one, so that control is now the bar."
         in text
     )
     today = page.split("What you get today", 1)[1].split("<h2", 1)[0]

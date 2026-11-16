@@ -104,7 +104,7 @@ def export_site(
 
 def _copy_static(dest: Path) -> None:
     dest.mkdir(parents=True)
-    for name in ("guide.js", "app.js", "style.css", "demo.css"):
+    for name in ("guide.js", "app.js", "style.css", "demo.css", "favicon.svg"):
         source = STATIC / name
         if source.is_file():
             shutil.copy2(source, dest / name)
@@ -143,7 +143,7 @@ def _viewer_page(sentence: str) -> str:
         '<link rel="stylesheet" href="/static/style.css">',
         '<link rel="stylesheet" href="/static/style.css">\n'
         '  <link rel="stylesheet" href="/static/demo.css">\n'
-        '  <link rel="icon" href="/favicon.ico">',
+        '  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">',
         1,
     )
     html = html.replace("<body>\n", f"<body>\n{_demo_bar('fake')}\n", 1)
@@ -174,7 +174,7 @@ def _write_droid(dest: Path, source: Path | None) -> dict | None:
         '<link rel="stylesheet" href="static/style.css">',
         '<link rel="stylesheet" href="static/style.css">\n'
         '  <link rel="stylesheet" href="/static/demo.css">\n'
-        '  <link rel="icon" href="/favicon.ico">',
+        '  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">',
         1,
     )
     html = html.replace("<body>\n", f"<body>\n{_demo_bar('droid')}\n", 1)
@@ -279,11 +279,11 @@ def _page(title: str, current: str, body: str) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#faf9f5">
+  <meta name="theme-color" content="#f6f6f3">
   <title>{escape(title)} · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
-  <link rel="icon" href="/favicon.ico">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
   <header class="top demo-top">
@@ -298,25 +298,95 @@ def _page(title: str, current: str, body: str) -> str:
 """
 
 
+HERO_FEATURE = "white robot arm"
+
+
+def _hero_figure(droid_dir: Path, run: dict | None) -> str:
+    """A real frame from the DROID run with one verified feature's activation drawn on it.
+
+    Prefers ``HERO_FEATURE`` on a clip the model never trained on, else the strongest verified
+    feature there. Everything comes from the export's own files, so nothing is invented; with
+    no export the hero has no picture.
+    """
+    if run is None:
+        return ""
+    verified = {int(f["id"]): str(f.get("label")) for f in run["features"] if f.get("badge") == "real"}
+    unseen = {str(c.get("id") or c.get("clip_id")) for c in run.get("clips", []) if c.get("split") not in (None, "train")}
+    best = None
+    for heat_path in sorted((droid_dir / "data" / "clips").glob("*/heat.json")):
+        clip = heat_path.parent.name
+        if unseen and clip not in unseen:
+            continue
+        frames = heat_path.parent / "frames"
+        stills = {int(p.stem) for p in frames.glob("*.png") if p.stem.isdigit()} if frames.is_dir() else set()
+        heat = json.loads(heat_path.read_text(encoding="utf-8"))
+        for key, cells in heat.get("cells", {}).items():
+            frame, feature = (int(part) for part in key.split(":", 1))
+            if frame not in stills or feature not in verified:
+                continue
+            score = (verified[feature] == HERO_FEATURE, sum(cells[2::3]))
+            if best is None or score > best[0]:
+                best = (score, clip, frame, feature, cells, heat["shape"])
+    if best is None:
+        return ""
+    _score, clip, frame, feature, cells, (height, width) = best
+    peak = max(cells[2::3]) or 1.0
+    lit = {(int(cells[i]), int(cells[i + 1])): cells[i + 2] / peak for i in range(0, len(cells), 3)}
+    grid = "".join(
+        f'<i style="--a:{lit[(h, w)] ** 0.7:.2f}" class="on"></i>' if (h, w) in lit else "<i></i>"
+        for h in range(int(height))
+        for w in range(int(width))
+    )
+    label = escape(verified[feature])
+    return (
+        '    <figure class="home-figure" data-testid="hero-figure">\n'
+        f'      <a class="home-shot" href="/droid/#/clips/{escape(clip)}?frame={frame}&amp;feature={feature}">'
+        f'<img src="/droid/data/clips/{escape(clip)}/frames/{frame}.png" alt="A robot clip the model never trained on">'
+        f'<span class="home-grid" style="grid-template-columns:repeat({int(width)},1fr)" aria-hidden="true">{grid}</span></a>\n'
+        f'      <figcaption><span class="home-dot"></span>Where the model sees <strong>{label}</strong>, '
+        "on a robot clip it never trained on. A verified feature: open it and switch it off.</figcaption>\n"
+        "    </figure>\n"
+    )
+
+
 def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None) -> None:
     commands = dict(_ii_commands())
     known = set(commands)
     headline = escape(_control_headline(summary))
     useful = ("try", "run", "view", "rollouts", "validate")
     command_items = "".join(
-        f"<li>{_cmd(name, known)} — {escape(commands[name])}</li>" for name in useful
+        f"<li>{_cmd(name, known)}<span>{escape(commands[name])}</span></li>" for name in useful
     )
     episodes = _episode_total(summary)
+    figure = _hero_figure(path.parent / "droid", droid_run)
+    real_run = '<a class="button button-quiet" href="/droid/">See a real run</a>' if droid_run else ""
+    droid_card = (
+        f'      <article class="proof-card">\n        <p class="proof-kicker">A vision model on robot video</p>\n{_droid_proof(droid_run)}      </article>\n'
+        if droid_run
+        else ""
+    )
     body = f"""
-    <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
-    <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
-    <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
+    <section class="home-hero{' home-hero-figure' if figure else ''}">
+      <div class="home-hero-text">
+        <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
+        <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
+        <p class="home-ctas"><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a>{real_run}</p>
+      </div>
+{figure}    </section>
     <h2>What you get today</h2>
     <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. {_cmd("import", known)} brings rollout logs you already have into a run folder that validate accepts.</p>
     <h2>Proof</h2>
-    <p data-testid="control-headline">{headline}</p>
-    <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
-{_droid_proof(droid_run)}    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
+    <div class="proof-grid">
+      <article class="proof-card proof-card-wide">
+        <p class="proof-kicker">GR00T, a robot policy</p>
+        <p class="proof-headline" data-testid="control-headline">{headline}</p>
+        <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
+      </article>
+{droid_card}      <article class="proof-card">
+        <p class="proof-kicker">V-JEPA 2, a world model</p>
+        <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one, so that control is now the bar.</a></p>
+      </article>
+    </div>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
       <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>
