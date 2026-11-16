@@ -1680,16 +1680,24 @@ def _concept_inputs(adapter_name: str, concepts_file, tiny: bool = False) -> dic
     return inputs
 
 
-def _autointerp_client(adapter):
+def _autointerp_client(adapter, out: Path | None = None):
     """The vision-model client for explain-then-simulate labels, or ``None``.
 
     Only for hf and only when a vision-model key is set (``autointerp.client_from_env``).
+    With ``out``, every reply is also kept in the run folder (``control/autointerp/``,
+    a resume artefact). Providers do not answer the same question the same way
+    twice, so without this a rescore on another machine, or after the user's
+    cache is cleared, could take a verified feature's label away. A run's labels
+    now come back the same wherever it is scored again.
     """
     if not adapter.name.startswith("hf:"):
         return None
-    from interpretableintelligence.autointerp import client_from_env
+    from interpretableintelligence.autointerp import CachedClient, client_from_env
 
-    return client_from_env()
+    client = client_from_env()
+    if client is None or out is None:
+        return client
+    return CachedClient(client, Path(out) / "control" / "autointerp")
 
 
 def _autointerp_label(client, adapter, sae, meta, out: Path, labels: list[dict], targets, device, seed, log) -> list[dict] | None:
@@ -1733,7 +1741,7 @@ def _causal_shortlist(
     """
     from interpretableintelligence.autointerp import MAX_FEATURES
 
-    client = _autointerp_client(adapter)
+    client = _autointerp_client(adapter, out)
     evidence: list[dict] = []
     if k is None:
         if client is not None:

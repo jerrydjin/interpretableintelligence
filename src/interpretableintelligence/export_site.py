@@ -9,9 +9,12 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import tempfile
 from html import escape
 from pathlib import Path
+from types import SimpleNamespace
 
+from interpretableintelligence import export_run
 from interpretableintelligence.adapters.fake import generate_clips
 from interpretableintelligence.export_run import write_viewer_data
 from interpretableintelligence.pipeline import execute_pipeline
@@ -19,6 +22,8 @@ from interpretableintelligence.view import load_run
 
 REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
+EXPORT_MARKER = export_run.MARKER
+DROID_TITLE = "DINOv2 on DROID robot video: verified features you can steer"
 CAUSAL = ("stripe", "pulse", "corner")
 DECOYS = ("flicker", "band", "speckle")
 
@@ -31,6 +36,7 @@ def export_site(
     work_dir: Path | None = None,
     randinit_dir: Path | None = None,
     atp_dir: Path | None = None,
+    droid_dir: Path | None = None,
 ) -> Path:
     """Regenerate ``out_dir`` from a fresh fake run plus the vendored measurements."""
     out = Path(out_dir)
@@ -39,6 +45,13 @@ def export_site(
     groot = Path(groot_dir) if groot_dir else REPO / "demo-data" / "groot"
     randinit = Path(randinit_dir) if randinit_dir else REPO / "demo-data" / "vjepa-randinit"
     atp = Path(atp_dir) if atp_dir else REPO / "demo-data" / "vjepa-atp"
+    # The real-run page is an ``ii export`` that lives in the site itself (it is tens of MB,
+    # so it is not vendored twice). Without ``droid_dir`` the copy already there is kept.
+    kept = None
+    droid = Path(droid_dir) if droid_dir else out / "droid"
+    if (droid / EXPORT_MARKER).is_file():
+        kept = Path(tempfile.mkdtemp(prefix="ii-droid-")) / "droid"
+        shutil.copytree(droid, kept)
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
@@ -68,7 +81,10 @@ def export_site(
     checks = _groot_checks(groot)
     random_control = _random_control(randinit)
     atp_result = _atp(atp)
-    _write_product(out / "index.html", groot_summary, groot_status)
+    droid_run = _write_droid(out / "droid", kept)
+    if kept is not None:
+        shutil.rmtree(kept.parent, ignore_errors=True)
+    _write_product(out / "index.html", groot_summary, groot_status, droid_run)
     _write_results(out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result)
     _write_picker(out / "picker", picker)
     _write_vjepa(out / "vjepa", vjepa, random_control, atp_result)
@@ -132,6 +148,66 @@ def _viewer_page(sentence: str) -> str:
     return html.replace("  </header>\n", "  </header>\n" + score, 1)
 
 
+def _write_droid(dest: Path, source: Path | None) -> dict | None:
+    """Put an ``ii export`` of a real run at ``dest``, under the demo bar.
+
+    The export's data (clips, features, precomputed playground) is copied as it is; nothing
+    is recomputed and the counts shown come from its ``run.json``. Its page shell and static
+    files are written again from this checkout, so the viewer there never drifts.
+    """
+    if source is None:
+        return None
+    shutil.copytree(source, dest)
+    run = json.loads((dest / "data" / "run.json").read_text(encoding="utf-8"))
+    shutil.rmtree(dest / "static", ignore_errors=True)
+    export_run._copy_static(dest / "static")
+    html = export_run._shell(DROID_TITLE, SimpleNamespace(run_payload=run))
+    html = html.replace(
+        '<link rel="stylesheet" href="static/style.css">',
+        '<link rel="stylesheet" href="static/style.css">\n'
+        '  <link rel="stylesheet" href="/static/demo.css">\n'
+        '  <link rel="icon" href="/favicon.ico">',
+        1,
+    )
+    html = html.replace("<body>\n", f"<body>\n{_demo_bar('droid')}\n", 1)
+    line = f'  <p class="score-line" data-testid="droid-banner">{escape(_droid_sentence(run))}</p>\n'
+    html = html.replace("  </header>\n", "  </header>\n" + line, 1)
+    (dest / "index.html").write_text(html, encoding="utf-8")
+    return run
+
+
+def _droid_verified(run: dict) -> list[str]:
+    return [str(feature.get("label")) for feature in run["features"] if feature.get("badge") == "real"]
+
+
+def _droid_sentence(run: dict) -> str:
+    model = (run.get("model") or {}).get("name") or "the model"
+    verified = _droid_verified(run)
+    return (
+        f"A real run: {model} on {_droid_clips(run)} DROID robot clips, on a 4-core CPU. "
+        f"{len(verified)} of {len(run['features'])} features passed every check ({', '.join(verified)}). "
+        "The playground here is precomputed; it is for exploring, not evidence."
+    )
+
+
+def _droid_clips(run: dict) -> int:
+    """Clips the run was scored on, which is more than a size-limited export shows."""
+    export = run.get("export") or {}
+    return int(export.get("clips_total") or len(run["clips"]))
+
+
+def _droid_proof(run: dict | None) -> str:
+    if run is None:
+        return ""
+    model = (run.get("model") or {}).get("name") or "a real model"
+    count = len(_droid_verified(run))
+    return (
+        f'    <p data-testid="droid-proof"><a href="/droid/">Open a real run: {escape(str(model))} on '
+        f"{_droid_clips(run)} DROID robot clips, with {count} features that passed every check "
+        "and a playground to remove or boost them.</a></p>\n"
+    )
+
+
 def _demo_bar(current: str) -> str:
     return (
         '  <nav class="demo-bar" aria-label="Demo sections">'
@@ -154,6 +230,7 @@ def _nav(current: str) -> str:
         ("results", "/results/", "Results"),
         ("groot", "/groot/", "GR00T"),
         ("vjepa", "/vjepa/", "V-JEPA 2"),
+        ("droid", "/droid/", "DINOv2"),
         ("picker", "/picker/", "Picker"),
         ("fake", "/fake/", "Pipeline demo"),
     )
@@ -191,7 +268,7 @@ def _page(title: str, current: str, body: str) -> str:
 """
 
 
-def _write_product(path: Path, summary: dict, status: str) -> None:
+def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None) -> None:
     commands = dict(_ii_commands())
     known = set(commands)
     headline = escape(_control_headline(summary))
@@ -209,7 +286,7 @@ def _write_product(path: Path, summary: dict, status: str) -> None:
     <h2>Proof</h2>
     <p data-testid="control-headline">{headline}</p>
     <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
-    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
+{_droid_proof(droid_run)}    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
       <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>

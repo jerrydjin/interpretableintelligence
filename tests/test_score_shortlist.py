@@ -24,7 +24,7 @@ def _labels(holding: set[int], n: int = 8) -> list[dict]:
 
 
 def _shortlist(labels, ranked, k, free_ok, tmp_path, monkeypatch, client=None, label=None):
-    monkeypatch.setattr(pipeline, "_autointerp_client", lambda adapter: client)
+    monkeypatch.setattr(pipeline, "_autointerp_client", lambda adapter, out=None: client)
     if label is not None:
         monkeypatch.setattr(pipeline, "_autointerp_label", label)
     logs: list[str] = []
@@ -62,8 +62,8 @@ def test_vision_labels_come_before_the_causal_checks(tmp_path, monkeypatch):
     def label(client, adapter, sae, meta, out, labels, targets, device, seed, log):
         asked.append(list(targets))
         for fid in targets:
-            labels[fid] = {"label": "x", "label_model": "autointerp-v1:stub", "label_holds_heldout": fid in good}
-        return [{"version": "autointerp-v1", "model": "stub", "features": []}] + [{"id": fid} for fid in targets]
+            labels[fid] = {"label": "x", "label_model": "autointerp-v2:stub", "label_holds_heldout": fid in good}
+        return [{"version": "autointerp-v2", "model": "stub", "features": []}] + [{"id": fid} for fid in targets]
 
     class Client:
         name = "stub/vision"

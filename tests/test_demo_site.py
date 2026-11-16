@@ -271,6 +271,7 @@ def test_product_page_is_the_front_door():
     controls = [row for row in summary["table"] if "-ctrl" in row["cond"]]
     fell = sum(row["verdict"] == "fall" for row in controls)
     baseline = next(row for row in summary["table"] if row["cond"] == "baseline")
+    droid = json.loads((ROOT / "droid" / "data" / "run.json").read_text(encoding="utf-8"))
     assert _visible_numbers(page) == [
         str(single["cond"]).split("-")[-1],
         str(int(baseline["successes"])),
@@ -280,6 +281,9 @@ def test_product_page_is_the_front_door():
         str(fell),
         str(len(controls)),
         str(summary["episodes_logged"]),
+        "2",  # the model's name, dinov2-small
+        str(droid["export"]["clips_total"]),
+        str(sum(feature.get("badge") == "real" for feature in droid["features"])),
     ]
 
 
@@ -519,3 +523,28 @@ def test_vjepa_random_control_and_attribution_come_from_the_vendored_files():
     assert f"edit size alone (summed activation) already gives Spearman {edit:.2f}" in text
     assert f"{int(round(atp['timing']['speedup_if_ranking_all_8192'], -2)):,}x" in text
     assert f"{atp['timing']['speedup_tested_features_only']:.1f}x" in text
+
+
+def test_real_run_page_reports_its_own_scoreboard():
+    """/droid/ is an `ii export` of a real run; every count on the site comes from its run.json."""
+    run = json.loads((ROOT / "droid" / "data" / "run.json").read_text(encoding="utf-8"))
+    verified = [feature for feature in run["features"] if feature.get("badge") == "real"]
+    assert verified and all(feature["real"] is True for feature in verified)
+    page = (ROOT / "droid" / "index.html").read_text(encoding="utf-8")
+    banner = re.search(r'data-testid="droid-banner">(.*?)</p>', page, re.S).group(1)
+    assert f"{len(verified)} of {len(run['features'])} features passed every check" in banner
+    assert "not evidence" in banner
+    assert 'data-ii-root="data"' in page and 'aria-current="page"' in _nav_bar(page)
+    home = (ROOT / "index.html").read_text(encoding="utf-8")
+    proof = re.search(r'data-testid="droid-proof">(.*?)</p>', home, re.S).group(1)
+    assert 'href="/droid/"' in proof and f"{len(verified)} features that passed every check" in proof
+    assert run["steer"]["static"] is True and run["steer"]["clips"]
+    shown = {clip["clip_id"] for clip in run["clips"]}
+    assert run["export"]["clips_shown"] == len(shown)
+    for feature in verified:
+        detail = json.loads((ROOT / "droid" / "data" / "features" / f"{feature['id']}.json").read_text(encoding="utf-8"))
+        assert detail["top_clips"] and {top["clip_id"] for top in detail["top_clips"]} <= shown
+
+
+def _nav_bar(page: str) -> str:
+    return re.search(r'<nav class="demo-bar".*?</nav>', page, re.S).group(0)
