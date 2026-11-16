@@ -28,6 +28,7 @@ from interpretableintelligence.attribute import (
 )
 from interpretableintelligence.sae import SAE
 from interpretableintelligence.score import ablate_edit
+from interpretableintelligence.thresholds import N_RANDOM_FEATURES
 from typer.testing import CliRunner
 
 from interpretableintelligence.cli import app
@@ -221,7 +222,14 @@ def test_prefilter_ablates_only_the_shortlist(demo, tmp_path: Path):
         f"prefilter ablation={short['ablation']:.4f}s controls={short['random_controls']:.4f}s "
         f"attribution={short['attribution']:.4f}s"
     )
-    assert short["random_controls"] < full["random_controls"]
+    # The saving is in work done, not wall time: features that never fire cost
+    # almost nothing, so on a busy runner (macOS CI) 3 shortlisted controls can
+    # take longer than all of them. Count control trials, which is exact.
+    full_board = json.loads((demo.run / "scoreboard.json").read_text())["features"]
+    full_trials = sum(row["n_random"] for row in full_board)
+    short_trials = sum(row["n_random"] for row in scoreboard["features"])
+    assert short_trials == len(document["candidates"]) * N_RANDOM_FEATURES
+    assert short_trials < full_trials
 
 
 def test_action_loglik_beats_a_loud_decoy():
