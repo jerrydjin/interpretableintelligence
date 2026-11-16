@@ -11,7 +11,10 @@ num_inference_timesteps-1, the step the SAE was trained on; "all" = every step),
 ("all" = every DiT token, or a list of token positions).
 
 Conditions (plan["conditions"]): baseline (no hook edit, fixed n, no SPRT), recon_only (S = {}, a few eps),
-candidate / control (S = latents, SPRT). Every condition uses the same seeds: episode i -> seed 40000+i,
+candidate / control (S = latents, SPRT), random_sae (S = latents of an untrained SAE, the random-weights SAE control).
+A condition's optional "dictionary" names the SAE it edits: "trained" (default) or "random:<seed>", whose subset file
+run_ablation takes in `dictionaries`. The edit rule is the same for every dictionary, so an untrained SAE's large
+reconstruction error is kept and only the ablated latents' decoder contributions are removed. Every condition uses the same seeds: episode i -> seed 40000+i,
 init_state_id i % 50, v9 per-episode noise generator, so results are paired by episode index.
 
 SPRT (per condition, on the contiguous prefix of finished episodes in index order, so completion order and
@@ -451,26 +454,44 @@ def file_from_blob(blob: str, out_path, sha256: str | None = None) -> str:
 
 
 # --------------------------------------------------------------------------- hook editor
+TRAINED = "trained"
+
+
+def cond_dictionary(cond: dict) -> str:
+    """The SAE a condition edits: "trained" unless the plan names an untrained "random:<seed>" dictionary."""
+    name = cond.get("dictionary") or TRAINED
+    if name != TRAINED and not (name.startswith("random:") and name[len("random:"):].isdigit()):
+        raise ValueError(f"condition {cond.get('id')!r}: dictionary must be 'trained' or 'random:<seed>', got {name!r}")
+    return name
+
+
 @dataclass(frozen=True)
 class Edit:
     """Per-episode edit: sel = SAE-subset positions to ablate (empty = recon-only identity), track = positions whose
-    firing is recorded. Short repr because Job.meta is printed in TIMING lines."""
+    firing is recorded, dictionary = which SAE (trained or random:<seed>). Short repr because Job.meta is printed in
+    TIMING lines."""
     cond: str
     sel: tuple
     track: tuple
+    dictionary: str = TRAINED
 
     def __repr__(self) -> str:
         return f"Edit({self.cond}, n_sel={len(self.sel)})"
 
 
 class LatentAblator:
-    """Forward hook on transformer_blocks.{layer}. Rows whose edit is None are left untouched (baseline)."""
+    """Forward hook on transformer_blocks.{layer}. Rows whose edit is None are left untouched (baseline).
 
-    def __init__(self, sae: SAESubset, *, denoise_steps="final", tokens="all", stat_tokens=None):
+    `sae` is one SAESubset (every edit is on the trained SAE) or {dictionary name: SAESubset}; each row is edited
+    through the SAE its Edit.dictionary names."""
+
+    def __init__(self, sae, *, denoise_steps="final", tokens="all", stat_tokens=None):
         if denoise_steps not in ("final", "all"):
             raise ValueError(f"denoise_steps must be 'final' or 'all', got {denoise_steps!r}")
-        self.sae_cpu = sae
-        self.sae = None
+        self.saes_cpu = dict(sae) if isinstance(sae, dict) else {TRAINED: sae}
+        if not self.saes_cpu:
+            raise ValueError("LatentAblator needs at least one SAE")
+        self.saes: dict = {}
         self.denoise_steps = denoise_steps
         self.tokens = tokens
         self.stat_tokens = None if stat_tokens is None else [int(t) for t in stat_tokens]
@@ -534,14 +555,20 @@ class LatentAblator:
         """t [B, T, D] -> (edited t, per-row stats). Pure function of t and self.rows (used by the hook and tests)."""
         if t.ndim != 3 or t.shape[0] != len(self.rows):
             raise RuntimeError(f"edit hook: output {tuple(t.shape)} vs {len(self.rows)} batch rows")
-        if self.sae is None or self.sae.norm_mu.device != t.device:
-            self.sae = self.sae_cpu.to(t.device)
-        sae = self.sae
-        if t.shape[-1] != sae.d_in:
-            raise RuntimeError(f"edit hook: d_model {t.shape[-1]} != SAE d_in {sae.d_in}")
         B, T, _D = t.shape
         x32 = t.float()
-        f = sae.encode(x32)  # [B, T, m]
+        codes = {}  # dictionary -> f [B, T, m], encoded once per call for the dictionaries this batch uses
+        for e in self.rows:
+            if e is None or e.dictionary in codes:
+                continue
+            if e.dictionary not in self.saes_cpu:
+                raise RuntimeError(f"edit hook: no SAE loaded for dictionary {e.dictionary!r}")
+            sae = self.saes.get(e.dictionary)
+            if sae is None or sae.norm_mu.device != t.device:
+                sae = self.saes[e.dictionary] = self.saes_cpu[e.dictionary].to(t.device)
+            if t.shape[-1] != sae.d_in:
+                raise RuntimeError(f"edit hook: d_model {t.shape[-1]} != SAE d_in {sae.d_in}")
+            codes[e.dictionary] = sae.encode(x32)
         tm = self._tok_mask(T, t.device)
         st_ix = None if self.stat_tokens is None else torch.tensor([i for i in self.stat_tokens if i < T], device=t.device)
         new_rows, stats = [], []
@@ -550,6 +577,7 @@ class LatentAblator:
                 new_rows.append(t[b])
                 stats.append(None)
                 continue
+            sae, f = self.saes[e.dictionary], codes[e.dictionary]
             sel = torch.tensor(list(e.sel), dtype=torch.long, device=t.device)
             delta = (f[b][:, sel] @ sae.W_dec[sel]) * sae.norm_scale  # [T, D]; zeros when sel is empty
             if tm is not None:
@@ -957,16 +985,60 @@ def _atomic_json(path: Path, obj):
 
 
 # --------------------------------------------------------------------------- runner (Colab / box mock)
-def make_edit(cid: str, cond: dict, sae: SAESubset) -> Edit | None:
+def make_edit(cid: str, cond: dict, sae) -> Edit | None:
+    """`sae`: the trained SAESubset, or {dictionary: SAESubset} when the plan has random-weights SAE conditions."""
     if cond["latents"] is None:
         return None  # baseline: hook leaves the block output untouched
-    sel = tuple(sae.pos(cond["latents"]))
-    track = sel if sel else tuple(range(len(sae.latent_ids)))  # recon-only: firing stats for every subset latent
-    return Edit(cid, sel, track)
+    name = cond_dictionary(cond)
+    s = sae[name] if isinstance(sae, dict) else sae
+    if not isinstance(sae, dict) and name != TRAINED:
+        raise ValueError(f"condition {cid!r} edits {name}, but only the trained SAE was loaded")
+    sel = tuple(s.pos(cond["latents"]))
+    track = sel if sel else tuple(range(len(s.latent_ids)))  # recon-only: firing stats for every subset latent
+    return Edit(cid, sel, track, name)
 
 
-def run_ablation(ctx, plan: dict, *, sae_path, norm_stats=None, only: list[str] | None = None) -> dict:
-    """ctx: physint_inproc_v9.Ctx with the live policy / processors (ctx.run = output dir). Resumable."""
+def load_dictionaries(plan: dict, sae_path, dictionaries: dict | None = None, norm_stats=None) -> dict:
+    """{dictionary: SAESubset} for every dictionary the plan's conditions edit, each restricted to its latents.
+
+    The trained SAE comes from `sae_path` (checked against the plan's subset or full sha256, as before). An untrained
+    "random:<seed>" SAE comes from dictionaries[name], checked against plan["sae"]["dictionaries"][name]["subset_sha256"]."""
+    by_dict: dict[str, set] = {}
+    for c in plan["conditions"]:
+        if c["latents"] is None:
+            continue
+        by_dict.setdefault(cond_dictionary(c), set()).update(int(l) for l in c["latents"])
+    by_dict.setdefault(TRAINED, set())
+    declared = (plan["sae"].get("dictionaries") or {})
+    out = {}
+    for name, lat in sorted(by_dict.items()):
+        if name == TRAINED:
+            path = sae_path
+            allowed = {plan["sae"].get("subset_sha256"), plan["sae"].get("full_sha256")} - {None}
+            if TRAINED in declared:
+                allowed.add(declared[TRAINED].get("subset_sha256"))
+                allowed.discard(None)
+        else:
+            if not dictionaries or name not in dictionaries:
+                raise ValueError(f"plan edits {name}; pass its subset file in dictionaries={{{name!r}: path}}")
+            if name not in declared:
+                raise ValueError(f"plan edits {name} but plan['sae']['dictionaries'] does not declare it")
+            path = dictionaries[name]
+            allowed = {declared[name]["subset_sha256"]}
+        sha = sha256_file(path)
+        if plan["sae"].get("check_sha256", True) and sha not in allowed:
+            raise ValueError(f"SAE file {path} sha256 {sha} does not match the plan for {name}")
+        out[name] = load_sae(path, sorted(lat) or None, norm_stats if name == TRAINED else None)
+        if plan["sae"].get("d_in") and out[name].d_in != int(plan["sae"]["d_in"]):
+            raise ValueError(f"SAE {name} d_in {out[name].d_in} != plan {plan['sae']['d_in']}")
+    return out
+
+
+def run_ablation(ctx, plan: dict, *, sae_path, norm_stats=None, only: list[str] | None = None,
+                 dictionaries: dict | None = None) -> dict:
+    """ctx: physint_inproc_v9.Ctx with the live policy / processors (ctx.run = output dir). Resumable.
+
+    dictionaries: {"random:<seed>": subset file} for plans with random-weights SAE conditions."""
     import physint_inproc_v8 as v8  # noqa: PLC0415
     import physint_inproc_v9 as v9  # noqa: PLC0415
 
@@ -974,18 +1046,11 @@ def run_ablation(ctx, plan: dict, *, sae_path, norm_stats=None, only: list[str] 
         raise ValueError(f"plan schema {plan.get('schema')!r} != {PLAN_SCHEMA}")
     out = Path(ctx.run)
     log = ctx.log
-    sha = sha256_file(sae_path)
-    allowed = {plan["sae"].get("subset_sha256"), plan["sae"].get("full_sha256")} - {None}
-    if plan["sae"].get("check_sha256", True) and sha not in allowed:
-        raise ValueError(f"SAE file {sae_path} sha256 {sha} matches neither the plan's subset nor full checkpoint")
-    lat = sorted({int(l) for c in plan["conditions"] if c["latents"] for l in c["latents"]})
-    sae = load_sae(sae_path, lat or None, norm_stats)
-    if plan["sae"].get("d_in") and sae.d_in != int(plan["sae"]["d_in"]):
-        raise ValueError(f"SAE d_in {sae.d_in} != plan {plan['sae']['d_in']}")
+    saes = load_dictionaries(plan, sae_path, dictionaries, norm_stats)
     hk = plan["hook"]
     if int(hk["layer"]) != int(ctx.layer):
         raise ValueError(f"plan hook layer {hk['layer']} != ctx.layer {ctx.layer}")
-    abl = LatentAblator(sae, denoise_steps=hk["denoise_steps"], tokens=hk["tokens"], stat_tokens=hk.get("stat_tokens"))
+    abl = LatentAblator(saes, denoise_steps=hk["denoise_steps"], tokens=hk["tokens"], stat_tokens=hk.get("stat_tokens"))
     st = AblationState(plan, out, only=only, log=log)
     task = plan["task"]
     key = ("plus", int(task["index"]))
@@ -995,8 +1060,9 @@ def run_ablation(ctx, plan: dict, *, sae_path, norm_stats=None, only: list[str] 
         if got != n_init:
             raise RuntimeError(f"task {task} has {got} init states, plan says {n_init}")
     base = int(plan["seeds"]["base"])
-    edits = {cid: make_edit(cid, c, sae) for cid, c in st.conds.items()}
-    track_ids = {cid: ([sae.latent_ids[j] for j in e.track] if e is not None else None) for cid, e in edits.items()}
+    edits = {cid: make_edit(cid, c, saes) for cid, c in st.conds.items()}
+    track_ids = {cid: ([saes[e.dictionary].latent_ids[j] for j in e.track] if e is not None else None)
+                 for cid, e in edits.items()}
     t0 = time.time()
     n_new = [0]
 
@@ -1018,7 +1084,7 @@ def run_ablation(ctx, plan: dict, *, sae_path, norm_stats=None, only: list[str] 
                "fail_kind": fr["fail_kind"], "fail_t": fr["fail_t"], **{k: fr["extra"].get(k) for k in
                ("fail_kind_active", "fail_t_active", "fail_subkind", "fail_pot", "fail_rule", "pot0_lift_t", "pot0_place_t")},
                "n_steps": int(ep.n_steps), "n_predict": int(ep.timing.get("n_predict", 0)), "seconds": ep.seconds, "task_name": ep.task_name,
-               "latents": st.conds[cid]["latents"], "edit_stats": es,
+               "latents": st.conds[cid]["latents"], "dictionary": cond_dictionary(st.conds[cid]), "edit_stats": es,
                "actions_sha256": hashlib.sha256(acts.tobytes()).hexdigest(), "first_action": ep.first_action,
                "amp_mode": ctx.amp_mode, "runner": v9.V9_VERSION, "ablate": ABLATE_VERSION,
                "t": time.strftime("%Y-%m-%d %H:%M:%S")}
