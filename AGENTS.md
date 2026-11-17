@@ -33,7 +33,8 @@ All experiments that belong in this repo should be reachable through these comma
 | `try` | Guided first run for newcomers: practice clips, a `fake` run under `runs/try`, then the playground opened on the strongest verified feature. |
 | `generate-clips` | Write deterministic synthetic clips for the `fake` adapter (`--failure-labels planted\|null` also writes `failures.json` for `ii probe`). |
 | `get-clips` | Download short real robot clips (DROID, MIT licence) to run a real model on, for learners with no video of their own. |
-| `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). `--remote` runs it on a Modal GPU billed to the invoking user's account and streams results back (`docs/REMOTE.md`). |
+| `record-libero` | Record closed-loop GR00T episodes on one LIBERO-plus task (default 1028, seeds `60000 + i`) as clips the `groot` adapter reads: main camera, wrist camera, state and instruction per env step. Checks first that the adapter rebuilds the policy's own backbone inputs from the recorded arrays. GPU box with `lerobot[groot]` and LIBERO-plus (`scripts/groot_gpu_setup.sh`). |
+| `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). `--remote` runs it on a Modal GPU billed to the invoking user's account and streams results back (`docs/REMOTE.md`). `--sae-from` copies a frozen SAE in (ii run folder or GR00T v9 capture) instead of training one, so its feature ids keep their meaning; such a run is never scored (`SCHEMA.md`, "Reused SAEs"). |
 | `rank` | Attribution prefilter shortlist; does not replace ablation. |
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
 | `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
@@ -122,6 +123,7 @@ Offline world-model acceptance remains `ii run fake` → exactly three `real` fe
 | Need | Read |
 | --- | --- |
 | Run schema / gates | `SCHEMA.md`, `src/interpretableintelligence/thresholds.py` |
+| Steering scorecard on real GR00T | `docs/groot-steer-scorecard.md`, `scripts/groot_steer_scorecard.sh` |
 | Pipeline stages | `ARCHITECTURE.md`, `src/interpretableintelligence/pipeline.py` |
 | GR00T v9 ablation / SPRT | `src/interpretableintelligence/adapters/groot/v9/ablate_v9.py` |
 | Demo bundles | `demo-data/`, `ii export-site` |

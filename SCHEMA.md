@@ -50,6 +50,7 @@ runs/<run_id>/
 - `clips[].split` is `train` or `heldout`. A clip is entirely one or the other.
 - `model.sha` is a sha256 of the adapter weights used for the run (`random_init` is false for a normal run).
 - `split.sha` equals `split.json`'s `sha`.
+- Optional `sae_source`: present only on a run made with `ii run --sae-from` (see "Reused SAEs").
 - `grid` is the activation lattice: `t` time bins, `h`×`w` patches, each bin pooling `tubelet` frames and `patch_px` pixels.
 
 Two optional manifest fields are not part of the contract readers must understand:
@@ -105,6 +106,17 @@ x_hat = W_dec @ f + b_dec
 ```
 
 Decoder columns are unit-norm. `sae/config.json` records `d_model`, `n_features`, `l1_coeff`, `ortho_coeff`, `lr`, `steps`, `batch_size`, `seed`, `normalize_decoder`, and `activation` (`relu`, `topk`, or `jumprelu`). A `topk` SAE also records `k`, the number of features kept per token; its `l1_coeff` and `ortho_coeff` are 0. A `jumprelu` SAE records `threshold` instead: `f = r * (r > threshold)` with `r = relu(W_enc @ (x - b_dec) + b_enc)`. That is how a BatchTopK SAE runs at inference, and `ii import` writes it (see "Imported runs"). Training uses train-split activations only. The orthogonality term keeps one planted direction from splitting into two live features.
+
+### Reused SAEs
+
+`ii run --sae-from DIR` copies a frozen SAE into `sae/` instead of training one, so feature ids found elsewhere keep their meaning on new clips. `DIR` is an `ii` run folder, a GR00T v9 capture (or `ii retrain-sae` output), or their `sae/` directory. A v9 BatchTopK SAE is folded exactly as `ii import` folds it ("Imported runs", `groot-v9`). The manifest records where it came from:
+
+```json
+"sae_source": {"path": "/abs/groot-1028-v9-n100/sae", "format": "groot-v9", "config_sha256": "<64 hex>",
+               "weights_sha256": "<64 hex>", "n_features": 8192, "notes": {"norm_scale": 3.1, "fold": "..."}}
+```
+
+`format` is `ii` or `groot-v9`; the two sha256s are of the source's `config.json` and `weights.safetensors` (the folded weights in this run differ for `groot-v9`). The SAE was not trained on this run's train split, so such a run is never scored: it has no `scoreboard.json`, and `ii steer-scorecard --features` is how its features are measured. Training the run's own SAE again removes `sae_source`.
 
 ## features/feature_acts.parquet
 
