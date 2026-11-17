@@ -36,17 +36,26 @@ def _picture(seed: int, size: int = 32) -> bytes:
 
 
 def _reference(served, rgb: bytes, feature: int | None = None, kind: str = "scale", value: float = 3.0):
-    """The same read and edit straight from torch, with the run's own (fp32) SAE."""
+    """The same read and edit straight from torch, with the pack's SAE weights.
+
+    The pack's fp16 weights, not the run's fp32 ones: a top-k SAE can swap its k-th feature
+    between the two on another CPU, which is a precision fact, not a backend bug
+    (test_pack_ships_its_sae_for_the_backend checks the weights themselves)."""
     from interpretableintelligence.adapters import get_adapter
     from interpretableintelligence.adapters.hf import make_spec
     from interpretableintelligence.live import split_model
-    from interpretableintelligence.sae import load_sae
+    from safetensors.torch import load_file
+
+    from interpretableintelligence.sae import SAE
     from interpretableintelligence.steer import steer_edit
 
     pack = json.loads((served["pack"] / "pack.json").read_text(encoding="utf-8"))
     adapter = get_adapter(make_spec(str(served["model"])))(layer=1, device=torch.device("cpu"))
     adapter.load()
-    sae, _config = load_sae(served["run"] / "sae", torch.device("cpu"))
+    info = pack["sae"]
+    sae = SAE(pack["model"]["d_model"], info["n_features"], info["activation"], info.get("k"), info.get("threshold"))
+    sae.load_state_dict({k: v.float() for k, v in load_file(str(served["pack"] / "sae.safetensors")).items()})
+    sae.eval()
     front, back = split_model(adapter)
     mean = torch.tensor(pack["model"]["mean"]).view(3, 1, 1)
     std = torch.tensor(pack["model"]["std"]).view(3, 1, 1)
@@ -95,8 +104,7 @@ def test_read_and_steer_match_torch(served):
         row = patches["values"][patches["offsets"][t] : patches["offsets"][t + 1]]
         assert row == sorted(row, reverse=True) and all(v > 0 for v in row)
     acts, _ = _reference(served, rgb)
-    # The pack stores the SAE in fp16, as the browser engine does; the run's SAE is fp32.
-    assert np.allclose(got, acts.numpy(), atol=2e-2 * float(acts.max()))
+    assert np.allclose(got, acts.numpy(), atol=1e-4 * float(acts.max()) + 1e-5)
     totals = got.sum(axis=0)
     feature = int(totals.argmax())
     assert feature == int(acts.sum(dim=0).argmax())
@@ -106,7 +114,7 @@ def test_read_and_steer_match_torch(served):
     result = steer.json()
     _, shift = _reference(served, rgb, feature, "scale", 3.0)
     assert len(result["shift"]) == 16
-    assert np.allclose(result["shift"], shift.numpy(), atol=2e-3 + 0.05 * float(shift.max()))
+    assert np.allclose(result["shift"], shift.numpy(), atol=1e-5 + 1e-3 * float(shift.max()))
     assert result["max"] == pytest.approx(max(result["shift"]), abs=1e-6) and result["max"] > 0
 
     # The same picture gets the same id: reads are deterministic.
