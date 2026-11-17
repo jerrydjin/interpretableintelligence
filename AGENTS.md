@@ -40,6 +40,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
 | `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls; effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
 | `probe` | Held-out failure probe on a run's SAE latents, trained on `split.json`'s train clips only, against a seeded random-weights SAE (same architecture, width, `k`) and raw activations → `probe/`. `sae_gate` passes only if the trained SAE beats both on AUROC (paired episode bootstrap p < 0.05) at a lead of ≥ 1 s; `not_run` when skipped. Offline; never changes the scoreboard, never sets `real`, not a rollout finding. |
+| `retrain-sae` | Retrain the GR00T capture SAE on its train split (BatchTopK with AuxK or resampling revival, any dictionary size) into a new capture folder whose `sae/` the picker, `ii import` and `ii rollouts --pick` read unchanged; reports alive, dead and dense latents and EV for old and new SAEs (`docs/groot-retrain-sae.md`). A new dictionary: old feature ids and findings do not carry over. Offline; never a finding. |
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |
 | `compare` | Match SAE features across runs on the same clips (activation correlation, shuffle null): which concepts models share and which are unique. Writes `compare.json` and a static page. |
@@ -124,4 +125,5 @@ Offline world-model acceptance remains `ii run fake` → exactly three `real` fe
 | Pipeline stages | `ARCHITECTURE.md`, `src/interpretableintelligence/pipeline.py` |
 | GR00T v9 ablation / SPRT | `src/interpretableintelligence/adapters/groot/v9/ablate_v9.py` |
 | Demo bundles | `demo-data/`, `ii export-site` |
+| Retrain the GR00T SAE (`ii retrain-sae`) | `docs/groot-retrain-sae.md`, `src/interpretableintelligence/adapters/groot/retrain_sae.py` |
 | Import a capture (`ii import`) | `SCHEMA.md` ("Imported runs"), `src/interpretableintelligence/importers/` |
