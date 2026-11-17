@@ -15,6 +15,12 @@ candidates are the top ``N`` of the policy's picker on the trained SAE, and
 picker. Each of their picks becomes an arm with the same edit. These arms join
 the controls' early-stopping family. A candidate is a ``finding`` only when it is
 ``causal`` and its delta is above every random-SAE arm's.
+
+``direction`` says which way an effect counts. ``fall`` (the default): the edit
+should lower success, and ``delta = baseline - intervention``. ``rise`` (GR00T,
+whose candidates fire before failure, so removing them should help):
+``delta = intervention - baseline``. Every gate and the early-stopping test read
+the oriented outcome, so the same thresholds apply both ways.
 """
 
 from __future__ import annotations
@@ -53,6 +59,19 @@ from interpretableintelligence.thresholds import (
 # Arms that are compared against, not tested: they share the early-stopping family.
 CONTROL_ROLES = ("control", "random_sae")
 CANDIDATE_SOURCES = ("features", "pick")
+DIRECTIONS = ("fall", "rise")
+
+
+def oriented(flags, direction: str) -> list[bool]:
+    """Outcomes the effect is measured on: success for ``fall``, failure for ``rise``.
+
+    ``paired_success_delta_ci(oriented(base), oriented(edit))`` is ``base - edit`` for ``fall`` and
+    ``edit - base`` for ``rise``, and the discordant-pair SPRT's efficacy pair (control "succeeds",
+    candidate does not) becomes control fails, candidate succeeds.
+    """
+    if direction not in DIRECTIONS:
+        raise ValueError(f"direction must be one of {DIRECTIONS}, got {direction!r}")
+    return [bool(item) for item in flags] if direction == "fall" else [not bool(item) for item in flags]
 
 SUMMARY_KEYS = {
     "schema_version",
@@ -74,6 +93,7 @@ SUMMARY_KEYS = {
     "candidate_feature_ids",
     "control_feature_ids",
     "candidate_source",
+    "direction",
     "picker",
     "pick_discovery_episodes",
     "random_sae_seeds",
@@ -152,6 +172,8 @@ class RolloutConfig:
     # Untrained SAEs, and each one's picks (same picker, as many as there are candidates).
     random_sae_seeds: tuple[int, ...] = ()
     random_sae_feature_ids: tuple[tuple[int, ...], ...] = ()
+    # "fall": the edit should lower success (fake policies). "rise": it should raise it (GR00T rise test).
+    direction: str = "fall"
 
     def as_dict(self) -> dict:
         return {
@@ -169,6 +191,7 @@ class RolloutConfig:
             "candidate_feature_ids": list(self.candidate_feature_ids),
             "control_feature_ids": list(self.control_feature_ids),
             "candidate_source": self.candidate_source,
+            "direction": self.direction,
             "picker": self.picker,
             "pick_discovery_episodes": self.pick_discovery_episodes,
             "random_sae_seeds": list(self.random_sae_seeds),
@@ -295,6 +318,8 @@ def _check_config(config: RolloutConfig) -> None:
     overlap = set(config.candidate_feature_ids) & set(config.control_feature_ids)
     if overlap:
         raise ValueError(f"controls overlap candidates: {sorted(overlap)}")
+    if config.direction not in DIRECTIONS:
+        raise ValueError(f"direction must be one of {DIRECTIONS}, got {config.direction!r}")
     if config.candidate_source not in CANDIDATE_SOURCES:
         raise ValueError(f"candidate_source must be one of {CANDIDATE_SOURCES}, got {config.candidate_source!r}")
     if (config.candidate_source == "pick") != (config.picker is not None):
@@ -544,8 +569,8 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
             raise ValueError(f"{arm.name} has no episodes")
         present_flags = _flags(config, arm, present, by_id)
         length, reason = declared_stop(
-            present_flags,
-            candidate_flags,
+            oriented(present_flags, config.direction),
+            [oriented(flags, config.direction) for flags in candidate_flags],
             episodes=n,
             min_episodes=config.min_episodes,
             batch_size=config.batch_size,
@@ -572,7 +597,9 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
 
     def score_arm(arm: Arm, flags: list[bool], episodes_run: int, reason: str) -> dict:
         paired_base = baseline_flags[: len(flags)]
-        delta, ci_low, ci_high = paired_success_delta_ci(paired_base, flags, config.alpha)
+        delta, ci_low, ci_high = paired_success_delta_ci(
+            oriented(paired_base, config.direction), oriented(flags, config.direction), config.alpha
+        )
         n10, n01 = discordant_counts(paired_base, flags)
         return {
             "feature_id": arm.feature_ids[0],
@@ -642,8 +669,8 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
         threshold = None
         if arm.role in CONTROL_ROLES:
             gap, log_lr, threshold = binding_sprt(
-                flags,
-                candidate_flags,
+                oriented(flags, config.direction),
+                [oriented(item, config.direction) for item in candidate_flags],
                 config.alpha,
                 SPRT_LAMBDA,
                 n_controls=len(controls),
@@ -769,6 +796,7 @@ def config_from_summary(summary: dict) -> RolloutConfig:
         pick_discovery_episodes=None if summary["pick_discovery_episodes"] is None else int(summary["pick_discovery_episodes"]),
         random_sae_seeds=tuple(int(item) for item in summary["random_sae_seeds"]),
         random_sae_feature_ids=tuple(tuple(int(item) for item in picks) for picks in summary["random_sae_feature_ids"]),
+        direction=str(summary["direction"]),
     )
 
 
@@ -890,8 +918,8 @@ def execute_rollouts(
                         continue
                     control_flags = _flags(config, arm, end, by_id)
                     if sprt_separated(
-                        control_flags,
-                        cand_flags,
+                        oriented(control_flags, config.direction),
+                        [oriented(item, config.direction) for item in cand_flags],
                         config.alpha,
                         SPRT_LAMBDA,
                         n_controls=len(control_arms),

@@ -602,7 +602,9 @@ def rollouts(
         int,
         typer.Option("--workers", min=1, help="Parallel episode workers."),
     ] = DEFAULT_ROLLOUT_WORKERS,
-    seed: Annotated[int, typer.Option("--seed", help="Base seed. Episode i uses seed+i on every arm.")] = 0,
+    seed: Annotated[
+        int, typer.Option("--seed", help="Base seed. Episode i uses seed+i on every arm (GR00T --pick: 0 means 40000).")
+    ] = 0,
     kind: Annotated[str, typer.Option("--kind", help="ablate, scale, or clamp.")] = "ablate",
     value: Annotated[float, typer.Option("--value", help="Scale factor, clamp level, or 0 for ablate.")] = 0.0,
     layer: Annotated[
@@ -677,15 +679,49 @@ def rollouts(
         int,
         typer.Option("--pick-episodes", min=1, help="Discovery episodes the default picker screens each feature on."),
     ] = PICK_DISCOVERY_EPISODES,
+    capture: Annotated[
+        Path | None,
+        typer.Option(
+            "--capture",
+            exists=True,
+            file_okay=False,
+            help="GR00T with --pick: capture run folder (acts, failure labels, trained SAE) the picker reads, "
+            "e.g. groot-1028-v9-n100.",
+        ),
+    ] = None,
 ) -> None:
     """Compare baseline and intervened task success. Resume skips episodes already written."""
     from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
     from interpretableintelligence.rollout_groot import execute_groot_rollouts, format_groot_report, is_groot_policy
 
     try:
+        if is_groot_policy(policy) and pick is not None:
+            from interpretableintelligence.rollout_groot import GROOT_SEED_BASE, execute_groot_pick
+
+            if capture is None:
+                raise ValueError("GR00T --pick needs --capture: the capture run the picker reads")
+            if features.strip() or verify_slice or only or plan is not None:
+                raise ValueError("GR00T --pick builds its own plan: drop --features, --verify-slice, --only and --plan")
+            summary = execute_groot_pick(
+                run_dir,
+                policy=policy,
+                capture=capture,
+                pick=int(pick),
+                random_sae=DEFAULT_RANDOM_SAE if random_sae is None else int(random_sae),
+                controls=controls,
+                episodes=episodes,
+                seed=seed if seed else GROOT_SEED_BASE,
+                alpha=alpha,
+                workers=workers,
+                sae_path=sae,
+                v9_out=v9_out,
+            )
+            typer.echo(format_groot_report(summary))
+            typer.echo(f"wrote {run_dir / 'rollouts'}")
+            return
         if is_groot_policy(policy):
-            if pick is not None or random_sae:
-                raise ValueError("--pick and --random-sae are not available for GR00T policies yet (research rule 4 known gap)")
+            if random_sae:
+                raise ValueError("--random-sae compares picker against picker on GR00T: pass --pick N with --capture")
             only_ids = [part.strip() for part in only.split(",") if part.strip()] or None
             summary = execute_groot_rollouts(
                 run_dir,

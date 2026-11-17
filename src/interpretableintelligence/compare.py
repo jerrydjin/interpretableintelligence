@@ -488,31 +488,31 @@ def render_html(report: dict, clips_dir: Path | None = None) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>What robot models share</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz@6..72&family=Geist:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root {{ --paper:#f6f6f3; --ink:#111110; --soft:#51514c; --line:#e2e2dc; --ember:#f2a900; --cobalt:#5b4ae0; --card:#ffffff; }}
+:root {{ --paper:#faf9f5; --ink:#1f1e1b; --soft:#6b6860; --line:#e6e3da; --ember:#d9653b; --cobalt:#3557c8; --card:#ffffff; }}
 @media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ --paper:#1b1a17; --ink:#f1efe8; --soft:#a8a49a; --line:#34322d; --card:#24221f; }} }}
 :root[data-theme="dark"] {{ --paper:#1b1a17; --ink:#f1efe8; --soft:#a8a49a; --line:#34322d; --card:#24221f; }}
 * {{ box-sizing:border-box; }}
 body {{ margin:0; background:var(--paper); color:var(--ink); font:400 16px/1.55 Geist, system-ui, sans-serif; }}
 main {{ max-width:1040px; margin:0 auto; padding:56px 16px 96px; }}
-h1 {{ font:500 52px/1.04 Geist, system-ui, sans-serif; margin:0 0 16px; letter-spacing:-0.035em; }}
-h2 {{ font:500 30px/1.2 Geist, system-ui, sans-serif; margin:64px 0 16px; letter-spacing:-0.025em; }}
+h1 {{ font:400 52px/1.08 Newsreader, Georgia, serif; margin:0 0 16px; letter-spacing:-0.01em; }}
+h2 {{ font:400 30px/1.2 Newsreader, Georgia, serif; margin:64px 0 16px; }}
 .lede {{ font-size:21px; color:var(--soft); max-width:720px; margin:0; }}
 .lede b {{ color:var(--ink); font-weight:500; }}
 .groups {{ display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:16px; }}
-.group {{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }}
+.group {{ background:var(--card); border:1px solid var(--line); border-radius:20px; padding:16px; }}
 .strip {{ display:grid; grid-template-columns:repeat(4, 1fr); gap:4px; margin-bottom:16px; }}
 .strip img {{ width:100%; aspect-ratio:1; border-radius:10px; object-fit:cover; display:block; }}
 .chips {{ display:grid; gap:8px; }}
 .chip {{ display:grid; grid-template-columns:auto 1fr auto; grid-template-areas:"model label badge" "feat label badge"; column-gap:12px; align-items:center; padding:8px 12px; border-radius:12px; background:var(--paper); }}
 .model {{ grid-area:model; font-weight:500; font-size:13px; }}
 .feat {{ grid-area:feat; color:var(--soft); font-size:13px; }}
-.label {{ grid-area:label; font-size:16px; }}
-.badge {{ grid-area:badge; font-size:13px; padding:2px 10px; border-radius:6px; background:var(--ember); color:#111110; }}
+.label {{ grid-area:label; font-family:Newsreader, Georgia, serif; font-size:16px; }}
+.badge {{ grid-area:badge; font-size:13px; padding:2px 10px; border-radius:999px; background:var(--ember); color:#fff; }}
 .badge.muted {{ background:transparent; color:var(--soft); border:1px solid var(--line); }}
-.hint {{ font-weight:500; font-size:21px; letter-spacing:-0.012em; margin:0 0 12px; }}
-.hint b {{ font-weight:500; box-shadow:inset 0 -0.35em 0 rgba(242,169,0,0.45); }}
+.hint {{ font-family:Newsreader, Georgia, serif; font-size:21px; margin:0 0 12px; }}
+.hint b {{ font-weight:400; color:var(--ember); }}
 .hint span {{ font-family:Geist, system-ui, sans-serif; font-size:13px; color:var(--soft); }}
 .r, .note {{ color:var(--soft); font-size:13px; margin:12px 0 0; }}
 ul {{ list-style:none; padding:0; display:grid; gap:12px; }}

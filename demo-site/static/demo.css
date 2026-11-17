@@ -4,7 +4,6 @@
 
 /* Demo sections above the viewer: a quiet bar, not a second header. */
 .demo-bar {
-  border-bottom: 1px solid var(--line);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -13,7 +12,7 @@
   background: var(--well);
   font-size: var(--t-small);
 }
-.demo-bar a { flex: none; white-space: nowrap; color: var(--ink-2); text-decoration: none; }
+.demo-bar a { color: var(--ink-2); text-decoration: none; }
 .demo-bar a:hover { color: var(--ink); }
 .demo-bar a[aria-current="page"] { color: var(--ink); font-weight: 500; }
 .demo-bar .demo-home { color: var(--ink); font-weight: 500; margin-right: 6px; }
@@ -32,20 +31,9 @@
 .droid-banner summary { cursor: pointer; color: var(--ink-2); }
 .droid-banner pre { margin: 8px 0 0; overflow-x: auto; }
 
-/* Demo pages: one readable column under a quiet header with a hairline. */
-.demo-top {
-  grid-template-columns: 1fr auto;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: rgba(246, 246, 243, 0.86);
-  -webkit-backdrop-filter: saturate(1.4) blur(10px);
-  backdrop-filter: saturate(1.4) blur(10px);
-  border-bottom: 1px solid var(--line);
-  padding-top: 14px;
-  padding-bottom: 14px;
-}
-.demo-top .nav { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+/* Demo pages: one readable column. */
+.demo-top { grid-template-columns: 1fr auto; }
+.demo-top .nav { flex-wrap: wrap; min-width: 0; }
 .prose {
   max-width: 880px;
   margin: 0 auto;
@@ -54,23 +42,23 @@
 .prose code { overflow-wrap: anywhere; }
 .prose h1 {
   margin: 0 0 16px;
-  font-family: var(--display);
+  font-family: var(--serif);
   font-size: var(--t-display);
-  font-weight: 500;
-  letter-spacing: -0.035em;
-  line-height: 1.04;
+  font-weight: 400;
+  letter-spacing: var(--serif-track);
+  line-height: 1.05;
 }
 .prose h2 {
   margin: 56px 0 12px;
-  font-family: var(--display);
+  font-family: var(--serif);
   font-size: var(--t-head);
-  font-weight: 500;
-  letter-spacing: -0.025em;
+  font-weight: 400;
+  letter-spacing: var(--serif-track);
   line-height: 1.15;
 }
 .prose p, .prose li { color: var(--ink-2); }
 .prose p { margin: 0 0 16px; max-width: 68ch; }
-.prose .lede { color: var(--ink-2); font-size: var(--t-lead); line-height: 1.45; margin-bottom: 32px; }
+.prose .lede { color: var(--ink-3); margin-bottom: 32px; }
 .prose a { text-underline-offset: 3px; text-decoration-color: var(--line-2); }
 .prose a.button { color: var(--paper); text-decoration: none; }
 .prose a.button:hover { color: var(--paper); }
@@ -87,9 +75,7 @@
   border-radius: var(--radius);
   overflow-x: auto;
 }
-.quickstart { background: var(--plate); color: #ededea; }
-.quickstart code { background: transparent; padding: 0; color: inherit; font-size: 0.9375em; line-height: 1.7; }
-.quickstart code::before { content: ""; }
+.quickstart code { background: transparent; padding: 0; }
 
 /* Home: the four sections as cards. */
 .section-list {
@@ -110,10 +96,10 @@
   background: var(--sheet);
   box-shadow: 0 0 0 1px var(--line);
   text-decoration: none;
-  transition: box-shadow 0.15s;
+  transition: box-shadow 0.15s, transform 0.15s;
 }
-.section-list a:hover { box-shadow: 0 0 0 1px var(--ink); }
-.section-name { font-family: var(--display); font-weight: 500; font-size: var(--t-lead); letter-spacing: var(--serif-track); color: var(--ink); }
+.section-list a:hover { box-shadow: 0 0 0 1px var(--line-2), 0 6px 20px rgba(20, 20, 19, 0.06); transform: translateY(-1px); }
+.section-name { font-family: var(--serif); font-size: var(--t-lead); letter-spacing: var(--serif-track); color: var(--ink); }
 .section-text { color: var(--ink-2); }
 
 .meta-line { font-size: var(--t-small); color: var(--ink-3) !important; }
@@ -148,7 +134,7 @@
   background: var(--sheet);
   border: 0;
   box-shadow: 0 0 0 1px var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   padding: 8px 14px;
   cursor: pointer;
 }
@@ -202,70 +188,14 @@
 .demo-score { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; }
 .demo-score div { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--well); }
 .demo-score dt { font-size: var(--t-small); color: var(--ink-2); }
-.demo-score dd { margin: 4px 0 0; font-family: var(--display); font-weight: 500; font-size: var(--t-lead); letter-spacing: var(--serif-track); }
+.demo-score dd { margin: 4px 0 0; font-family: var(--serif); font-size: var(--t-lead); letter-spacing: var(--serif-track); }
 
 figure { margin: 0; }
 figcaption { font-size: var(--t-small); color: var(--ink-3); }
 
-/* ---- home ---------------------------------------------------------------- */
-.prose:has(.home-hero) { max-width: 1120px; }
-.prose:has(.home-hero) > :not(.home-hero):not(.proof-grid):not(.section-list) { max-width: 760px; }
-.home-hero { display: grid; gap: 48px; align-items: center; padding: 32px 0 24px; }
-.home-hero-figure { grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); }
-.home-hero h1 { max-width: 15ch; }
-.home-hero .lede { max-width: 42ch; }
-.home-ctas { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 !important; }
-.prose a.button-quiet, .prose a.button-quiet:hover { background: var(--sheet); color: var(--ink); box-shadow: 0 0 0 1px var(--line-2); }
-.prose a.button-quiet:hover { box-shadow: 0 0 0 1px var(--ink); }
-
-/* The signature: a real frame with the model's patch grid over it, lit where a verified feature fires. */
-.home-figure { margin: 0; }
-.home-shot {
-  position: relative;
-  display: block;
-  aspect-ratio: 16 / 9;
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--plate);
-  box-shadow: 0 0 0 1px var(--line), 0 24px 48px -24px rgba(17, 17, 16, 0.35);
-}
-.home-shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(0.85); }
-.home-grid { position: absolute; inset: 0; display: grid; }
-.home-grid i { background: rgba(17, 17, 16, 0.3); box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08); }
-.home-grid i.on {
-  background: rgba(var(--signal-rgb), calc(0.25 + var(--a) * 0.55));
-  box-shadow: inset 0 0 0 1px rgba(255, 214, 102, calc(0.35 + var(--a) * 0.6));
-}
-.home-figure figcaption { margin-top: 14px; max-width: 60ch; font-size: var(--t-small); color: var(--ink-2); }
-.home-figure figcaption strong { color: var(--ink); font-weight: 500; }
-.home-dot { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 3px; background: var(--signal); }
-
-.proof-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 16px; }
-.proof-card { padding: 24px 26px 22px; border-radius: var(--radius); background: var(--sheet); box-shadow: 0 0 0 1px var(--line); }
-.proof-card-wide { grid-column: 1 / -1; }
-.prose .proof-card p { margin: 0 0 12px; }
-.prose .proof-card p:last-child { margin-bottom: 0; }
-.prose .proof-kicker { font-size: var(--t-small); color: var(--ink-3); margin-bottom: 10px; }
-.prose .proof-headline { font-family: var(--display); font-weight: 500; font-size: var(--t-lead); line-height: 1.35; letter-spacing: -0.012em; color: var(--ink); max-width: 46ch; }
-
-.prose ul.commands { list-style: none; padding-left: 0; }
-.prose ul.commands li { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 16px; padding: 10px 0; margin: 0; border-bottom: 1px solid var(--line); }
-.prose ul.commands li code { justify-self: start; align-self: start; }
-.prose ul.commands li:first-child { border-top: 1px solid var(--line); }
-
-@media (max-width: 960px) {
-  .home-hero-figure { grid-template-columns: 1fr; gap: 32px; }
-}
-
 @media (max-width: 860px) {
-  .proof-grid { grid-template-columns: 1fr; }
-  .prose ul.commands li { grid-template-columns: 1fr; gap: 4px; }
-  /* One row of section links that scrolls sideways inside itself, never the page. */
-  .demo-top .nav, .demo-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .demo-top .nav::-webkit-scrollbar, .demo-bar::-webkit-scrollbar { display: none; }
-  .demo-top { position: static; }
   .clip-row { grid-template-columns: 1fr; }
   .prose { padding-top: 24px; }
   .prose .compare { grid-template-columns: 1fr; }
-  .demo-top .nav { width: calc(100% + 2 * var(--gutter)); margin: 0 calc(-1 * var(--gutter)); padding: 0 var(--gutter); justify-content: flex-start; }
+  .demo-top .nav { width: 100%; justify-content: flex-start; }
 }

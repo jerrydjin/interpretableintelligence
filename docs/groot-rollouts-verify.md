@@ -107,3 +107,27 @@ v9 `episodes.jsonl` rows; action **sha256** is checked when `sim/ep-*.npz` files
   SPRT lives in the imported `v9-ablate/*/summary.json` files.
 - **`ii rollouts` live path** (`run_live_v9`) expects the Colab `physint_inproc_v8/v9` modules on
   `sys.path`; this repo does not install LIBERO or LeRobot GPU deps in the default `uv sync` environment.
+## Random-weights SAE control (`--pick`, research rule 4)
+
+`--pick N` replaces the bundled plan with one built from a capture run. The picker (`picker/pick_candidates.py`) runs on
+the capture with the trained SAE and with each of `--random-sae K` untrained SAEs (default 5), and every pick becomes an
+arm. Picking runs on CPU (about 20 s per SAE on the 1028 capture, plus a few seconds to set each untrained SAE's
+threshold), so you can build the plan anywhere and run it on Colab:
+
+```bash
+# CPU, anywhere: download and unpack groot-1028-v9-n100.tar.xz as above, then
+uv run ii rollouts runs/groot-1028-pick --policy groot-mock --pick 2 --capture groot-1028-v9-n100 --episodes 40
+# writes rollouts/ablate_plan.json, rollouts/sae/*.safetensors, rollouts/pick/ and a no-effect mock summary
+
+# Colab (v9 stack live): same arguments with the real policy. The plan on disk is reused.
+uv run ii rollouts runs/groot-1028-pick --policy groot-1028 --pick 2 --capture groot-1028-v9-n100 --episodes 40
+```
+
+Keep the arguments identical between the two calls: a run folder whose plan was built with other arguments is refused.
+Every arm runs `--episodes` paired episodes (no early stopping), the summary scores a rise (`direction: rise`), and a
+candidate is `finding: true` only when it is `causal` and above every random-SAE arm. Rule 1 (a Sobel–Wald rise call) is
+not part of `finding` on these fixed-budget plans. The GR00T plan's single-feature design on task 1028 was a null
+(AGENTS.md, "Current state"), so agree a new design in the research thread before running this on 1028.
+
+The Colab notebook and `v9_hotfix_cell.py` embed an older `ablate_v9.py` without random-SAE dictionaries. Run this
+through `ii rollouts` (which imports the package copy), not the notebook's ablation cell.

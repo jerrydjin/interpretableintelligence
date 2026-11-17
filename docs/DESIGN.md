@@ -12,14 +12,14 @@ The first user is a learner. The viewer should make mechanistic interpretability
 
 | Role | Font | Weight | Used for |
 | --- | --- | --- | --- |
-| Sans | Geist | 400 and 500 | Everything you read and use. Titles are 500 with tight tracking (`--serif-track`, plus tighter values on the demo's display and section heads); sentences, ledes and labels are 400 |
-| Mono | Geist Mono | 400 only | Code and commands (`code`, the quickstart block). Never for labels or numbers in the viewer |
+| Serif | Newsreader | 400 only | Page and section titles, ledes, sentences you read |
+| Sans | Geist | 400 and 500 | Everything you use: names, buttons, labels, numbers, tables |
 
 The sizes are tokens: `--t-small` 13px, `--t-body` 16px, `--t-lead` 21px, `--t-head` 30px and `--t-display` 52px. Below 860px the head, display and lead sizes shrink.
 
-Until 16 Nov 2026 titles were set in Newsreader, a serif. Together with the ivory paper, the clay-orange activation colour and pill buttons, that read as a copy of Anthropic's site, so the serif was dropped. `--serif` is kept as an alias of `--display` (Geist) so older panels inherit the new title role.
+Serif text uses one tracking value, `--serif-track`. Sans text is never tracked.
 
-Some things are deliberately absent: there are no uppercase labels and no third weight. Labels are sentence-case Geist at 13px in grey. Do not add a new size or font without removing one.
+Some things are deliberately absent: there is no monospace, no uppercase labels and no third weight. Labels are sentence-case Geist at 13px in grey. Do not add a new size or font without removing one.
 
 All fonts are vendored as woff2 under the SIL OFL in `static/fonts/`, so the viewer works offline.
 
@@ -27,24 +27,24 @@ All fonts are vendored as woff2 under the SIL OFL in `static/fonts/`, so the vie
 
 | Token | Value | Meaning |
 | --- | --- | --- |
-| `--paper` | `#f6f6f3` | Soft neutral page (not ivory) |
-| `--sheet` / `--well` | `#ffffff` / `#ecece7` | Raised cards / quiet fills |
-| `--ink`, `--ink-2`, `--ink-3` | `#111110`, `#51514c`, `#85857e` | Text, from strongest to quietest |
-| `--signal` | `#f2a900` (saffron) | Activation. The only colour for "where a feature fires". `--signal-ink` `#8f6200` if it ever has to be text |
-| `--steer` | `#5b4ae0` (violet) | Steering and the playground |
-| `--real` (+ `--real-wash`, `--real-line`) | `#23704a` | Only where something is verified: the tick, a passed check, the check ring, a verified feature's standing card and the playground's "Verified feature" mark |
-| `--unv-bg` (sand) | `#f6efdf` | The next experiment for a feature that is not verified yet |
+| `--paper` | `#faf9f5` | Warm ivory page |
+| `--sheet` / `--well` | `#ffffff` / `#f0eee6` | Raised cards / quiet fills |
+| `--ink`, `--ink-2`, `--ink-3` | `#141413`, `#5e5d59`, `#8f8d86` | Text, from strongest to quietest |
+| `--signal` | `#e8582a` (ember) | Activation. The only colour for "where a feature fires" |
+| `--steer` | `#3a5bd9` (cobalt) | Steering and the playground |
+| `--real` (+ `--real-wash`, `--real-line`) | `#2f6b4b` | Only where something is verified: the tick, a passed check, the check ring, a verified feature's standing card and the playground's "Verified feature" mark |
+| `--unv-bg` (sand) | `#f7efdc` | The next experiment for a feature that is not verified yet |
 
-The heatmap reads `--signal-rgb` and `--steer-rgb` from the stylesheet. `isoTerrain()` in `app.js` hard-codes its block colours, and the logo is inline SVG in `static/index.html` and `static/favicon.svg`, so update them alongside.
+The heatmap reads `--signal-rgb` and `--steer-rgb` from the stylesheet. `isoTerrain()` in `app.js` hard-codes its block colours, so update it alongside them.
 
 ## Shapes and signature elements
 
-- The nav is plain text links; the current page sits on a small white tile with a hairline. On the demo pages the header is sticky with a hairline under it, and below 860px the links become one row that scrolls sideways inside itself.
-- Corners are small: chips and badges 6px (`--chip`), buttons 8px (`--radius-sm`), cards 10px (`--radius`). Cards use a 1px line shadow instead of a border; hover darkens the line rather than lifting the card. There are no pills except the Numbers switch track.
+- The nav is a row of pills, with the active page filled in ink. There is no header rule.
+- Cards use a 14px radius (`--radius`) and a 1px line shadow instead of a border. Lists use hover fills rather than dividers.
 - Ledes are two-tone: the claim in ink, the context in grey.
-- The signature graphic is **the patch grid**: a real frame with the model's patch grid over it, dimmed, and the patches where a verified feature fires lit in saffron. The home page hero is one (picked from the DROID export by `_hero_figure` in `export_site.py`, preferring "white robot arm" on a held-out clip), and the viewer's heatmap is the same idea. The isometric activation blocks stay as the feature cards' art.
-- The logo is two isometric columns, the two i's drawn as activations: a short saffron one and a tall ink one.
-- There is one button shape, an ink block (`.button`), plus a quiet white variant on the demo home. The playground's Steer button uses the ink one.
+- The signature graphic is **isometric activation blocks**: a feature's activation on its top frame, drawn as a little terrain beside the frame.
+- The logo is two isometric columns, the two i's drawn as activations: a short ember one and a tall ink one.
+- There is one button shape, an ink pill (`.button`). The playground's Steer button uses it too.
 - The **check ring** is the verified seal: one arc per check (dictionary, many clips, name holds, beats random, learned), green when passed. A verified feature closes the ring and a tick pops into the middle; anything else shows `4/5` in the middle. The arcs draw in once, and not at all under `prefers-reduced-motion`.
 
 ## Plain words first, numbers on request
@@ -79,10 +79,10 @@ The feature page's "The numbers" section (the score tiles and the full top-clip 
 
 He picked these on 13 Nov 2026, from screenshots of about 28 homepages:
 
-- **Anthropic**: formal warmth. It was the main influence until 16 Nov 2026, when Jerry said the site looked like a straight copy; what remains is the generous space and plain, warm copy.
-- **Cursor**: clean layout. Now the main influence: one sans, mono for code, hairlines, small corners, a quiet sticky header.
+- **Anthropic**: formal warmth, and the main influence. It shows in the serif plus sans pairing, the ivory paper, the pill nav and the generous space.
+- **Cursor**: clean layout.
 - **Baseten**: graphics. This led to the isometric blocks.
-- **1X**: good visuals and imagery. This led to the real-footage hero on the demo home.
+- **1X**: good visuals and imagery.
 
 ## What was rejected, and why
 
