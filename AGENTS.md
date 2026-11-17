@@ -39,7 +39,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
 | `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
-| `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls; effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
+| `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls (or, with `--controls-from features`, other live SAE features matched on firing rate, activation and decoder norm); effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
 | `probe` | Held-out failure probe on a run's SAE latents, trained on `split.json`'s train clips only, against a seeded random-weights SAE (same architecture, width, `k`) and raw activations → `probe/`. `sae_gate` passes only if the trained SAE beats both on AUROC (paired episode bootstrap p < 0.05) at a lead of ≥ 1 s; `not_run` when skipped. Offline; never changes the scoreboard, never sets `real`, not a rollout finding. |
 | `export` | Static, hostable copy of one run's viewer, with a precomputed playground (no server). |
 | `export-site` | Regenerate static `demo-site/` from fake run + vendored measurements. |

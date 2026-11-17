@@ -10,11 +10,19 @@
 then measures how far the prediction moved against the clean prediction. For
 GR00T the prediction is the planned action chunk, so this is how much the
 planned actions change. Every edit is paired with ``STEER_CONTROLS`` matched
-random-feature controls on the same window: a random direction at the
-feature's decoder norm, carrying the same per-token edit sizes as the feature
-edit, placed on a random permutation of that window's tokens. Each control
-arm keeps one direction across every window, so it behaves like one random
-feature.
+controls on the same window. With ``controls_from="random"`` (the default) a
+control is a random direction at the feature's decoder norm, carrying the same
+per-token edit sizes as the feature edit, placed on a random permutation of
+that window's tokens. Each control arm keeps one direction across every window,
+so it behaves like one random feature.
+
+A random direction in a wide residual stream is a weak bar: the network mostly
+ignores directions it never sees. ``controls_from="features"`` replaces them with
+the decoder directions of other live SAE features, matched to the steered one on
+the train split (firing rate, mean activation when firing, decoder norm), each
+rescaled to the steered feature's decoder norm and added with exactly the
+feature edit's per-token coefficients on the same tokens. Only the direction
+differs, and it is one the model actually uses.
 
 The edits are the playground's (``steer.steer_edit``): only the chosen
 feature's contribution changes, and the SAE's reconstruction error stays in.
@@ -49,6 +57,7 @@ from interpretableintelligence.thresholds import (
     STEER_BOOTSTRAP,
     STEER_CONFIDENCE,
     STEER_CONTROLS,
+    STEER_MATCH_MAX_COS,
     STEER_TIE_EPS,
     STEER_TOP_FEATURES,
 )
@@ -61,9 +70,15 @@ EFFECT_COLUMNS = ("feature_id", "kind", "arm", "control", "clip_id", "window", "
 KINDS = ("remove", "boost")
 ARMS = ("feature", "control")
 METRIC = "relative_l2_change"
+CONTROL_SOURCES = ("random", "features")
 CONTROL_DESCRIPTION = (
     "random direction at the feature's decoder norm, the same per-token edit sizes, "
     "on a random permutation of the same window's tokens; one direction per control arm"
+)
+FEATURE_CONTROL_DESCRIPTION = (
+    "decoder direction of another live SAE feature matched on train-split firing rate, mean firing activation "
+    f"and decoder norm (|cosine| to the feature's decoder at most {STEER_MATCH_MAX_COS:g}), rescaled to the "
+    "feature's decoder norm, with the same per-token edit sizes on the same tokens; one matched feature per control arm"
 )
 NOTE = (
     "Offline steering on held-out clips. It does not change scoreboard.json or any badge, "
@@ -94,6 +109,8 @@ SCORECARD_KEYS = {
     "rollout_finding",
     "note",
 }
+# Written by every new scorecard; absent from scorecards made before matched-feature controls (read as random).
+OPTIONAL_SCORECARD_KEYS = {"controls_from", "control_features"}
 ROW_KEYS = {
     "feature_id",
     "label",
@@ -174,6 +191,7 @@ def execute_steer_scorecard(
     seed: int = 0,
     bootstrap: int = STEER_BOOTSTRAP,
     max_episodes: int | None = None,
+    controls_from: str = "random",
     log=print,
 ) -> dict:
     """Measure, write ``steering/``, and return the scorecard."""
@@ -190,6 +208,8 @@ def execute_steer_scorecard(
         )
     if bootstrap < 1:
         raise ValueError("--bootstrap must be at least 1")
+    if controls_from not in CONTROL_SOURCES:
+        raise ValueError(f"--controls-from must be one of {list(CONTROL_SOURCES)}, got {controls_from!r}")
     if not math.isfinite(boost) or boost == 1.0:
         raise ValueError("--boost must be a finite factor other than 1 (1 leaves the feature unchanged)")
     split = read_json(run_dir / "split.json")
@@ -203,8 +223,23 @@ def execute_steer_scorecard(
     ctx, adapter, sae = steerer.ctx, steerer.adapter, steerer.sae
     feature_ids, selection = select_features(ctx.scoreboard, features, top, int(sae.n_features))
     clip_order = {str(clip["clip_id"]): index for index, clip in enumerate(ctx.manifest.get("clips") or [])}
-    directions = {fid: _control_directions(sae, fid, controls, seed) for fid in feature_ids}
-    log(f"steering {len(feature_ids)} feature(s) {feature_ids} on {len(heldout)} held-out clip(s), {controls} controls each")
+    matching = None
+    if controls_from == "features":
+        matching = match_control_features(run_dir, sae, feature_ids, controls)
+        directions = {fid: _feature_directions(sae, fid, [c["id"] for c in matching[str(fid)]["controls"]]) for fid in feature_ids}
+        for fid in feature_ids:
+            own = matching[str(fid)]["feature"]
+            log(
+                f"feature {fid} (rate {own['rate']:.4f}, mean act {own['mean_act']:.3f}, decoder norm {own['dec_norm']:.3f}): "
+                f"matched controls {[c['id'] for c in matching[str(fid)]['controls']]}"
+            )
+    else:
+        directions = {fid: _control_directions(sae, fid, controls, seed) for fid in feature_ids}
+    permute = controls_from == "random"
+    log(
+        f"steering {len(feature_ids)} feature(s) {feature_ids} on {len(heldout)} held-out clip(s), "
+        f"{controls} {'random-direction' if permute else 'matched-feature'} controls each"
+    )
 
     columns: dict[str, list] = {name: [] for name in EFFECT_COLUMNS}
     n_windows = 0
@@ -231,9 +266,12 @@ def execute_steer_scorecard(
                         np.random.SeedSequence([int(seed), int(fid), kind_index, clip_order.get(clip_id, 0), _stable(clip_id), int(window.index)])
                     )
                     for control in range(controls):
-                        perm = torch.as_tensor(rng.permutation(coef.shape[0]), dtype=torch.long, device=coef.device)
                         delta = torch.zeros(coef.shape[0], directions[fid].shape[1], dtype=torch.float32, device=coef.device)
-                        delta[perm] = coef[:, None] * directions[fid][control][None, :].to(coef.device)
+                        if permute:
+                            perm = torch.as_tensor(rng.permutation(coef.shape[0]), dtype=torch.long, device=coef.device)
+                            delta[perm] = coef[:, None] * directions[fid][control][None, :].to(coef.device)
+                        else:
+                            delta = coef[:, None] * directions[fid][control][None, :].to(coef.device)
                         edits.append(_delta_edit(delta.reshape(*acts_shape, -1)))
                         keys.append((fid, kind, "control", control))
             if not edits:
@@ -267,7 +305,9 @@ def execute_steer_scorecard(
         "feature_ids": feature_ids,
         "boost_factor": float(boost),
         "n_controls": int(controls),
-        "control": CONTROL_DESCRIPTION,
+        "control": CONTROL_DESCRIPTION if permute else FEATURE_CONTROL_DESCRIPTION,
+        "controls_from": controls_from,
+        "control_features": matching,
         "seed": int(seed),
         "bootstrap": int(bootstrap),
         "confidence": STEER_CONFIDENCE,
@@ -332,6 +372,92 @@ def _control_directions(sae, fid: int, controls: int, seed: int) -> torch.Tensor
     generator = torch.Generator(device="cpu").manual_seed(int(np.random.SeedSequence([int(seed), int(fid), 23]).generate_state(1)[0]))
     raw = torch.randn(int(controls), int(column.shape[0]), generator=generator, dtype=torch.float32)
     return (raw / raw.norm(dim=-1, keepdim=True).clamp(min=1e-8) * norm).to(column.device)
+
+
+def _feature_directions(sae, fid: int, control_ids: list[int]):
+    """``[controls, d_model]``: the control features' decoder columns, each at feature ``fid``'s decoder norm."""
+    import torch  # noqa: PLC0415
+
+    norm = float(sae.W_dec[:, int(fid)].detach().to(torch.float32).norm().clamp(min=1e-8))
+    cols = sae.W_dec[:, [int(c) for c in control_ids]].detach().to(torch.float32).T
+    return cols / cols.norm(dim=-1, keepdim=True).clamp(min=1e-8) * norm
+
+
+def feature_train_stats(run_dir: Path, sae, chunk: int = 4096) -> dict[str, np.ndarray]:
+    """Per-feature ``rate`` (share of train tokens it fires on), ``mean_act`` (mean value when firing) and
+    ``dec_norm``, from the run's train-split activations only (held-out clips stay unseen)."""
+    import torch  # noqa: PLC0415
+
+    from interpretableintelligence.store import RowSource  # noqa: PLC0415
+
+    n_features = int(sae.n_features)
+    fires = np.zeros(n_features, dtype=np.float64)
+    total = np.zeros(n_features, dtype=np.float64)
+    device = sae.W_dec.device
+    with RowSource(Path(run_dir) / "acts") as source:
+        n_train = int(source.n_train)
+        if n_train < 1:
+            raise ValueError(f"{run_dir}: matched-feature controls need train-split activations, and this run has none")
+        for start in range(0, n_train, chunk):
+            rows = source.gather_train(np.arange(start, min(start + chunk, n_train)))
+            with torch.no_grad():
+                feats = sae.encode(torch.as_tensor(rows, device=device, dtype=sae.W_dec.dtype)).to(torch.float32)
+            on = feats > DEAD_ACT_EPS
+            fires += on.sum(dim=0).cpu().numpy()
+            total += torch.where(on, feats, torch.zeros_like(feats)).sum(dim=0).cpu().numpy()
+    with torch.no_grad():
+        dec_norm = sae.W_dec.detach().to(torch.float32).norm(dim=0).cpu().numpy().astype(np.float64)
+    return {
+        "rate": fires / n_train,
+        "mean_act": np.divide(total, fires, out=np.zeros_like(total), where=fires > 0),
+        "dec_norm": dec_norm,
+        "n_train_tokens": np.array(n_train),
+    }
+
+
+def match_control_features(run_dir: Path, sae, feature_ids: list[int], controls: int, stats: dict | None = None) -> dict:
+    """For each steered feature, the ``controls`` live features nearest to it on train-split firing rate, mean
+    firing activation and decoder norm (sum of absolute log ratios), excluding every steered feature and any
+    feature whose decoder is within ``STEER_MATCH_MAX_COS`` |cosine| of the steered one's. Deterministic: ties
+    go to the smaller id."""
+    import torch  # noqa: PLC0415
+
+    stats = stats or feature_train_stats(run_dir, sae)
+    rate, mean_act, dec_norm = stats["rate"], stats["mean_act"], stats["dec_norm"]
+    alive = rate > 0
+    with torch.no_grad():
+        dec = sae.W_dec.detach().to(torch.float32)
+        unit = (dec / dec.norm(dim=0, keepdim=True).clamp(min=1e-8)).cpu().numpy()
+    excluded = {int(fid) for fid in feature_ids}
+    out = {}
+
+    def describe(index: int) -> dict:
+        return {"id": int(index), "rate": float(rate[index]), "mean_act": float(mean_act[index]), "dec_norm": float(dec_norm[index])}
+
+    for fid in feature_ids:
+        fid = int(fid)
+        if not alive[fid]:
+            raise ValueError(f"feature {fid} never fires on the train split, so there is nothing to match its controls to")
+        cos = np.abs(unit.T @ unit[:, fid])
+        pool = np.flatnonzero(alive & (cos <= STEER_MATCH_MAX_COS))
+        pool = np.array([index for index in pool if int(index) not in excluded], dtype=np.int64)
+        if pool.size < controls:
+            raise ValueError(
+                f"feature {fid}: only {pool.size} live features qualify as matched controls, fewer than --controls {controls}"
+            )
+        distance = (
+            np.abs(np.log(rate[pool] / rate[fid]))
+            + np.abs(np.log(mean_act[pool] / mean_act[fid]))
+            + np.abs(np.log(dec_norm[pool] / dec_norm[fid]))
+        )
+        order = np.lexsort((pool, distance))[:controls]
+        out[str(fid)] = {
+            "feature": describe(fid),
+            "controls": [{**describe(int(pool[i])), "distance": float(distance[i]), "abs_cos": float(cos[pool[i]])} for i in order],
+            "n_pool": int(pool.size),
+            "n_train_tokens": int(stats["n_train_tokens"]),
+        }
+    return out
 
 
 def _acts_shape(clean) -> tuple[int, ...]:
@@ -406,7 +532,8 @@ def summarize(table: pa.Table, meta: dict, features_by_id: dict[int, dict]) -> d
                     rng=np.random.default_rng(np.random.SeedSequence([int(meta["seed"]), int(fid), kind_index, 99])),
                 )
             )
-    return {**{key: meta[key] for key in SCORECARD_KEYS - {"rows"}}, "rows": rows}
+    optional = {key: meta[key] for key in OPTIONAL_SCORECARD_KEYS if key in meta}
+    return {**{key: meta[key] for key in SCORECARD_KEYS - {"rows"}}, **optional, "rows": rows}
 
 
 def _row(*, fid, scored, kind, factor, keys, cand, cand_abs, ctrl, meta, rng) -> dict:
@@ -524,8 +651,20 @@ def check_steering(run_dir: Path, manifest: dict, scoreboard: dict) -> list[str]
         return [f"steering/{SCORECARD_FILE}: {exc}"]
     if not isinstance(card, dict):
         return [f"steering/{SCORECARD_FILE} must be a JSON object"]
-    if set(card) != SCORECARD_KEYS:
-        return [f"steering/{SCORECARD_FILE} keys mismatch missing={sorted(SCORECARD_KEYS - set(card))} extra={sorted(set(card) - SCORECARD_KEYS)}"]
+    missing, extra = SCORECARD_KEYS - set(card), set(card) - SCORECARD_KEYS - OPTIONAL_SCORECARD_KEYS
+    if missing or extra:
+        return [f"steering/{SCORECARD_FILE} keys mismatch missing={sorted(missing)} extra={sorted(extra)}"]
+    source = card.get("controls_from", "random")
+    if source not in CONTROL_SOURCES:
+        errors.append(f"steering/{SCORECARD_FILE} controls_from must be one of {list(CONTROL_SOURCES)}")
+    matching = card.get("control_features")
+    if source == "random" and matching is not None:
+        errors.append(f"steering/{SCORECARD_FILE} control_features must be null with random controls")
+    if source == "features":
+        if not isinstance(matching, dict) or sorted(matching) != sorted(str(fid) for fid in card.get("feature_ids") or []):
+            errors.append(f"steering/{SCORECARD_FILE} control_features must have one entry per feature id")
+        elif any(len((entry or {}).get("controls") or []) != card.get("n_controls") for entry in matching.values()):
+            errors.append(f"steering/{SCORECARD_FILE} control_features must list n_controls features per feature id")
     if card["schema_version"] != SCHEMA_VERSION:
         errors.append(f"steering/{SCORECARD_FILE} schema_version must be {SCHEMA_VERSION}")
     if card["rollout_finding"] is not False:
@@ -555,7 +694,7 @@ def check_steering(run_dir: Path, manifest: dict, scoreboard: dict) -> list[str]
         return [f"steering/{EFFECTS_FILE} kind must be in {list(KINDS)} and arm in {list(ARMS)}"]
     features_by_id = {int(f["id"]): f for f in scoreboard.get("features") or [] if isinstance(f, dict) and _is_int(f.get("id"))}
     try:
-        rebuilt = summarize(table, {key: card[key] for key in SCORECARD_KEYS - {"rows"}}, features_by_id)
+        rebuilt = summarize(table, {key: card[key] for key in (SCORECARD_KEYS | OPTIONAL_SCORECARD_KEYS) - {"rows"} if key in card}, features_by_id)
     except (ValueError, KeyError, TypeError, IndexError) as exc:
         return [f"steering/{EFFECTS_FILE} does not rebuild the scorecard: {exc}"]
     from interpretableintelligence.validate import _same_json  # noqa: PLC0415 (validate imports this module lazily)
@@ -567,7 +706,8 @@ def check_steering(run_dir: Path, manifest: dict, scoreboard: dict) -> list[str]
 def format_report(card: dict) -> str:
     target = "planned actions" if card.get("target") == "action_chunk" else "prediction"
     lines = [
-        f"steering scorecard: {card['run_id']} ({card['selection']} features, {card['n_controls']} matched random controls, "
+        f"steering scorecard: {card['run_id']} ({card['selection']} features, {card['n_controls']} "
+        f"{'matched-feature' if card.get('controls_from') == 'features' else 'matched random'} controls, "
         f"{card['n_episodes']} held-out episodes, {card['n_windows']} windows)",
         f"metric: relative L2 change of the {target}; {int(round(100 * card['confidence']))}% intervals resample episodes",
     ]

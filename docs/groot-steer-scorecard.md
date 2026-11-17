@@ -74,6 +74,19 @@ Then the table, one line per feature and edit: **change vs controls** is the mea
 on X%** is the share of windows where the feature moved the chunk more than all 19 controls (chance 5%);
 **beats controls** needs p ≤ 0.05 against the control arms and an excess whose interval is above 0.
 
+## Matched-feature controls (`--controls-from features`)
+
+A random direction in DiT block 5's 1536 dimensions is mostly ignored by the network, so beating 19 of them is a weak
+bar. `ii steer-scorecard --controls-from features` (`CONTROLS_FROM=features` for the shell script) swaps them for the
+decoder directions of other live SAE features: for each steered feature, the 19 live features nearest to it on
+train-split firing rate, mean activation when firing and decoder norm (sum of absolute log ratios), skipping the
+other steered features and any feature whose decoder has |cosine| above 0.5 with the steered one's. Each control's
+direction is rescaled to the steered feature's decoder norm and added with exactly the feature edit's per-token
+coefficients, on the same tokens, so the only difference is the direction, and it is a direction the model uses.
+The matched ids and their statistics are in `scorecard.json`'s `control_features`. On Modal, after a full random run,
+`steer_smoke` checks one held-out episode and `scorecard --controls-from features` reuses the recorded clips and run
+(results go to `results-features` on the Volume).
+
 ## What this does not say
 
 - It is offline: the edited chunk is never executed. A feature that beats its controls here is a candidate for a
