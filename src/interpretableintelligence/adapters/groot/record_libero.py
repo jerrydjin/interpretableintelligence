@@ -16,6 +16,9 @@ action queue, the bddl's own instruction), and writes, per episode::
     <out>/clips.json             clip index (fps 20, the LIBERO control rate)
     <out>/record.json            settings, per-episode outcomes and the input parity check
 
+``ii run`` needs every clip to yield the same windows, so ``--trim-out DIR`` also writes a copy with every
+clip cut to the shortest episode's length in whole 16-step chunks (``trim_to_common_length``).
+
 Frame ``t`` is the observation the policy saw before step ``t``, so the adapter's
 window ``k`` (frames ``[16k, 16k + 16)``, observed at its first frame) is exactly the
 input of the policy's ``k``-th action-chunk prediction.
@@ -201,6 +204,36 @@ def _write_json(path: Path, payload: dict) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def trim_to_common_length(src: Path, dst: Path, *, chunk: int = 16, log: Callable[[str], None] = print) -> int:
+    """Copy the recorded clips in ``src`` to ``dst``, each cut to the shortest episode's length (whole chunks).
+
+    ``ii run`` needs every clip to yield the same windows, and episodes end at different steps. Cutting keeps
+    only real observations: each clip's first ``n`` steps, ``n`` the shortest episode rounded down to a
+    multiple of ``chunk`` (the policy's action queue, so windows still start at prediction steps).
+    Returns ``n``. Rerunning with the same ``src`` rewrites ``dst``.
+    """
+    src, dst = Path(src), Path(dst)
+    report = _read_report(src)
+    rows = report.get("episodes") or []
+    if not rows:
+        raise ValueError(f"{src} has no recorded episodes")
+    steps = (min(int(r["n_steps"]) for r in rows) // int(chunk)) * int(chunk)
+    if steps < 1:
+        raise ValueError(f"the shortest episode in {src} is shorter than one chunk ({chunk} steps)")
+    (dst / WRIST_DIR).mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        clip_id = row["clip_id"]
+        images = np.load(src / f"{clip_id}.npy", mmap_mode="r")[:steps]
+        wrists = np.load(src / WRIST_DIR / f"{clip_id}.npy", mmap_mode="r")[:steps]
+        sidecar = json.loads((src / f"{clip_id}.groot.json").read_text(encoding="utf-8"))
+        _write_episode(dst, clip_id, np.ascontiguousarray(images), np.ascontiguousarray(wrists), np.asarray(sidecar["state"], np.float32)[:steps], sidecar["task"])
+        _write_sidecar_meta(dst, clip_id, {**sidecar.get("libero", {}), "trimmed_to": steps})
+    _write_index(dst, rows)
+    _write_json(dst / RECORD_FILE, {**report, "trimmed_to": steps, "source": str(src.resolve())})
+    log(f"trimmed {len(rows)} clips to their first {steps} steps ({steps // int(chunk)} windows) in {dst}")
+    return steps
 
 
 # ------------------------------------------------------------------ the real env and policy

@@ -4,7 +4,7 @@
     modal run scripts/modal_groot_steer.py::prefetch                                              # once, CPU only
     modal run scripts/modal_groot_steer.py::smoke                                                 # ~10 GPU minutes
     modal run --detach scripts/modal_groot_steer.py::scorecard                                    # the full run
-    modal volume get ii-groot-steer results ./results                                            # fetch results
+    modal run scripts/modal_groot_steer.py::fetch                                                 # print results
 
 Everything persistent lives on the Volume ``ii-groot-steer``: the capture, Hugging Face weights, the LIBERO-plus
 assets, and the work folder (clips, run, steering). The work folder is committed every few minutes, so a run that
@@ -142,3 +142,28 @@ def scorecard(features: str = "6262,7353,7775", episodes: int = 24) -> None:
     env = _prepare()
     env.update(FEATURES=features, EPISODES=str(episodes), RESULTS=RESULTS)
     _run(["bash", "scripts/groot_steer_scorecard.sh", CAPTURE, WORK], env)
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def _results() -> dict:
+    out = {}
+    for name in ("scorecard.json", "record.json", "features-stats.json"):
+        path = Path(RESULTS) / name
+        if path.is_file():
+            data = __import__("json").loads(path.read_text())
+            if name == "features-stats.json":
+                picked = {6262, 7353, 7775}
+                data = {**{k: v for k, v in data.items() if k != "features"},
+                        "picked": [{k: f[k] for k in ("id", "freq", "max_act")} for f in data["features"] if f["id"] in picked]}
+            out[name] = data
+    return out
+
+
+@app.local_entrypoint()
+def fetch(out: str = "groot-steer-results.json") -> None:
+    """Copy the small result files off the Volume through the API (no direct storage download)."""
+    import json
+
+    results = _results.remote()
+    Path(out).write_text(json.dumps(results, indent=1) + "\n")
+    print(f"wrote {out}: {sorted(results)}")

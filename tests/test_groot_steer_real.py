@@ -243,3 +243,19 @@ def test_groot_adapter_keeps_few_backbone_contexts(tmp_path):
     contexts = [key for key in adapter._cache if key[0] == "context"]
     assert seen > CONTEXT_CACHE and len(contexts) == CONTEXT_CACHE
     assert contexts[-1][1:] == ("ep-00003", 3)
+
+
+def test_trim_to_common_length_keeps_whole_chunks(tmp_path):
+    from interpretableintelligence.adapters.groot.record_libero import trim_to_common_length
+
+    src = tmp_path / "clips"
+    record(FakeRuntime(steps=11), src, episodes=1, log=lambda _m: None)
+    record(FakeRuntime(steps=11), src, episodes=2, log=lambda _m: None)
+    sidecar = json.loads((src / "ep-00001.groot.json").read_text())
+    steps = trim_to_common_length(src, tmp_path / "trim", chunk=4, log=lambda _m: None)
+    assert steps == 8
+    meta = list_clip_meta(tmp_path / "trim")
+    assert [m["n_frames"] for m in meta] == [8, 8]
+    trimmed = json.loads((tmp_path / "trim" / "ep-00001.groot.json").read_text())
+    assert trimmed["state"] == sidecar["state"][:8] and trimmed["libero"]["trimmed_to"] == 8
+    assert np.array_equal(np.load(tmp_path / "trim" / "wrist" / "ep-00001.npy"), np.load(src / "wrist" / "ep-00001.npy")[:8])

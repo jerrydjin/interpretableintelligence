@@ -792,23 +792,34 @@ def record_libero_cmd(
     ] = None,
     max_steps: Annotated[int | None, typer.Option("--max-steps", min=1, help="Cap steps per episode. Default: the env's cap (520).")] = None,
     no_parity: Annotated[bool, typer.Option("--no-parity", help="Skip the input parity check (debugging only).")] = False,
+    trim_out: Annotated[
+        Path | None,
+        typer.Option("--trim-out", file_okay=False, help="Also write every clip cut to the shortest episode's length (whole 16-step chunks), which ii run needs."),
+    ] = None,
 ) -> None:
     """Record closed-loop GR00T episodes on LIBERO-plus as clips the groot adapter reads (main camera, wrist, state, task).
 
     Needs a GPU box with lerobot[groot]==0.7.0 and LIBERO-plus (scripts/groot_gpu_setup.sh). Checks that the adapter
     rebuilds the policy's own inputs from the recorded arrays before it records anything else.
     """
-    from interpretableintelligence.adapters.groot.record_libero import LeRobotLibero, record
+    from interpretableintelligence.adapters.groot.record_libero import LeRobotLibero, episode_id, record, trim_to_common_length
 
     try:
-        runtime = LeRobotLibero(checkpoint, task, plus_dir=plus_dir)
-        report = record(
-            runtime, out, task_id=task, episodes=episodes, seed0=seed0, max_steps=max_steps, check_parity=not no_parity, log=typer.echo
-        )
+        index = out / "clips.json"
+        have = {c["clip_id"] for c in json.loads(index.read_text(encoding="utf-8"))["clips"]} if index.is_file() else set()
+        if all(episode_id(i) in have for i in range(episodes)):
+            typer.echo(f"all {episodes} episodes are already in {out}; not loading the policy")
+        else:
+            runtime = LeRobotLibero(checkpoint, task, plus_dir=plus_dir)
+            report = record(
+                runtime, out, task_id=task, episodes=episodes, seed0=seed0, max_steps=max_steps, check_parity=not no_parity, log=typer.echo
+            )
+            typer.echo(f"recorded {len(report['episodes'])} episodes, {report['n_success']} successes, into {out}")
+        if trim_out is not None:
+            trim_to_common_length(out, trim_out, log=typer.echo)
     except (ImportError, ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"recorded {len(report['episodes'])} episodes, {report['n_success']} successes, into {out}")
 
 
 @app.command("steer-scorecard")
