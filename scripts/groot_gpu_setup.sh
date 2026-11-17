@@ -26,14 +26,17 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
 echo "== python packages"
 "$PY" -m pip install -q -e "$REPO_ROOT"
-"$PY" -m pip install -q "lerobot[groot]==0.7.0"
+# lerobot's libero extra brings mujoco and robosuite through hf-libero; LIBERO-plus replaces hf-libero's package below.
+"$PY" -m pip install -q "lerobot[groot,libero]==0.7.0"
+"$PY" -m pip uninstall -y -q hf-libero || true
 
 echo "== LIBERO-plus at $PLUS_DIR"
 if [ ! -d "$PLUS_DIR/.git" ]; then
   git clone -q --depth 1 https://github.com/sylvestf/LIBERO-plus.git "$PLUS_DIR"
 fi
-"$PY" -m pip install -q -e "$PLUS_DIR"
 if [ -f "$PLUS_DIR/extra_requirements.txt" ]; then "$PY" -m pip install -q -r "$PLUS_DIR/extra_requirements.txt"; fi
+"$PY" -m pip install -q -e "$PLUS_DIR" --config-settings editable_mode=compat
+"$PY" -m pip install -q "gym==0.25.2"  # LIBERO's envs import the old gym API
 
 ASSETS="$PLUS_DIR/libero/libero/assets"
 if [ ! -f "$ASSETS/wall.xml" ]; then

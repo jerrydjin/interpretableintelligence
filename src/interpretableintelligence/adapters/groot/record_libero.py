@@ -247,13 +247,13 @@ class LeRobotLibero:
 
     def __init__(self, checkpoint: str, task_id: int, plus_dir: Path | None = None, device: str | None = None) -> None:
         import torch  # noqa: PLC0415
+
+        self.v8 = _load_v8()
+        if plus_dir is not None:  # before anything imports libero, which asks for its paths on stdin without a config
+            self.v8.write_libero_config(plus_dir, log=lambda _m: None)
         from lerobot.envs.configs import LiberoEnvConfig  # noqa: PLC0415
 
         from interpretableintelligence.adapters.groot.adapter import LeRobotGroot  # noqa: PLC0415
-
-        self.v8 = _load_v8()
-        if plus_dir is not None:
-            self.v8.write_libero_config(plus_dir, log=lambda _m: None)
         self.checkpoint = checkpoint
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.backend = LeRobotGroot(checkpoint)
