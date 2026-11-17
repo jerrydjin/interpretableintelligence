@@ -1007,7 +1007,7 @@ def retrain_sae_cmd(
     ] = 0,
     resample_every: Annotated[int, typer.Option("--resample-every", min=0, help="--revive resample: steps between resamples (first 60% of training). 0: steps // 10.")] = 0,
     seed: Annotated[int, typer.Option("--seed", help="Init and batch-order seed. random:<seed> in the rollout control is this SAE's init.")] = 0,
-    norm: Annotated[str, typer.Option("--norm", help="keep: reuse the capture SAE's norm_mu / norm_scale. fit: recompute from train rows.")] = "keep",
+    norm: Annotated[str, typer.Option("--norm", help="keep: reuse the capture SAE's norm_mu / norm_scale. fit: recompute from train rows. channel: per-channel standardisation (experiment; writes sae/weights.channel-norm.safetensors, which the v9 hook does not read).")] = "keep",
     device: Annotated[str, typer.Option("--device", help="auto, cpu, or cuda.")] = "auto",
 ) -> None:
     """Retrain the GR00T capture SAE with dead-latent revival and compare it with the old one.

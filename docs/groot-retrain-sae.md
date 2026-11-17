@@ -53,6 +53,10 @@ The sweep (edit `SWEEP` in cell 3 to change it):
 | `auxk-4096`, `auxk-2048`, `auxk-1024` | 4096 / 2048 / 1024 | AuxK | Smaller dictionaries for about 67k train tokens. |
 | `none-2048` | 2048 | none | Size alone, without revival. |
 | `resample-2048` | 2048 | resampling | The other revival method. |
+| `auxk-8192-chnorm` | 8192 | AuxK | `auxk-8192` with per-channel input standardisation (`--norm channel`). Experiment only, see below. |
+
+`--steps 200 --timeout-min 15` is a smoke test (about a minute of training, kept on the Volume as
+`runs/<name>-smoke200` so it is never mistaken for the real run); `--timeout-min` lowers the hard cap for any run.
 
 One run by hand: `ii retrain-sae groot-1028-v9-n100 --out runs/groot-1028-sae-2048 --n-latents 2048 --revive auxk`.
 
@@ -72,6 +76,17 @@ One run by hand: `ii retrain-sae groot-1028-v9-n100 --out runs/groot-1028-sae-20
   share is near 1, the dead latents most likely come from a few outlier channels in the block-5 output, and the
   fix is per-channel input normalisation, which the v9 SAE layout (one scalar `norm_scale`) cannot express yet.
   That would be a follow-up across the hook, the picker reader and the importer.
+
+### Per-channel normalisation (`--norm channel`)
+
+`--norm channel` standardises each input channel by its own train std (`norm_scale` becomes a [D] vector, floored
+at 1e-3 of the median std). The v9 layout has one scalar `norm_scale`, and the hook, the picker and the importer
+read `norm_scale[0]`, so such an SAE is written as `sae/weights.channel-norm.safetensors` (no `weights.safetensors`):
+nothing downstream opens it by mistake. It answers whether outlier channels cause the dead latents; using it in
+rollouts needs the vector scale in those readers first.
+
+`EV` in the tables is `ev_raw`, measured in raw activation units, so SAEs with different normalisations compare
+fairly. `ev_normalised` is in the SAE's own space; for a scalar `norm_scale` the two are equal.
 
 A retrained SAE worth keeping has many more alive latents than the old one, few dense latents, held-out EV close
 to the old 0.998, and EV/dim no worse. Alive count on its own is not the goal.

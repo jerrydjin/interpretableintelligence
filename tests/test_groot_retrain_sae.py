@@ -152,3 +152,39 @@ def test_colab_notebook_builds_and_its_cells_parse(tmp_path):
         compile(source, "<cell>", "exec")
     assert all(revive in R.REVIVE for _name, _n, revive in nb.SWEEP)
     assert "--branch $BRANCH" in "".join(code[0]["source"]) and "some-branch" in "".join(code[0]["source"])
+
+
+def test_channel_norm_equalises_channels_and_reports_raw_ev():
+    """norm="channel": a [D] scale, unit variance per channel, and EV measured in raw units for comparison."""
+    split = _anisotropic()
+    mu, scale = R.norm_stats(split, None, "channel")
+    assert scale.shape == (16,) and scale[:2].min() > 5 * scale[2:].max()
+    xn = (split.acts.float() - mu) / scale
+    assert torch.allclose(xn.var(0, unbiased=False), torch.ones(16), atol=1e-2)
+    config = R.RetrainConfig(n_latents=32, k=2, steps=40, batch_tokens=128, norm="channel")
+    weights, _curve = R.train(split, mu, scale, config, log=lambda _m: None)
+    assert weights["norm_scale"].shape == (16,)
+    result = R.evaluate(weights, split)
+    assert result["l0_mean"] == pytest.approx(2.0, abs=0.05)
+    # The input statistic is about the raw activations, so it does not depend on the SAE's normalisation.
+    assert result["variance_share_top_dims"] > 0.9 and set(result["top_dims"][:2]) == {0, 1}
+    assert result["ev_raw"] != result["ev_normalised"]
+
+
+def test_scalar_norm_ev_is_the_same_in_both_spaces():
+    split = _anisotropic()
+    mu, scale = R.norm_stats(split, None, "fit")
+    weights, _curve = R.train(split, mu, scale, R.RetrainConfig(n_latents=32, k=2, steps=20, batch_tokens=128, norm="fit"), log=lambda _m: None)
+    result = R.evaluate(weights, split)
+    assert result["ev_raw"] == pytest.approx(result["ev_normalised"], abs=1e-4)
+
+
+def test_channel_norm_sae_is_kept_away_from_the_v9_readers(tmp_path):
+    capture = make_v9_capture(tmp_path)
+    out = tmp_path / "chnorm"
+    result = runner.invoke(app, ["retrain-sae", str(capture), "--out", str(out), "--norm", "channel", *FAST])
+    assert result.exit_code == 0, result.output
+    assert not (out / "sae" / "weights.safetensors").exists()
+    weights = random_sae.load_tensors(out / "sae" / R.CHANNEL_WEIGHTS)
+    assert weights["norm_scale"].numel() == weights["norm_mu"].numel()
+    assert json.loads((out / "sae" / "config.json").read_text())["norm"]["norm_scale_shape"] == "per_channel"

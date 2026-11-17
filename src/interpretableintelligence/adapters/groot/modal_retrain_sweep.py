@@ -44,6 +44,9 @@ SWEEP = [
     ("auxk-1024", 1024, "auxk"),
     ("none-2048", 2048, "none"),
     ("resample-2048", 2048, "resample"),
+    # auxk-8192 with per-channel input standardisation (norm="channel"): do a few outlier channels cause the dead
+    # latents? Its SAE is written as sae/weights.channel-norm.safetensors, which the v9 hook does not read.
+    ("auxk-8192-chnorm", 8192, "auxk", "channel"),
 ]
 STEPS, BATCH, LR, K = 6000, 4096, 4e-4, 32
 
@@ -87,7 +90,7 @@ def _fetch_capture(vol: Path) -> Path:
 
 
 @app.function(image=image, gpu=GPU, cpu=CPU_CORES, memory=MEMORY_MIB, timeout=TIMEOUT_S, volumes={VOLUME_ROOT: volume})
-def sweep(only: list[str] | None = None) -> dict:
+def sweep(only: list[str] | None = None, steps: int = 0) -> dict:
     """Run every config not already on the Volume; return {name: {"retrain": report}}.
 
     The new SAEs stay on the Volume (runs/<name>/sae/): returning ~100 MB of weights per config would go through
@@ -104,15 +107,18 @@ def sweep(only: list[str] | None = None) -> dict:
     print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none")
     capture = None
     results = {}
-    for name, n_latents, revive in SWEEP:
+    for name, n_latents, revive, *rest in SWEEP:
+        norm = rest[0] if rest else "keep"
         if only and name not in only:
             continue
-        done = vol / "runs" / name
+        # steps > 0 is a smoke test: a short run kept apart from the real one, so it is never mistaken for it.
+        run_name = f"{name}-smoke{steps}" if steps else name
+        done = vol / "runs" / run_name
         if not (done / "retrain.json").is_file():
             capture = capture or _fetch_capture(vol)
             work = Path("/tmp/sae-retrain") / name
             shutil.rmtree(work, ignore_errors=True)
-            config = RetrainConfig(n_latents=n_latents, k=K, steps=STEPS, batch_tokens=BATCH, lr=LR, revive=revive)
+            config = RetrainConfig(n_latents=n_latents, k=K, steps=steps or STEPS, batch_tokens=BATCH, lr=LR, revive=revive, norm=norm)
             print(f"== {name}")
             report = retrain(capture, work, config, torch.device("cuda"), log=print)
             print(format_report(report))
@@ -122,7 +128,7 @@ def sweep(only: list[str] | None = None) -> dict:
             shutil.copy(work / "retrain.json", done / "retrain.json")
             volume.commit()
         else:
-            print(f"done already: {name}")
+            print(f"done already: {run_name}")
         results[name] = {"retrain": json.loads((done / "retrain.json").read_text())}
     return results
 
@@ -130,19 +136,19 @@ def sweep(only: list[str] | None = None) -> dict:
 def summarise(results: dict) -> tuple[dict, str]:
     """The notebook's comparison: old SAE first, then each config, plus the input-variance check."""
     rows = []
-    for name, _n, _r in SWEEP:
+    for name, *_rest in SWEEP:
         if name not in results:
             continue
         rep = results[name]["retrain"]
         if not rows and rep["old"]:
             rows.append(("old (capture)", rep["old"]))
         rows.append((name, rep["new"]))
-    lines = [f"{'SAE':<16}{'latents':>8}{'alive tr':>9}{'alive ho':>9}{'dense ho':>9}{'L0 ho':>7}{'EV ho':>8}{'EV/dim ho':>10}"]
+    lines = [f"{'SAE':<18}{'latents':>8}{'alive tr':>9}{'alive ho':>9}{'dense ho':>9}{'L0 ho':>7}{'EV ho':>8}{'EV/dim ho':>10}"]
     for name, r in rows:
         tr, ho = r["train"], r["heldout"]
         lines.append(
-            f"{name:<16}{tr['alive_latents'] + tr['dead_latents']:>8}{tr['alive_latents']:>9}{ho['alive_latents']:>9}"
-            f"{ho['dense_latents']:>9}{ho['l0_mean']:>7.2f}{ho['ev_normalised']:>8.4f}{ho['ev_per_dim_mean']:>10.4f}"
+            f"{name:<18}{tr['alive_latents'] + tr['dead_latents']:>8}{tr['alive_latents']:>9}{ho['alive_latents']:>9}"
+            f"{ho['dense_latents']:>9}{ho['l0_mean']:>7.2f}{ho['ev_raw']:>8.4f}{ho['ev_per_dim_mean']:>10.4f}"
         )
     ho = rows[0][1]["heldout"]
     lines.append(
@@ -153,11 +159,13 @@ def summarise(results: dict) -> tuple[dict, str]:
 
 
 @app.local_entrypoint()
-def main(out: str = "runs/groot-sae-retrain", only: str = "") -> None:
+def main(out: str = "runs/groot-sae-retrain", only: str = "", steps: int = 0, timeout_min: int = 0) -> None:
+    """``--steps N`` runs a short smoke test kept apart on the Volume; ``--timeout-min M`` lowers the hard cap."""
     names = [n for n in only.split(",") if n] or None
-    hours = TIMEOUT_S / 3600
-    print(f"Modal {GPU}, timeout {TIMEOUT_S // 60} min: at most about ${0.75 * hours:.2f} at list price.")
-    results = sweep.remote(names)
+    timeout_s = min(timeout_min * 60, TIMEOUT_S) if timeout_min > 0 else TIMEOUT_S
+    print(f"Modal {GPU}, timeout {timeout_s // 60} min: at most about ${0.75 * timeout_s / 3600:.2f} at list price.")
+    fn = sweep.with_options(timeout=timeout_s) if timeout_s != TIMEOUT_S else sweep
+    results = fn.remote(names, steps)
     dest = Path(out)
     for name, res in results.items():
         (dest / name).mkdir(parents=True, exist_ok=True)

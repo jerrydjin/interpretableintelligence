@@ -64,7 +64,7 @@ def untrained_weights(trained: dict[str, torch.Tensor], seed: int) -> dict[str, 
 
 def pre_activations(weights: dict[str, torch.Tensor], x: torch.Tensor) -> torch.Tensor:
     """ReLU pre-activations ``relu(((x - norm_mu) / norm_scale - b_dec) @ W_enc + b_enc)`` of raw rows ``x`` [n, D]."""
-    scale = float(weights["norm_scale"].reshape(-1)[0])
+    scale = weights["norm_scale"].float().reshape(-1).to(x.device)  # [1], or [D] for a channel-normalised SAE
     xn = (x.float() - weights["norm_mu"]) / scale
     return torch.relu((xn - weights["b_dec"]) @ weights["W_enc"] + weights["b_enc"])
 
