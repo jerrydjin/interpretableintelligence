@@ -6,7 +6,7 @@
 Bills the invoking user's own Modal account (credentials from ``modal token set`` or MODAL_TOKEN_ID /
 MODAL_TOKEN_SECRET). One T4 container runs the configs one after another, with a hard timeout, so the cost is
 bounded up front: about $0.75 an hour at Modal's 2026 list price for a T4 plus the 2 cores and 8 GiB reserved
-here, and the sweep takes roughly 30 to 45 minutes.
+here. The sweep takes about an hour on a T4 (the two 8192-latent configs take about 15 minutes each).
 
 The container downloads the capture tarball (``data/groot-1028.md``: release ``data-groot-1028-v1``), checks its
 sha256, and keeps it and every finished config on the Volume ``ii-groot-sae-retrain``, so a rerun after a
@@ -28,7 +28,7 @@ VOLUME_ROOT = "/vol"
 GPU = "T4"
 CPU_CORES = 2.0
 MEMORY_MIB = 8 * 1024
-TIMEOUT_S = 90 * 60
+TIMEOUT_S = 120 * 60
 
 CAPTURE_NAME = "groot-1028-v9-n100"
 CAPTURE_URL = "https://github.com/jerrydjin/interpretableintelligence/releases/download/data-groot-1028-v1/groot-1028-v9-n100.tar.xz"
