@@ -12,8 +12,8 @@ The first user is a learner. The viewer should make mechanistic interpretability
 
 | Role | Font | Weight | Used for |
 | --- | --- | --- | --- |
-| Serif | Newsreader | 400 only | Page and section titles, ledes, sentences you read |
-| Sans | Geist | 400 and 500 | Everything you use: names, buttons, labels, numbers, tables |
+| Serif | Newsreader | 400 only | Page and section titles, and a few sentences you read (the steering target) |
+| Sans | Geist | 400 and 500 | Everything else: ledes, names, buttons, labels, numbers, tables, inline commands |
 
 The sizes are tokens: `--t-small` 13px, `--t-body` 16px, `--t-lead` 21px, `--t-head` 30px and `--t-display` 52px. Below 860px the head, display and lead sizes shrink.
 
@@ -39,12 +39,14 @@ The heatmap reads `--signal-rgb` and `--steer-rgb` from the stylesheet. `isoTerr
 
 ## Shapes and signature elements
 
-- The nav is a row of pills, with the active page filled in ink. There is no header rule.
-- Cards use a 14px radius (`--radius`) and a 1px line shadow instead of a border. Lists use hover fills rather than dividers.
+- The nav is plain text links; the current section is underlined in ember. There is no header rule.
+- Cards use a 10px radius (`--radius`) and a 1px hairline instead of a border, and do not lift on hover. Lists use hover fills rather than dividers.
+- Status tags (`.badge`) are small outlined labels with 6px corners (`--radius-sm`), not filled pills.
+- Inline code is Geist in ink with no background. Commands to copy sit in a dark block (`--plate`).
 - Ledes are two-tone: the claim in ink, the context in grey.
 - The signature graphic is **isometric activation blocks**: a feature's activation on its top frame, drawn as a little terrain beside the frame.
 - The logo is two isometric columns, the two i's drawn as activations: a short ember one and a tall ink one.
-- There is one button shape, an ink pill (`.button`). The playground's Steer button uses it too.
+- There is one button shape: ink with small corners (`.button`); `.button-quiet` is its outlined second choice. The playground's Steer button uses it too.
 - The **check ring** is the verified seal: one arc per check (dictionary, many clips, name holds, beats random, learned), green when passed. A verified feature closes the ring and a tick pops into the middle; anything else shows `4/5` in the middle. The arcs draw in once, and not at all under `prefers-reduced-motion`.
 
 ## Plain words first, numbers on request
@@ -75,11 +77,23 @@ The feature page's "The numbers" section (the score tiles and the full top-clip 
 
 `ii export-site` builds `demo-site/`. Its fake viewer page is the viewer's own `index.html` with a slim demo bar above it, so the viewer and the demo never drift apart. `static/demo.css` styles only the demo prose pages (`.prose`, `.demo-bar`, `.score-line`) on the same tokens, and must never restyle viewer classes. Regenerate the site with `make demo-site` whenever `static/` changes.
 
+The site has four sections, and every page belongs to one; the nav underlines that section.
+
+| Section | Pages | What it is |
+| --- | --- | --- |
+| Home (`/`) | | One sentence, three ways in, the latest result, what is coming |
+| Try it | `/droid/` | A real run (DINOv2 on DROID) in the viewer, with a precomputed playground |
+| Research | `/results/` hub, `/groot/`, `/vjepa/` | Studies on real models, each as question, answer, evidence, how to rerun. `/explore/` forwards to `/groot/` |
+| Run it yourself | `/start/` | Install, `ii try`, a real model, the commands |
+| Demos | `/demos/`, `/fake/`, `/picker/` | Synthetic examples with a known answer, kept apart from the research |
+
+Pages inside a section show a small link back to it above the title. When in doubt, remove rather than add: labels, tags, borders and accents.
+
 ## References Jerry chose
 
 He picked these on 13 Nov 2026, from screenshots of about 28 homepages:
 
-- **Anthropic**: formal warmth, and the main influence. It shows in the serif plus sans pairing, the ivory paper, the pill nav and the generous space.
+- **Anthropic**: formal warmth, and the main influence. It shows in the serif plus sans pairing, the ivory paper and the generous space. On 17 Nov Jerry asked to keep the colours but make the components look less like Anthropic's, which is why the pill nav, pill buttons and filled tags went.
 - **Cursor**: clean layout.
 - **Baseten**: graphics. This led to the isometric blocks.
 - **1X**: good visuals and imagery.
