@@ -188,14 +188,20 @@ def export_live(
     n_samples: int = DEFAULT_SAMPLES,
     title: str | None = None,
     log: Callable[[str], None] = lambda _msg: None,
+    browser: bool = True,
 ) -> LiveSummary:
-    """Write a live-playground pack for ``run_dir`` into ``out_dir``. See the module docstring."""
+    """Write a live-playground pack for ``run_dir`` into ``out_dir``. See the module docstring.
+
+    ``browser=False`` writes a backend-only pack: no ONNX files and no ``decoder.bin``, only what
+    the hosted backend reads (``pack.json``, ``features.json``, ``sae.safetensors``, samples).
+    Packs built from a model picked on the page (``playground.builds``) are made this way."""
     from interpretableintelligence.adapters import get_adapter
     from interpretableintelligence.sae import load_sae
     from interpretableintelligence.artifacts import read_json
 
     try:
-        import onnx  # noqa: F401  (torch.onnx writes the graphs through it)
+        if browser:
+            import onnx  # noqa: F401  (torch.onnx writes the graphs through it)
     except ImportError as exc:
         raise LiveExportError("ii export-live needs the onnx package: uv sync --extra live, or pip install onnx") from exc
     run_dir = Path(run_dir)
@@ -248,11 +254,12 @@ def export_live(
         raise LiveExportError(f"split model does not reproduce the full forward (max gap {gap:.2e})")
     if tuple(hidden.shape) != (1, prefix + grid_h * grid_w, d_model):
         raise LiveExportError(f"block {layer} output {tuple(hidden.shape)} is not {prefix} prefix + {grid_h}x{grid_w} patch tokens")
-    _export_onnx(front, pixels, out_dir / "front.onnx", "pixel_values", "hidden")
-    _export_onnx(back, hidden, out_dir / "back.onnx", "hidden", "final")
-    _export_onnx(_SaePre(sae).eval(), torch.zeros(grid_h * grid_w, d_model), out_dir / "sae.onnx", "x", "pre", dynamic=True)
-    decoder = sae.W_dec.detach().float().cpu().T.contiguous().numpy().astype("<f2")
-    (out_dir / "decoder.bin").write_bytes(decoder.tobytes())
+    if browser:
+        _export_onnx(front, pixels, out_dir / "front.onnx", "pixel_values", "hidden")
+        _export_onnx(back, hidden, out_dir / "back.onnx", "hidden", "final")
+        _export_onnx(_SaePre(sae).eval(), torch.zeros(grid_h * grid_w, d_model), out_dir / "sae.onnx", "x", "pre", dynamic=True)
+        decoder = sae.W_dec.detach().float().cpu().T.contiguous().numpy().astype("<f2")
+        (out_dir / "decoder.bin").write_bytes(decoder.tobytes())
     write_pack_sae(sae, out_dir)
 
     log("writing sample frames")
@@ -297,13 +304,11 @@ def export_live(
         },
         "n_real": n_real,
         "files": {
-            "front": "front.onnx",
-            "back": "back.onnx",
-            "sae": "sae.onnx",
-            "decoder": "decoder.bin",
+            **({"front": "front.onnx", "back": "back.onnx", "sae": "sae.onnx", "decoder": "decoder.bin"} if browser else {}),
             "features": "features.json",
             "sae_weights": SAE_WEIGHTS,
         },
+        "runs_in": ["browser", "backend"] if browser else ["backend"],
         "samples": samples,
         "train_clips": sum(1 for clip in manifest.get("clips") or [] if clip.get("split") == "train"),
         "meta_source": "export" if meta_from is not None else "run",

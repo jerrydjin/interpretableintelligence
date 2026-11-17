@@ -1022,10 +1022,20 @@ def serve_live_cmd(
     host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port")] = 8787,
     origins: Annotated[str, typer.Option("--origins", help="Comma-separated origins allowed to call the API (CORS).")] = "*",
+    builds: Annotated[
+        Path | None,
+        typer.Option("--builds", help="Let the page build packs for Hugging Face models it names, kept in this directory (bring your own model)."),
+    ] = None,
+    build_clips: Annotated[Path, typer.Option("--build-clips", help="Clips a build trains its dictionary on (ii get-clips --n 40).")] = Path("clips/droid"),
+    builds_per_day: Annotated[int, typer.Option("--builds-per-day", min=1, help="Most new builds a day.")] = 10,
+    max_params: Annotated[int, typer.Option("--max-params", min=1, help="Largest model a build accepts, in millions of parameters.")] = 350,
+    allow_local_models: Annotated[bool, typer.Option("--allow-local-models", help="Also build from model directories on this machine.")] = False,
 ) -> None:
     """Run the live playground's model server on this machine (the API in docs/PLAYGROUND-API.md).
 
     Open the page with ?api=http://127.0.0.1:8787 to use it. ii deploy-live hosts the same thing on Modal.
+    With --builds, the page can also name a Hugging Face vision model and get a dictionary for it;
+    each build runs ii run hf --no-score on the --build-clips clips here, then packs it.
     """
     import uvicorn
 
@@ -1039,8 +1049,25 @@ def serve_live_cmd(
         raise typer.Exit(code=1) from exc
     for model in models.values():
         typer.echo(f"loaded {model.id} ({model.pack['model']['name']}, {model.n_features} features) on {model.device.type} in {model.load_ms / 1000:.1f} s")
+    table = models
+    builder = None
+    if builds is not None:
+        from interpretableintelligence.clips import list_clip_meta
+        from interpretableintelligence.playground.builds import Builds, JobStore, Limits, thread_runner
+        from interpretableintelligence.playground.registry import PackRegistry
+
+        n_clips = len(list_clip_meta(build_clips)) if build_clips.is_dir() else 0
+        if n_clips < MIN_CLIPS:
+            typer.echo(f"error: --builds needs at least {MIN_CLIPS} clips in {build_clips}; run `ii get-clips --n 40` first", err=True)
+            raise typer.Exit(code=1)
+        store = JobStore(builds)
+        limits = Limits(max_params=max_params * 1_000_000, builds_per_day=builds_per_day, n_clips=n_clips, allow_local=allow_local_models)
+        builder = Builds(store, thread_runner(store, build_clips), limits)
+        table = PackRegistry(models, built_dir=store.root / "packs")
+        typer.echo(f"builds on: packs for new models go to {store.root / 'packs'} (at most {builds_per_day} a day)")
     typer.echo(f"playground API on http://{host}:{port}/v1/health")
-    uvicorn.run(create_app(models, allow_origins=[o.strip() for o in origins.split(",") if o.strip()]), host=host, port=port, log_level="warning")
+    app_ = create_app(table, allow_origins=[o.strip() for o in origins.split(",") if o.strip()], builds=builder)
+    uvicorn.run(app_, host=host, port=port, log_level="warning")
 
 
 @app.command("deploy-live")
@@ -1055,13 +1082,35 @@ def deploy_live_cmd(
         str | None,
         typer.Option("--api", help="Skip deploying: just point the page at this API URL (or 'none' to run in the browser)."),
     ] = None,
+    builds: Annotated[
+        bool,
+        typer.Option("--builds/--no-builds", help="Let visitors name a Hugging Face vision model and get a dictionary for it (GPU jobs on your account, capped below)."),
+    ] = True,
+    build_gpu: Annotated[str, typer.Option("--build-gpu", help="Modal GPU type for builds.")] = "L4",
+    builds_per_day: Annotated[int, typer.Option("--builds-per-day", min=1, help="Most new builds a day (UTC).")] = 10,
+    build_timeout: Annotated[int, typer.Option("--build-timeout", min=120, help="Seconds a build may run before it is stopped.")] = 1200,
+    max_params: Annotated[int, typer.Option("--max-params", min=1, help="Largest model a build accepts, in millions of parameters.")] = 350,
 ) -> None:
-    """Host the playground backend on Modal (your account; scales to zero) and point the page at it."""
-    from interpretableintelligence.playground.deploy import DeployError, deploy, write_config
+    """Host the playground backend on Modal (your account; scales to zero) and point the page at it.
+
+    With builds on (the default), the page can name a Hugging Face vision model; one GPU build at a
+    time trains a dictionary for it on bundled robot clips. Builds are capped per day and in length,
+    so the most they can cost a day is printed before deploying.
+    """
+    from interpretableintelligence.playground.deploy import DeployError, build_cost_line, deploy, write_config
 
     try:
         if api is None:
-            api = deploy(packs, gpu=gpu, idle_s=idle, max_containers=max_containers, origins=origins, log=typer.echo)
+            build_env = None
+            if builds:
+                build_env = {
+                    "II_BUILD_GPU": build_gpu,
+                    "II_BUILD_PER_DAY": str(builds_per_day),
+                    "II_BUILD_TIMEOUT": str(build_timeout),
+                    "II_BUILD_MAX_PARAMS": str(max_params * 1_000_000),
+                }
+                typer.echo(build_cost_line(build_gpu, builds_per_day, build_timeout))
+            api = deploy(packs, gpu=gpu, idle_s=idle, max_containers=max_containers, origins=origins, log=typer.echo, build_env=build_env)
         url = None if api.lower() == "none" else api
         path = write_config(live_dir, url)
     except (DeployError, OSError) as exc:

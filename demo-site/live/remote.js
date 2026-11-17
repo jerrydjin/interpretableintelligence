@@ -17,9 +17,12 @@ class ApiError extends Error {
 }
 
 export class RemoteEngine {
-  constructor(baseUrl, apiUrl) {
+  // packId: the pack's name on the server when baseUrl does not end in it (a pack built from a
+  // model picked on the page is served from <api>/v1/packs/<id>/files/).
+  constructor(baseUrl, apiUrl, packId = null) {
     this.base = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
     this.api = apiUrl.replace(/\/+$/, "");
+    this._packId = packId;
     this.backend = "remote";
     this.timings = {};
     this._queue = Promise.resolve();
@@ -52,10 +55,14 @@ export class RemoteEngine {
     throw new ApiError(response.status, code, message);
   }
 
+  call(path, init) {
+    return this._call(path, init);
+  }
+
   // onProgress({ phase }): "connect" while the server wakes up (a cold start takes a few seconds).
   async load({ onProgress = () => {} } = {}) {
     const t0 = now();
-    const packId = this.base.replace(/\/+$/, "").split("/").pop();
+    const packId = this._packId || this.base.replace(/\/+$/, "").split("/").pop();
     onProgress({ phase: "connect" });
     const waking = this._call("/v1/health"); // wakes the server while the pack loads
     waking.catch(() => {}); // reported below
@@ -65,6 +72,7 @@ export class RemoteEngine {
     if (health.api !== "ii-playground" || health.version !== 1) throw new Error("the model server does not speak playground API v1");
     if (!health.packs.includes(packId)) throw new Error(`the model server does not have the ${packId} pack`);
     this.packId = packId;
+    this.health = health;
     this.pack = pack;
     this.features = features;
     const info = await this._call(`/v1/packs/${encodeURIComponent(packId)}`);

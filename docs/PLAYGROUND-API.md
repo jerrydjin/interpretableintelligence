@@ -110,11 +110,57 @@ The edit is `x' = x + Σ (f'ᵢ − fᵢ) W_dec[:, i]` on the patch tokens at th
 
 `shift` has one number per patch (row-major): `1 − cos(clean final token, edited final token)`. `loss_change` is the mean squared change over all final patch tokens.
 
+## Bring your own model
+
+Optional: a server has these routes working only when `/v1/health` includes a `builds` object, which also gives its limits:
+
+```json
+{"api": "ii-playground", "version": 1, "packs": ["dinov2-small-droid"],
+ "builds": {"max_params": 350000000, "builds_per_day": 10, "timeout_s": 1200, "n_clips": 40}}
+```
+
+Without it they answer `503 builds_off`. Compute: `src/interpretableintelligence/playground/builds.py`; the routes only call `Builds.submit`, `Builds.job` and `Builds.file`.
+
+### `POST /v1/models`
+
+```json
+{"model": "facebook/dinov2-base", "layer": null}
+```
+
+`layer` is a block number from 1, or `null` for the middle block. The server checks the model on the Hub before downloading anything, then returns its build job. `202` while it builds, `200` when the pack already exists (the same model, commit and layer is never built twice; the `x-ii-new-build` header says whether this call started one).
+
+```json
+{"job": {"id": "5c1f…", "pack": "facebook--dinov2-base-l6-f9e44c81r1", "model": "facebook/dinov2-base", "layer": 6,
+         "state": "running", "stage": "train", "stage_text": "Training the dictionary", "progress": 0.62,
+         "message": null, "elapsed_s": 141.2, "timeout_s": 1200}}
+```
+
+`state` is `queued`, `running`, `done` or `failed` (with `message` saying why). `stage` is `queued`, `loading`, `capture`, `train`, `features`, `pack` or `done`; `progress` runs from 0 to 1.
+
+### `GET /v1/jobs/{job_id}`
+
+The same `{"job": …}`. Poll it every few seconds. Once `state` is `done`, `pack` is a pack id for every other route.
+
+### `GET /v1/packs/{pack}/files/{name}`
+
+A built pack's static files, which the page would otherwise fetch from the static host: `pack.json`, `features.json` and `samples/<clip>.jpg`. Nothing else is served. A built pack's `pack.json` has `"runs_in": ["backend"]` (no ONNX files, so it cannot run in the browser) and a `built` object with the model, commit and recipe.
+
+| Status | `code` | When |
+| --- | --- | --- |
+| 400 | `model_not_supported` | Private, gated, not a plain vision transformer, or its size is unknown. |
+| 400 | `model_too_large` | More parameters than `builds.max_params`. |
+| 404 | `model_not_found` | No public model with that id. |
+| 404 | `job_not_found` | No such job, or no such file in a built pack. |
+| 429 | `build_limit` | A build is already running, or today's builds are used up. |
+| 503 | `builds_off` | This server does not build models. |
+
 ## What the client does
 
 1. `GET /v1/health` (wakes the server), then static `pack.json` and `features.json`.
 2. `read` each picture; keep its bytes and `image_id`.
 3. `steer` for each edit. On `unknown_image`, `read` the same bytes and retry once.
 4. While one edit is in flight, newer edits replace any that are waiting, so a dragged slider sends the latest value instead of a queue.
+
+5. With `builds` in the health answer, offer a model picker (`demo-site/live/byom.js`): `POST /v1/models`, poll the job, then open the page with `?model=<pack>`, which loads the pack's files from `/v1/packs/<pack>/files/`.
 
 `demo-site/live/remote.js` is that client. With `config.json`'s `api` set to `null` the page falls back to running the pack in the browser (`engine.js`).

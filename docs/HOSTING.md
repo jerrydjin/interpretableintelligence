@@ -82,3 +82,18 @@ The Vercel deploy of that commit makes the page use the server. `ii deploy-live 
 - A cold start is a few seconds: model weights are in the image and the loaded models are restored from a memory snapshot.
 - While warm, Modal bills the GPU (T4 by default, about $0.59 an hour) plus 2 CPU cores and 4 GiB. `--gpu none` runs on CPU only, about a tenth of the price; DINOv2-small reads a picture in about 70 ms and edits in about 50 ms on 4 CPU cores, so CPU is enough for this pack. Bigger models want the GPU.
 - `--max-containers` (default 2) caps how many run at once, which caps the bill if the page gets busy. There is no auth in v1, so this cap is the guard.
+
+## Bring your own model
+
+With builds on (the default for `ii deploy-live`; `--no-builds` turns them off), the page shows "Try your own model": a visitor names a Hugging Face vision transformer, and a GPU function trains a dictionary for it on 40 DROID robot clips baked into its image (`ii run hf --no-score`, then a backend-only `ii export-live`). The new pack is written to the `ii-playground-builds` Volume and served like the shipped one. Each pack is kept per model, commit and layer, so a model is built once and the next visitor gets it straight away. Built features have no names or ticks: they are for exploring, and nothing here scores them.
+
+Cost guards, all set at deploy time:
+
+- A model is checked on the Hub before anything is downloaded: public, not gated, a plain vision transformer (ViT, DINOv2, DeiT style; image-text towers and CNNs are refused for now), and at most `--max-params` million parameters (default 350, which takes DINOv2-large and ViT-L but not giants).
+- One build at a time (the build function's `max_containers=1`); a second visitor is told to try again in a few minutes.
+- `--builds-per-day` new builds a day, UTC (default 10). Reusing a built pack is free and does not count.
+- `--build-timeout` seconds per build (default 1200) is the function's timeout, so Modal stops it even if nothing else does. The page reads a build that went quiet for longer as failed.
+- Builds run on `--build-gpu` (default L4). `ii deploy-live` prints the worst case before it deploys: at list price an L4 build container (4 cores, 16 GiB) is about $1.12 an hour, so a build that hits the 20 minute timeout costs about $0.37 and a full day of them about $3.72. A ViT-B build should take a few minutes.
+- Nothing runs while nobody builds: the build function scales to zero like the web containers.
+
+Locally, `ii serve-live --builds DIR --build-clips clips/droid` does the same on this machine's CPU (`ii get-clips --n 40` first). It is slow on a laptop, but it is the same code path, and it is how the tests exercise it.
