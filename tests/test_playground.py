@@ -270,6 +270,29 @@ def test_page_runs_on_the_backend(served, tmp_path):
             page.wait_for_selector("[data-kind=ablate]")
             page.click("[data-kind=ablate]")
             page.wait_for_function("() => window.__ii.ui.result !== null")
+            # The address bar holds the picture, feature and edit, and a fresh page opened on it
+            # comes back to the same edit with the same result.
+            sample = json.loads((served["pack"] / "pack.json").read_text(encoding="utf-8"))["samples"][1]["clip_id"]
+            page.click(f".thumb[data-clip='{sample}']")
+            page.click("[data-kind=scale]")
+            page.wait_for_function("() => window.__ii.ui.kind === 'scale' && window.__ii.ui.result !== null")
+            page.wait_for_function(f"() => location.hash.includes('p={sample}') && location.hash.includes('e=scale')")
+            before = page.evaluate("window.__ii.ui.result.mean")
+            again = browser.new_page()
+            again.on("pageerror", lambda exc: errors.append(str(exc)))
+            again.goto(page.url)
+            again.wait_for_function("() => window.__ii && window.__ii.ui.result !== null", timeout=60_000)
+            restored = again.evaluate("({f: window.__ii.ui.feature, k: window.__ii.ui.kind, v: window.__ii.ui.value.scale, m: window.__ii.ui.result.mean})")
+            assert restored["k"] == "scale" and restored["v"] == 2 and restored["m"] == pytest.approx(before, abs=1e-9)
+            # Your own picture travels inside the link.
+            again.set_input_files("#file", str(served["pack"] / "samples" / f"{sample}.jpg"))
+            again.wait_for_function("() => window.__ii.ui.picture && window.__ii.ui.picture.img && window.__ii.ui.result !== null")
+            link = again.evaluate("window.__ii.link({ withPicture: true })")
+            assert "img=" in link and "p=" not in link and "e=scale" in link
+            third = browser.new_page()
+            third.goto(f"{url}#{link}")
+            third.wait_for_function("() => window.__ii && window.__ii.ui.result !== null", timeout=60_000)
+            assert third.evaluate("window.__ii.ui.picture.img != null && window.__ii.ui.kind") == "scale"
             assert errors == []
             browser.close()
     finally:

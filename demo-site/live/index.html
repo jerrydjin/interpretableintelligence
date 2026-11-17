@@ -43,16 +43,13 @@
         </div>
         <div class="stage-key" id="stage-key"></div>
         <div class="tray">
-          <div class="tray-head">
-            <span>Pick a picture</span>
-            <span class="tray-actions">
-              <label class="pill-btn" for="file">Upload your own</label>
-              <input type="file" id="file" accept="image/*" hidden>
-              <button class="pill-btn" id="cam-btn" type="button">Use your camera</button>
-            </span>
+          <div class="thumbs" id="thumbs" aria-label="Example pictures"></div>
+          <div class="tray-actions">
+            <label class="pill-btn" for="file">Upload your own</label>
+            <input type="file" id="file" accept="image/*" hidden>
+            <button class="pill-btn" id="cam-btn" type="button">Use your camera</button>
+            <span class="tray-note">or paste or drop any picture</span>
           </div>
-          <div class="thumbs" id="thumbs"></div>
-          <p class="tray-note">Frames from real robot videos. The first ones are from videos the dictionary never saw while it was built.</p>
         </div>
       </div>
 

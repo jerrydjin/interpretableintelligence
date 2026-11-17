@@ -121,8 +121,10 @@ async function boot() {
   $("work").hidden = false;
   buildThumbs();
   wireInputs();
-  const first = pack.samples.find((s) => s.clip_id === "droid-028") || pack.samples[0];
-  await showSample(first);
+  if (!(await restoreFromLink())) {
+    const first = pack.samples.find((s) => s.clip_id === "droid-028") || pack.samples[0];
+    await showSample(first);
+  }
   renderPerf();
   encodeGallery();
 }
@@ -134,9 +136,9 @@ function buildThumbs() {
   box.replaceChildren();
   for (const sample of engine.pack.samples) {
     const img = el("img", { src: engine.base + sample.file, alt: `Robot video ${sample.clip_id}`, loading: "lazy" });
-    const btn = el("button", { class: "thumb", type: "button", "data-clip": sample.clip_id, title: sample.split === "heldout" ? "From a video the dictionary never saw" : "From a training video", onclick: () => showSample(sample) }, img);
-    if (sample.split === "heldout") btn.append(el("span", { class: "thumb-new" }, "unseen"));
-    box.append(btn);
+    box.append(
+      el("button", { class: "thumb", type: "button", "data-clip": sample.clip_id, title: sample.split === "heldout" ? "A robot video the dictionary never saw" : "A robot video", onclick: () => showSample(sample) }, img),
+    );
   }
 }
 
@@ -152,6 +154,7 @@ function loadImage(src) {
 
 async function showSample(sample) {
   stopCam();
+  ui.picture = { sample: sample.clip_id };
   document.querySelectorAll(".thumb").forEach((t) => t.classList.toggle("on", t.dataset.clip === sample.clip_id));
   const img = await loadImage(engine.base + sample.file);
   await showPicture(img, img.src);
@@ -181,6 +184,7 @@ async function showFile(file) {
   try {
     const img = await loadImage(url);
     stopCam();
+    ui.picture = { img };
     await showPicture(img, url);
   } catch (err) {
     flash(err.message);
@@ -280,6 +284,7 @@ async function snapCam() {
   stopCam();
   const url = canvas.toDataURL("image/jpeg", 0.9);
   const img = await loadImage(url);
+  ui.picture = { img };
   await showPicture(img, url);
 }
 
@@ -315,9 +320,11 @@ async function runEdit() {
       ui.result = await engine.edit(ui.state, [ui.feature], ui.kind, currentValue());
       ui.lastEditMs = ui.result.timing.total;
       ui.show = "change";
+      remember(TRIED_KEY);
       drawHeat();
       renderResult();
       renderPerf();
+      syncAddress();
     } while (ui.pending);
   } finally {
     ui.busy = false;
@@ -438,6 +445,7 @@ function render() {
   drawHeat();
   drawGrid(null);
   renderPanel();
+  syncAddress();
 }
 
 function renderPanel() {
@@ -495,7 +503,8 @@ function overview() {
     "div",
     { class: "view" },
     el("h2", {}, "What it notices here"),
-    el("p", { class: "muted" }, `${order.length} of ${engine.nFeatures.toLocaleString("en-GB")} features fire somewhere on this picture. These are the strongest. Hover one to see where, click it to play with it.`),
+    firstStep(top),
+    el("p", { class: "muted" }, `${order.length.toLocaleString("en-GB")} of ${engine.nFeatures.toLocaleString("en-GB")} features fire on this picture. The strongest are below: hover one to see where, click it to change it.`),
     el("div", { class: "flist" }, top.map((i) => featureRow(featureById(i), totals[i], peak))),
     named.length ? el("h3", {}, "Also here, with names") : null,
     named.length ? el("div", { class: "flist" }, named.map((i) => featureRow(featureById(i), totals[i], peak))) : null,
@@ -671,6 +680,12 @@ function renderResult() {
       quiet ? `${label} barely moved the model's view of this picture.` : `${label} moved the model's final view by ${pct(r.mean)} on average, and by up to ${pct(r.max)} on one patch.`,
     ),
     el("p", { class: "muted small" }, `Measured as how far each patch's final description turned (cosine distance), comparing before and after the edit. ${quiet && !engine.featureMap(ui.state, f.id).some((v) => v > 0) && ui.kind !== "clamp" ? "It is silent here, so there was nothing to remove." : ""}`),
+    el(
+      "p",
+      { class: "share" },
+      el("button", { class: "pill-btn", type: "button", "data-testid": "share", onclick: copyLink }, "Copy a link to this"),
+      ui.picture?.img ? el("span", { class: "muted small" }, "The link carries your picture.") : null,
+    ),
   );
   document.querySelectorAll("[data-show]").forEach((b) => b.classList.toggle("on", b.dataset.show === ui.show));
 }
@@ -731,6 +746,131 @@ function galleryFor(id) {
       el("span", {}, pct(peak / (f.max || 1))),
     );
   });
+}
+
+// ------------------------------------------------------------------ first step and links
+
+const TRIED_KEY = "ii-live-tried";
+
+function remember(key) {
+  try {
+    localStorage.setItem(key, "1");
+  } catch {
+    /* private mode: the hint just shows again next time */
+  }
+}
+
+function recalled(key) {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// Until someone has made an edit, the overview opens with one thing to try: the strongest
+// verified feature on this picture (else the strongest named one), switched off.
+function firstStep(top) {
+  if (recalled(TRIED_KEY)) return null;
+  const pick = top.map(featureById).find((f) => f.real) || top.map(featureById).find((f) => f.label);
+  if (!pick) return null;
+  return el(
+    "button",
+    {
+      class: "first-step",
+      type: "button",
+      "data-testid": "first-step",
+      onclick: () => {
+        ui.kind = "ablate";
+        openFeature(pick.id);
+        runEdit();
+      },
+    },
+    "Try this first: switch off ",
+    el("b", {}, `"${featureName(pick)}"`),
+    " and see where the model's view of the picture changes.",
+  );
+}
+
+// A link is the picture (an example's id, or the picture itself), the feature and the edit:
+// #p=droid-028&f=1104&e=ablate, #p=…&f=…&e=scale&v=2.5, or #img=<jpeg>&f=… for your own.
+function linkParams({ withPicture = false } = {}) {
+  const q = new URLSearchParams();
+  if (ui.picture?.sample) q.set("p", ui.picture.sample);
+  else if (withPicture && ui.picture?.img) q.set("img", pictureCode(ui.picture.img));
+  if (ui.view === "feature" && ui.feature != null) {
+    q.set("f", String(ui.feature));
+    if (ui.result) {
+      q.set("e", ui.kind);
+      if (ui.kind !== "ablate") q.set("v", String(Number(currentValue().toFixed(3))));
+    }
+  }
+  return q;
+}
+
+// The address bar always holds the current link (without your own picture, which is long).
+function syncAddress() {
+  const hash = linkParams().toString();
+  if ((hash ? `#${hash}` : "") === location.hash) return;
+  history.replaceState(null, "", hash ? `#${hash}` : location.pathname + location.search);
+}
+
+// Your own picture travels in the link as a small JPEG (about 10 KB), so no server keeps it.
+function pictureCode(img) {
+  const edge = 256;
+  const w = img.naturalWidth || img.videoWidth || img.width;
+  const h = img.naturalHeight || img.videoHeight || img.height;
+  const scale = Math.min(1, edge / Math.max(w, h));
+  const c = el("canvas");
+  c.width = Math.round(w * scale);
+  c.height = Math.round(h * scale);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.8).split(",")[1].replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function copyLink() {
+  const url = `${location.origin}${location.pathname}${location.search}#${linkParams({ withPicture: true })}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    flash("Link copied. It opens this picture with the same edit.");
+  } catch {
+    window.prompt("Copy this link:", url);
+  }
+  ui.lastLink = url;
+}
+window.__ii.link = (options) => linkParams(options).toString();
+
+async function restoreFromLink() {
+  const q = new URLSearchParams(location.hash.slice(1));
+  const sample = engine.pack.samples.find((s) => s.clip_id === q.get("p"));
+  try {
+    if (sample) await showSample(sample);
+    else if (q.get("img")) {
+      const b64 = q.get("img").replace(/-/g, "+").replace(/_/g, "/");
+      const img = await loadImage(`data:image/jpeg;base64,${b64}`);
+      ui.picture = { img };
+      await showPicture(img, img.src);
+    } else return false;
+  } catch {
+    flash("That link's picture could not be opened.");
+    return false;
+  }
+  const f = Number(q.get("f"));
+  if (q.has("f") && Number.isInteger(f) && f >= 0 && f < engine.nFeatures) {
+    const kind = q.get("e");
+    const value = Number(q.get("v"));
+    if (kind in EDITS) ui.kind = kind;
+    if (Number.isFinite(value) && kind === "scale") ui.value.scale = Math.min(5, Math.max(0, value));
+    if (Number.isFinite(value) && kind === "clamp") ui.value.clamp = value;
+    const clamp = ui.value.clamp;
+    openFeature(f);
+    ui.value.clamp = clamp;
+    if (kind in EDITS) {
+      renderPanel();
+      await runEdit();
+    }
+  }
+  return true;
 }
 
 // ------------------------------------------------------------------ footer
