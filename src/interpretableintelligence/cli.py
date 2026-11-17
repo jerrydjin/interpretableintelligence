@@ -967,7 +967,7 @@ def serve_live_cmd(
     port: Annotated[int, typer.Option("--port")] = 8787,
     origins: Annotated[str, typer.Option("--origins", help="Comma-separated origins allowed to call the API (CORS).")] = "*",
 ) -> None:
-    """Run the playground backend (API v1, docs/PLAYGROUND-API.md) on this machine.
+    """Run the live playground's model server on this machine (the API in docs/PLAYGROUND-API.md).
 
     Open the page with ?api=http://127.0.0.1:8787 to use it. ii deploy-live hosts the same thing on Modal.
     """

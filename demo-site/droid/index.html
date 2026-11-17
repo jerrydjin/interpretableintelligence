@@ -17,7 +17,7 @@
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
-  <nav class="demo-bar" aria-label="Demo sections"><a class="demo-home" href="/">Home</a><a href="/explore/">Explore</a><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/droid/" aria-current="page">DINOv2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
+  <nav class="demo-bar" aria-label="Site sections"><a class="demo-home" href="/">Home</a><a href="/droid/" aria-current="page">Try it</a><a href="/results/">Research</a><a href="/start/">Run it yourself</a><a href="/demos/">Demos</a></nav>
   <header class="top" data-testid="run-header">
     <div class="brand-row">
       <a class="wordmark" href="#/" aria-label="interpretable intelligence">
@@ -50,6 +50,7 @@
 # The labels here came from a vision-language model: set FIREWORKS_API_KEY (or another key, see README).
 uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid
 uv run ii export runs/droid --clips clips/droid --out site/droid --max-clips 10</code></pre></details>
+    <p data-testid="droid-live"><a href="/live/">Try the same model live on your own picture</a>: switch a feature off and watch its view change.</p>
   </section>
   <main id="app"></main>
   <div id="live-status" class="live-status" data-testid="live-status" role="status" aria-live="polite" hidden></div>

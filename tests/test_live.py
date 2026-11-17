@@ -183,9 +183,15 @@ def test_demo_site_links_the_live_playground_and_keeps_it():
     )
     headers = json.loads((REPO / "demo-site" / "vercel.json").read_text(encoding="utf-8"))["headers"]
     assert any(h["source"] == "/live/(.*)" for h in headers)
-    from interpretableintelligence.export_site import LIVE_KEEP
+    from interpretableintelligence.export_site import LIVE_KEEP, SECTION_OF
 
     assert "live" in LIVE_KEEP and "vercel.json" in LIVE_KEEP
+    # The live page sits in the Try it section, and the section's real-run page links to it.
+    assert SECTION_OF["live"] == "try"
+    droid = (REPO / "demo-site" / "droid" / "index.html").read_text(encoding="utf-8")
+    assert 'data-testid="droid-live"' in droid and 'href="/live/"' in droid
+    page = (LIVE / "index.html").read_text(encoding="utf-8")
+    assert 'href="/droid/" aria-current="page">Try it' in page
 
 
 def _cdn_reachable() -> bool:
