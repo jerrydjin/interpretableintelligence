@@ -16,6 +16,9 @@ The candidates' matched controls are the picker's firing-rate matched random fea
 dictionary under ``sae/``, and each picker run under ``pick/``. A rerun with the same arguments reuses the plan.
 
 The design is a fixed budget: every condition runs ``episodes`` paired episodes, no SPRT stops (``sprt: false``).
+The plan's ``sprt`` block still carries a Sobel-Wald design (``rise_sprt``): ``p0`` is the capture's success rate and
+``p1 = p0 +/- RISE_SPRT_EFFECT``, the 1028 design's spacing (0.56 vs 0.86 / 0.26). ``summarize_groot`` reads it on
+each arm's outcomes in episode order for research rule 1, so ``finding`` needs the rise call too.
 """
 
 from __future__ import annotations
@@ -36,6 +39,36 @@ SAE_DIR = "sae"
 PLAN_FILE = "ablate_plan.json"
 RECON_EPISODES = 8
 PLAN_LAYER = 5
+RISE_SPRT_EFFECT = 0.30
+RISE_SPRT_ALPHA = 0.05
+RISE_SPRT_BETA = 0.05
+
+
+def rise_sprt(p0: float, cap: int) -> dict:
+    """The Sobel-Wald design rule 1 is read with: H0 p = p0 against p0 +/- RISE_SPRT_EFFECT (clipped to (0, 1))."""
+    if not 0.0 < p0 < 1.0:
+        raise ValueError(f"the capture's success rate must be strictly between 0 and 1 for an SPRT, got {p0}")
+    return {"p0": round(float(p0), 6), "p1_rise": round(min(p0 + RISE_SPRT_EFFECT, 0.99), 6),
+            "p1_fall": round(max(p0 - RISE_SPRT_EFFECT, 0.01), 6), "alpha": RISE_SPRT_ALPHA, "beta": RISE_SPRT_BETA,
+            "cap": int(cap), "stop_rule": "h1_or_both_h0"}
+
+
+def min_rise_episodes(sprt: dict) -> int | None:
+    """Fewest episodes in which the design can call a rise (every one a success), or None if it cannot by ``cap``."""
+    from interpretableintelligence.adapters.groot.v9.ablate_v9 import sequential_decision
+
+    for n in range(1, int(sprt["cap"]) + 1):
+        if sequential_decision([True] * n, sprt)["verdict"] == "rise":
+            return n
+    return None
+
+
+def capture_success_rate(manifest: dict) -> float:
+    episodes = manifest.get("episodes") or []
+    flags = [bool(item["success"]) for item in episodes if item.get("success") is not None]
+    if not flags:
+        raise ValueError("the capture manifest lists no episode outcomes: the rule 1 SPRT needs its success rate as p0")
+    return sum(flags) / len(flags)
 
 
 def _load_picker():
@@ -291,6 +324,13 @@ def build_pick_plan(
         full.unlink()  # the subset is what runs; the full untrained SAE is rebuilt from the seed if needed
 
     manifest = info["manifest"]
+    sprt = rise_sprt(capture_success_rate(manifest), int(episodes))
+    shortest = min_rise_episodes(sprt)
+    if shortest is None:
+        log(f"warning: with {episodes} episodes per arm the rule 1 SPRT (p0 {sprt['p0']}) can never call a rise, "
+            "so nothing can be a finding; raise --episodes")
+    else:
+        log(f"rule 1 SPRT: p0 {sprt['p0']}, p1_rise {sprt['p1_rise']}; a rise call needs at least {shortest} episodes")
     conditions = [
         {"id": "baseline", "arm": "baseline", "kind": "baseline", "latents": None, "n_max": int(episodes), "sprt": False, "dir": "baseline"},
         {"id": "recon-only", "arm": "baseline", "kind": "recon_only", "latents": [], "n_max": min(int(episodes), RECON_EPISODES),
@@ -324,9 +364,10 @@ def build_pick_plan(
                 "dictionaries": dictionaries},
         "seeds": {"rule": "seed = base + i; init_state_id = i % n_init_states", "base": int(seed),
                   "noise": "v9 per-episode torch.Generator(seed) routed into GR00T sample_noise"},
-        # No condition runs an SPRT here (fixed budget); the block keeps the plan schema and the v9 summaries' p0.
-        "sprt": {"p0": None, "p1_rise": None, "p1_fall": None, "alpha": None, "beta": None, "cap": int(episodes),
-                 "stop_rule": "none: fixed budget"},
+        # No condition stops early (fixed budget, every condition has sprt: false). The design is read afterwards on
+        # each arm's outcomes in episode order for research rule 1 (summarize_groot's sprt_verdict).
+        "sprt": {**sprt, "use": "rule 1 rise call, read on each arm's outcomes in episode order; no arm stops early",
+                 "p0_source": "capture success rate"},
         "labels": "pot_events rule pot0-v1 via physint_inproc_v9.label_episode",
         "conditions": conditions,
         "schedule": {"rule": "lockstep: each free env slot gets the next episode index of the active condition with the fewest "
