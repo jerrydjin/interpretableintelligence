@@ -988,6 +988,63 @@ def import_cmd(
     typer.echo(f"next: ii validate {out}")
 
 
+@app.command("retrain-sae")
+def retrain_sae_cmd(
+    capture: Annotated[Path, typer.Argument(help="Unpacked GR00T capture folder (groot-1028-v9-n100 layout: acts/, split.json, sae/).")],
+    out: Annotated[Path, typer.Option("--out", help="Folder to write: the new sae/, retrain.json, and links to the capture's SAE-independent files.")],
+    n_latents: Annotated[int, typer.Option("--n-latents", min=1, help="Dictionary size.")] = 2048,
+    k: Annotated[int, typer.Option("--k", min=1, help="BatchTopK: active latents per token on average.")] = 32,
+    steps: Annotated[int, typer.Option("--steps", min=1, help="Optimiser steps.")] = 6000,
+    batch_tokens: Annotated[int, typer.Option("--batch-tokens", min=1, help="Tokens per batch.")] = 4096,
+    lr: Annotated[float, typer.Option("--lr", help="Adam learning rate.")] = 4e-4,
+    revive: Annotated[
+        str, typer.Option("--revive", help="Dead-latent revival: auxk (AuxK loss), resample (reinitialise dead latents on high-error tokens), or none.")
+    ] = "auxk",
+    aux_coeff: Annotated[float, typer.Option("--aux-coeff", help="AuxK loss weight.")] = 1 / 32,
+    aux_k: Annotated[int, typer.Option("--aux-k", min=0, help="Dead latents per token in the AuxK reconstruction.")] = 512,
+    dead_tokens: Annotated[
+        int, typer.Option("--dead-tokens", min=0, help="Training tokens without firing before a latent counts as dead. 0: one pass over the train split.")
+    ] = 0,
+    resample_every: Annotated[int, typer.Option("--resample-every", min=0, help="--revive resample: steps between resamples (first 60% of training). 0: steps // 10.")] = 0,
+    seed: Annotated[int, typer.Option("--seed", help="Init and batch-order seed. random:<seed> in the rollout control is this SAE's init.")] = 0,
+    norm: Annotated[str, typer.Option("--norm", help="keep: reuse the capture SAE's norm_mu / norm_scale. fit: recompute from train rows.")] = "keep",
+    device: Annotated[str, typer.Option("--device", help="auto, cpu, or cuda.")] = "auto",
+) -> None:
+    """Retrain the GR00T capture SAE with dead-latent revival and compare it with the old one.
+
+    BatchTopK with AuxK or resampling, trained on split.json's train episodes only, written in the capture's sae/ layout
+    so the picker, ii import and ii rollouts --pick read it unchanged. Reports alive, dead and dense latents, L0
+    and explained variance on train and held-out for both SAEs. Offline: never a finding, never touches a scoreboard.
+    """
+    import torch
+
+    from interpretableintelligence.adapters.groot.retrain_sae import RetrainConfig, format_report, retrain
+
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    config = RetrainConfig(
+        n_latents=n_latents,
+        k=k,
+        steps=steps,
+        batch_tokens=batch_tokens,
+        lr=lr,
+        aux_coeff=aux_coeff,
+        aux_k=aux_k,
+        dead_tokens=dead_tokens,
+        revive=revive,
+        resample_every=resample_every,
+        seed=seed,
+        norm=norm,
+    )
+    try:
+        report = retrain(capture, out, config, torch.device(device), log=typer.echo)
+    except (ValueError, FileNotFoundError, FileExistsError, KeyError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(format_report(report))
+    typer.echo(f"wrote {out}")
+
+
 @app.command("compare")
 def compare_cmd(
     runs: Annotated[list[Path], typer.Argument(help="Two or more finished run folders that captured the same clips.")],
