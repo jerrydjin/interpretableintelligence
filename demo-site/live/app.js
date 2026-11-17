@@ -115,6 +115,8 @@ async function boot() {
   $("model-pill").textContent = `${pack.model.name.split("/").pop()} · ${WHERE[engine.backend]}`;
   if (engine.backend === "remote") {
     $("where-runs").textContent = "It runs on a small server in the cloud, which reads your picture and keeps nothing.";
+    $("where-fine").textContent =
+      "The model runs on a small server in the cloud. It reads each picture to answer you and keeps nothing; a shared link carries its own picture.";
   }
   $("n-real").textContent = String(pack.n_real);
   $("loader").hidden = true;
@@ -667,7 +669,7 @@ function renderResult() {
   if (!box) return;
   const r = ui.result;
   if (!r) {
-    box.replaceChildren(el("p", { class: "muted" }, "Pick an edit above. The rest of the model runs again on your device."));
+    box.replaceChildren(el("p", { class: "muted" }, `Pick an edit above. The rest of the model runs again ${engine.backend === "remote" ? "on the server" : "on your device"}.`));
     return;
   }
   const f = featureById(ui.feature);
@@ -690,7 +692,7 @@ function renderResult() {
   document.querySelectorAll("[data-show]").forEach((b) => b.classList.toggle("on", b.dataset.show === ui.show));
 }
 
-// ------------------------------------------------------------------ gallery (computed on this device)
+// ------------------------------------------------------------------ gallery (computed in the background)
 
 async function encodeGallery() {
   for (const sample of engine.pack.samples) {
@@ -712,7 +714,7 @@ async function encodeGallery() {
 }
 
 function galleryFor(id) {
-  if (!ui.gallery.length) return el("p", { class: "muted" }, "Looking through the sample pictures on your device…");
+  if (!ui.gallery.length) return el("p", { class: "muted" }, "Looking through the sample pictures…");
   const f = featureById(id);
   const ranked = ui.gallery
     .map((g) => ({ g, peak: g.state.peaks[id] }))
@@ -772,8 +774,17 @@ function recalled(key) {
 // verified feature on this picture (else the strongest named one), switched off.
 function firstStep(top) {
   if (recalled(TRIED_KEY)) return null;
-  const pick = top.map(featureById).find((f) => f.real) || top.map(featureById).find((f) => f.label);
-  if (!pick) return null;
+  const state = ui.state;
+  if (ui.firstPick?.state !== state) {
+    const candidates = top.map(featureById).filter((f) => f.real).slice(0, 4);
+    const fallback = candidates[0] || top.map(featureById).find((f) => f.label);
+    if (!fallback) return null;
+    // With several candidates the hint waits for the measurement, so it never changes its mind on screen.
+    ui.firstPick = { state, id: fallback.id, ready: candidates.length < 2 };
+    if (!ui.firstPick.ready) rankFirstStep(state, candidates);
+  }
+  if (!ui.firstPick.ready) return null;
+  const pick = featureById(ui.firstPick.id);
   return el(
     "button",
     {
@@ -790,6 +801,26 @@ function firstStep(top) {
     el("b", {}, `"${featureName(pick)}"`),
     " and see where the model's view of the picture changes.",
   );
+}
+
+// Some verified features barely move the model when switched off. Measure the candidates'
+// switch-off on this picture and suggest the one with the clearest effect.
+async function rankFirstStep(state, candidates) {
+  let best = null;
+  for (const f of candidates) {
+    if (ui.state !== state || ui.feature != null) break; // the visitor moved on
+    try {
+      const r = await engine._serial(() => engine._edit(state, [f.id], "ablate", 0));
+      if (!best || r.mean > best.mean) best = { id: f.id, mean: r.mean };
+    } catch {
+      break; // show the first candidate instead
+    }
+  }
+  if (ui.state === state && ui.firstPick?.state === state) {
+    if (best) ui.firstPick.id = best.id;
+    ui.firstPick.ready = true;
+    if (ui.view === "overview") renderPanel();
+  }
 }
 
 // A link is the picture (an example's id, or the picture itself), the feature and the edit:
