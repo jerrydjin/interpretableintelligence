@@ -185,12 +185,29 @@ def _write_droid(dest: Path, source: Path | None) -> dict | None:
     line = (
         '  <section class="score-line droid-banner">\n'
         f'    <p data-testid="droid-banner">{escape(_droid_sentence(run))}</p>\n'
+        f"{_droid_guide(run)}"
         f'    <details><summary>Run it yourself</summary><pre class="quickstart"><code>{commands}</code></pre></details>\n'
         "  </section>\n"
     )
     html = html.replace("  </header>\n", "  </header>\n" + line, 1)
     (dest / "index.html").write_text(html, encoding="utf-8")
     return run
+
+
+def _droid_guide(run: dict) -> str:
+    """A collapsed, plain-English "what am I looking at" for newcomers: five lines, no jargon."""
+    lines = (
+        ("The model", f"DINOv2 is a vision model that robots use as their eyes. We showed it {_droid_clips(run)} short videos of robot arms at work (DROID)."),
+        ("Features", "A small tool splits the model's numbers into features. Each one is something the model notices, such as the arm, the ceiling or the edges of the picture."),
+        ("Labels", "An AI names each feature by looking at the moments it lights up most."),
+        ("Verified", "Each name is tested on videos the tool never saw, against random features, and by switching the feature off to see whether the model's view changes. Only features that pass every check get the badge."),
+        ("Play", "Pick a feature, turn it up, down or off, and watch how the model's view changes."),
+    )
+    rows = "".join(f"<dt>{escape(term)}</dt><dd>{escape(text)}</dd>" for term, text in lines)
+    return (
+        '    <details class="droid-guide" data-testid="try-guide"><summary>What am I looking at?</summary>'
+        f"<dl>{rows}</dl></details>\n"
+    )
 
 
 def _droid_verified(run: dict) -> list[str]:
