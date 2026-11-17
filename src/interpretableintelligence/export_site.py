@@ -279,7 +279,7 @@ def _page(title: str, current: str, body: str) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#eff1f4">
+  <meta name="theme-color" content="#faf9f5">
   <title>{escape(title)} · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
@@ -304,7 +304,7 @@ def _write_product(path: Path, summary: dict, status: str, droid_run: dict | Non
     headline = escape(_control_headline(summary))
     useful = ("try", "run", "view", "rollouts", "validate")
     command_items = "".join(
-        f"<li>{_cmd(name, known)}: {escape(commands[name])}</li>" for name in useful
+        f"<li>{_cmd(name, known)} — {escape(commands[name])}</li>" for name in useful
     )
     episodes = _episode_total(summary)
     body = f"""
@@ -316,7 +316,7 @@ def _write_product(path: Path, summary: dict, status: str, droid_run: dict | Non
     <h2>Proof</h2>
     <p data-testid="control-headline">{headline}</p>
     <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
-{_droid_proof(droid_run)}    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one, so that control is now the bar.</a></p>
+{_droid_proof(droid_run)}    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
       <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>

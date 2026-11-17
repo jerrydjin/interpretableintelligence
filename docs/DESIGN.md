@@ -25,29 +25,26 @@ All fonts are vendored as woff2 under the SIL OFL in `static/fonts/`, so the vie
 
 ## Colour
 
-On 17 Nov 2026 the palette moved off ivory and clay, which read as a copy of Anthropic's site. Type, layout and shapes did not change.
-
 | Token | Value | Meaning |
 | --- | --- | --- |
-| `--paper` | `#eff1f4` | Cool fog page |
-| `--sheet` / `--well` | `#ffffff` / `#e3e7ed` | Raised cards / quiet fills |
-| `--ink`, `--ink-2`, `--ink-3` | `#121726`, `#4c5568`, `#8a93a6` | Navy text, from strongest to quietest |
-| `--brand` | `#3a3af4` (ultramarine) | The button, the current page in the nav, the pressed arm switch, the tall column of the logo |
-| `--signal` | `#f0437f` (magenta) | Activation. The only colour for "where a feature fires" |
-| `--steer` | `#3a3af4` (ultramarine) | Steering and the playground, the same hue as the brand |
-| `--real` (+ `--real-wash`, `--real-line`) | `#1d7a52` | Only where something is verified: the tick, a passed check, the check ring, a verified feature's standing card and the playground's "Verified feature" mark |
-| `--unv-bg` (sand) | `#f3ecdc` | The next experiment for a feature that is not verified yet |
+| `--paper` | `#faf9f5` | Warm ivory page |
+| `--sheet` / `--well` | `#ffffff` / `#f0eee6` | Raised cards / quiet fills |
+| `--ink`, `--ink-2`, `--ink-3` | `#141413`, `#5e5d59`, `#8f8d86` | Text, from strongest to quietest |
+| `--signal` | `#e8582a` (ember) | Activation. The only colour for "where a feature fires" |
+| `--steer` | `#3a5bd9` (cobalt) | Steering and the playground |
+| `--real` (+ `--real-wash`, `--real-line`) | `#2f6b4b` | Only where something is verified: the tick, a passed check, the check ring, a verified feature's standing card and the playground's "Verified feature" mark |
+| `--unv-bg` (sand) | `#f7efdc` | The next experiment for a feature that is not verified yet |
 
-The heatmap reads `--signal-rgb` and `--steer-rgb` from the stylesheet. `isoTerrain()` in `app.js` hard-codes its block colours, and the logo is inline SVG in `static/index.html`, so update them alongside.
+The heatmap reads `--signal-rgb` and `--steer-rgb` from the stylesheet. `isoTerrain()` in `app.js` hard-codes its block colours, so update it alongside them.
 
 ## Shapes and signature elements
 
-- The nav is a row of pills, with the active page filled in ultramarine. There is no header rule.
+- The nav is a row of pills, with the active page filled in ink. There is no header rule.
 - Cards use a 14px radius (`--radius`) and a 1px line shadow instead of a border. Lists use hover fills rather than dividers.
 - Ledes are two-tone: the claim in ink, the context in grey.
 - The signature graphic is **isometric activation blocks**: a feature's activation on its top frame, drawn as a little terrain beside the frame.
-- The logo is two isometric columns, the two i's drawn as activations: a short magenta one and a tall ultramarine one.
-- There is one button shape, an ultramarine pill (`.button`). The playground's Steer button uses it too.
+- The logo is two isometric columns, the two i's drawn as activations: a short ember one and a tall ink one.
+- There is one button shape, an ink pill (`.button`). The playground's Steer button uses it too.
 - The **check ring** is the verified seal: one arc per check (dictionary, many clips, name holds, beats random, learned), green when passed. A verified feature closes the ring and a tick pops into the middle; anything else shows `4/5` in the middle. The arcs draw in once, and not at all under `prefers-reduced-motion`.
 
 ## Plain words first, numbers on request
@@ -82,7 +79,7 @@ The feature page's "The numbers" section (the score tiles and the full top-clip 
 
 He picked these on 13 Nov 2026, from screenshots of about 28 homepages:
 
-- **Anthropic**: formal warmth. It shows in the serif plus sans pairing, the pill nav and the generous space. The ivory and clay palette was dropped on 17 Nov 2026 because the site read as a copy; an all-sans redesign (PR #49's first version) was rejected as generic, so the type and layout stay.
+- **Anthropic**: formal warmth, and the main influence. It shows in the serif plus sans pairing, the ivory paper, the pill nav and the generous space.
 - **Cursor**: clean layout.
 - **Baseten**: graphics. This led to the isometric blocks.
 - **1X**: good visuals and imagery.

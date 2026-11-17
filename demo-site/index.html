@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#eff1f4">
+  <meta name="theme-color" content="#faf9f5">
   <title>ii · interpretableintelligence</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/demo.css">
@@ -13,7 +13,7 @@
   <header class="top demo-top">
     <div class="brand-row">
       <a class="wordmark" href="/" aria-label="interpretable intelligence">
-        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#f0437f"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c92d63"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e03772"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#3a3af4"/><path d="M11 3 14.5 5V20L11 18Z" fill="#3a3af4"/><path d="M18 3 14.5 5V20L18 18Z" fill="#2626c4"/></svg>
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
         <span class="wordmark-text">interpretable intelligence</span>
       </a>
       <nav class="nav"><a href="/explore/">Explore</a><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/droid/">DINOv2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
@@ -29,7 +29,7 @@
     <p data-testid="control-headline">Feature 720 tracked failures, and turning it off dropped success from 39/75 to 1/9. Turning off random features caused falls too in 5 of 20 runs. `ii` makes you run that control before calling a feature real.</p>
     <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>ablate_v9.py</code></a>), 641 rollouts. Label: <span class="badge badge-unverified">Tested: no causal effect found</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
     <p data-testid="droid-proof"><a href="/droid/">Open a real run: facebook/dinov2-small on 100 DROID robot clips, with 5 features that passed every check and a playground to remove or boost them.</a></p>
-    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one, so that control is now the bar.</a></p>
+    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
       <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>
@@ -40,7 +40,7 @@
     <pre class="quickstart"><code>uv sync
 uv run ii try</code></pre>
     <p><code data-cmd="try">ii try</code> writes practice clips and runs the pipeline on the fake model.</p>
-    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code>: New here? Start with this. Finds features in a small practice model and opens the playground.</li><li><code data-cmd="run">ii run</code>: Capture, train, extract features, score what is missing, then serve the viewer.</li><li><code data-cmd="view">ii view</code>: Start a local viewer for a run folder and open it in a browser.</li><li><code data-cmd="rollouts">ii rollouts</code>: Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written.</li><li><code data-cmd="validate">ii validate</code>: Validate a run folder against the schema.</li></ul>
+    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code> — New here? Start with this. Finds features in a small practice model and opens the playground.</li><li><code data-cmd="run">ii run</code> — Capture, train, extract features, score what is missing, then serve the viewer.</li><li><code data-cmd="view">ii view</code> — Start a local viewer for a run folder and open it in a browser.</li><li><code data-cmd="rollouts">ii rollouts</code> — Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written.</li><li><code data-cmd="validate">ii validate</code> — Validate a run folder against the schema.</li></ul>
     <p><a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md">The rest of the commands are in the README.</a></p>
     <h2>Synthetic demos</h2>
     <ul class="section-list" data-testid="synthetic-sections">
