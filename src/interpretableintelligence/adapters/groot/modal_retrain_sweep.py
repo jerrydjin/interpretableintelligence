@@ -11,7 +11,8 @@ here. The sweep takes about an hour on a T4 (the two 8192-latent configs take ab
 The container downloads the capture tarball (``data/groot-1028.md``: release ``data-groot-1028-v1``), checks its
 sha256, and keeps it and every finished config on the Volume ``ii-groot-sae-retrain``, so a rerun after a
 timeout or failure skips what is already done. The local entrypoint writes ``sweep-summary.json`` (same shape
-as the notebook's) plus each run's ``retrain.json`` and ``sae/`` under ``--out``, and prints the comparison table.
+as the notebook's) plus each run's ``retrain.json`` under ``--out`` and prints the comparison table; the new
+``sae/`` folders stay on the Volume (``modal volume get ii-groot-sae-retrain runs/<name>/sae <dest>``).
 
 Offline only, like ``ii retrain-sae``: nothing here changes ``split.json``, a scoreboard, or a rollout result.
 """
@@ -87,7 +88,12 @@ def _fetch_capture(vol: Path) -> Path:
 
 @app.function(image=image, gpu=GPU, cpu=CPU_CORES, memory=MEMORY_MIB, timeout=TIMEOUT_S, volumes={VOLUME_ROOT: volume})
 def sweep(only: list[str] | None = None) -> dict:
-    """Run every config not already on the Volume; return {name: {"retrain": report, "sae": {file: bytes}}}."""
+    """Run every config not already on the Volume; return {name: {"retrain": report}}.
+
+    The new SAEs stay on the Volume (runs/<name>/sae/): returning ~100 MB of weights per config would go through
+    Modal's blob store, which restricted networks often block. Fetch one with
+    ``modal volume get ii-groot-sae-retrain runs/<name>/sae <dest>``.
+    """
     import shutil
 
     import torch
@@ -117,10 +123,7 @@ def sweep(only: list[str] | None = None) -> dict:
             volume.commit()
         else:
             print(f"done already: {name}")
-        results[name] = {
-            "retrain": json.loads((done / "retrain.json").read_text()),
-            "sae": {p.name: p.read_bytes() for p in (done / "sae").iterdir() if p.is_file()},
-        }
+        results[name] = {"retrain": json.loads((done / "retrain.json").read_text())}
     return results
 
 
@@ -157,11 +160,9 @@ def main(out: str = "runs/groot-sae-retrain", only: str = "") -> None:
     results = sweep.remote(names)
     dest = Path(out)
     for name, res in results.items():
-        (dest / name / "sae").mkdir(parents=True, exist_ok=True)
+        (dest / name).mkdir(parents=True, exist_ok=True)
         (dest / name / "retrain.json").write_text(json.dumps(res["retrain"], indent=1) + "\n")
-        for fname, data in res["sae"].items():
-            (dest / name / "sae" / fname).write_bytes(data)
     summary, table = summarise(results)
     (dest / "sweep-summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     print(table)
-    print(f"wrote {dest}")
+    print(f"wrote {dest} (new SAEs stay on the Volume {APP_NAME}: modal volume get {APP_NAME} runs/<name>/sae <dest>)")

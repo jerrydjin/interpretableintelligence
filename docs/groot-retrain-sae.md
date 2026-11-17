@@ -39,7 +39,8 @@ pip install modal   # or: uv sync --extra remote
 modal run src/interpretableintelligence/adapters/groot/modal_retrain_sweep.py --out runs/groot-sae-retrain
 ```
 
-It writes `sweep-summary.json`, each run's `retrain.json` and each new `sae/` under `--out`, and prints the table.
+It writes `sweep-summary.json` and each run's `retrain.json` under `--out` and prints the table. The new SAEs
+stay on the Volume: `modal volume get ii-groot-sae-retrain runs/<name>/sae <dest>`.
 The sweep takes about an hour; the function has a 2-hour timeout (about $1.50 at most at list price); finished configs stay on the Modal
 Volume `ii-groot-sae-retrain`, so a rerun skips them. `--only auxk-2048,none-2048` runs a subset.
 
