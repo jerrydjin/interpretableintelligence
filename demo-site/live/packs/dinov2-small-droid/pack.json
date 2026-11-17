@@ -45,7 +45,8 @@
     "back": "back.onnx",
     "sae": "sae.onnx",
     "decoder": "decoder.bin",
-    "features": "features.json"
+    "features": "features.json",
+    "sae_weights": "sae.safetensors"
   },
   "samples": [
     {
@@ -148,5 +149,13 @@
   "train_clips": 80,
   "meta_source": "export",
   "evidence": false,
-  "note": "Exploration only. Badges are copied from the run's scoreboard; nothing in the browser changes them."
+  "note": "Exploration only. Badges are copied from the run's scoreboard; nothing in the browser changes them.",
+  "digests": {
+    "front": "379cd9823dc913d9",
+    "back": "9e7475fa33d54885",
+    "sae": "c8885200818c3402",
+    "decoder": "c5e9843eea8e80bd",
+    "features": "fadb6ae42e4193d5",
+    "sae_weights": "3048022eb7eab32f"
+  }
 }

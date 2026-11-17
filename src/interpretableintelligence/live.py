@@ -253,6 +253,7 @@ def export_live(
     _export_onnx(_SaePre(sae).eval(), torch.zeros(grid_h * grid_w, d_model), out_dir / "sae.onnx", "x", "pre", dynamic=True)
     decoder = sae.W_dec.detach().float().cpu().T.contiguous().numpy().astype("<f2")
     (out_dir / "decoder.bin").write_bytes(decoder.tobytes())
+    write_pack_sae(sae, out_dir)
 
     log("writing sample frames")
     samples = _write_samples(manifest, run_dir, clips_dir, out_dir / "samples", n_samples)
@@ -301,6 +302,7 @@ def export_live(
             "sae": "sae.onnx",
             "decoder": "decoder.bin",
             "features": "features.json",
+            "sae_weights": SAE_WEIGHTS,
         },
         "samples": samples,
         "train_clips": sum(1 for clip in manifest.get("clips") or [] if clip.get("split") == "train"),
@@ -308,6 +310,7 @@ def export_live(
         "evidence": False,
         "note": "Exploration only. Badges are copied from the run's scoreboard; nothing in the browser changes them.",
     }
+    pack["digests"] = file_digests(out_dir, pack["files"])
     (out_dir / "pack.json").write_text(json.dumps(pack, indent=2) + "\n", encoding="utf-8")
     files = {path.relative_to(out_dir).as_posix(): path.stat().st_size for path in sorted(out_dir.rglob("*")) if path.is_file()}
     return LiveSummary(
@@ -319,6 +322,36 @@ def export_live(
         files=files,
         meta_source=pack["meta_source"],
     )
+
+
+SAE_WEIGHTS = "sae.safetensors"
+
+
+def file_digests(out_dir: Path, files: dict[str, str]) -> dict[str, str]:
+    """Short sha256 of each pack file, so browsers and caches never mix two exports."""
+    import hashlib
+
+    return {key: hashlib.sha256((Path(out_dir) / name).read_bytes()).hexdigest()[:16] for key, name in files.items()}
+
+
+def pack_sae_tensors(W_enc, b_enc, W_dec, b_dec) -> dict[str, torch.Tensor]:
+    """The SAE as the pack stores it: tensors of 1024 or more values in fp16, as in the ONNX files.
+
+    The hosted backend (``interpretableintelligence.playground``) loads exactly these numbers, so
+    it and the in-browser engine read the same dictionary."""
+    out = {}
+    for name, tensor in (("W_enc", W_enc), ("b_enc", b_enc), ("W_dec", W_dec), ("b_dec", b_dec)):
+        tensor = torch.as_tensor(tensor).detach().float().cpu().contiguous()
+        out[name] = tensor.half() if tensor.numel() >= 1024 else tensor
+    return out
+
+
+def write_pack_sae(sae, out_dir: Path) -> Path:
+    from safetensors.torch import save_file
+
+    path = Path(out_dir) / SAE_WEIGHTS
+    save_file(pack_sae_tensors(sae.W_enc, sae.b_enc, sae.W_dec, sae.b_dec), str(path))
+    return path
 
 
 def feature_stats(acts_dir: Path, sae, log: Callable[[str], None] = lambda _msg: None, chunk: int = 8192) -> list[tuple[float, float, float]]:

@@ -956,6 +956,64 @@ def export_live_cmd(
     )
 
 
+LIVE_DIR = Path("demo-site/live")
+
+
+@app.command("serve-live")
+def serve_live_cmd(
+    packs: Annotated[Path, typer.Option("--packs", help="Directory of live packs (each with pack.json and sae.safetensors).")] = LIVE_DIR / "packs",
+    pack: Annotated[list[str] | None, typer.Option("--pack", help="Serve only this pack (repeatable). Default: every pack.")] = None,
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port")] = 8787,
+    origins: Annotated[str, typer.Option("--origins", help="Comma-separated origins allowed to call the API (CORS).")] = "*",
+) -> None:
+    """Run the playground backend (API v1, docs/PLAYGROUND-API.md) on this machine.
+
+    Open the page with ?api=http://127.0.0.1:8787 to use it. ii deploy-live hosts the same thing on Modal.
+    """
+    import uvicorn
+
+    from interpretableintelligence.playground.compute import PackLoadError, load_packs
+    from interpretableintelligence.playground.http import create_app
+
+    try:
+        models = load_packs(packs, only=pack or None)
+    except (PackLoadError, OSError, ValueError, RuntimeError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for model in models.values():
+        typer.echo(f"loaded {model.id} ({model.pack['model']['name']}, {model.n_features} features) on {model.device.type} in {model.load_ms / 1000:.1f} s")
+    typer.echo(f"playground API on http://{host}:{port}/v1/health")
+    uvicorn.run(create_app(models, allow_origins=[o.strip() for o in origins.split(",") if o.strip()]), host=host, port=port, log_level="warning")
+
+
+@app.command("deploy-live")
+def deploy_live_cmd(
+    packs: Annotated[Path, typer.Option("--packs", help="Directory of live packs to serve.")] = LIVE_DIR / "packs",
+    gpu: Annotated[str, typer.Option("--gpu", help="Modal GPU type, or none for CPU only (enough for DINOv2-small).")] = "T4",
+    idle: Annotated[int, typer.Option("--idle", min=2, help="Seconds a container stays warm after the last request.")] = 300,
+    max_containers: Annotated[int, typer.Option("--max-containers", min=1, help="Most containers at once; caps the bill.")] = 2,
+    origins: Annotated[str, typer.Option("--origins", help="Comma-separated origins allowed to call the API (CORS).")] = "*",
+    live_dir: Annotated[Path, typer.Option("--live-dir", help="The page's folder; its config.json gets the API URL.")] = LIVE_DIR,
+    api: Annotated[
+        str | None,
+        typer.Option("--api", help="Skip deploying: just point the page at this API URL (or 'none' to run in the browser)."),
+    ] = None,
+) -> None:
+    """Host the playground backend on Modal (your account; scales to zero) and point the page at it."""
+    from interpretableintelligence.playground.deploy import DeployError, deploy, write_config
+
+    try:
+        if api is None:
+            api = deploy(packs, gpu=gpu, idle_s=idle, max_containers=max_containers, origins=origins, log=typer.echo)
+        url = None if api.lower() == "none" else api
+        path = write_config(live_dir, url)
+    except (DeployError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {path}: the page now {'calls ' + url if url else 'runs the model in the browser'}. Commit it to publish.")
+
+
 @app.command("export-site")
 def export_site_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the static site into.")] = Path("demo-site"),

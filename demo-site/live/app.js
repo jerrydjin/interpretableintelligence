@@ -1,8 +1,21 @@
-// ii live playground: the page. The maths lives in engine.js.
+// ii live playground: the page. The model runs on the playground backend (remote.js, API v1)
+// when config.json or ?api= names one, otherwise in the browser (engine.js).
 
 import { Engine } from "./engine.js";
+import { RemoteEngine } from "./remote.js";
 
-const PACK = new URLSearchParams(location.search).get("pack") || "packs/dinov2-small-droid/";
+const PARAMS = new URLSearchParams(location.search);
+const PACK = PARAMS.get("pack") || "packs/dinov2-small-droid/";
+
+async function apiUrl() {
+  if (PARAMS.has("api")) return PARAMS.get("api") || null; // ?api= (empty) forces the browser
+  try {
+    const config = await (await fetch(new URL("config.json", location.href), { cache: "no-cache" })).json();
+    return typeof config.api === "string" && config.api ? config.api : null;
+  } catch {
+    return null;
+  }
+}
 const EMBER = [232, 88, 42];
 const COBALT = [58, 91, 217];
 const TOP_N = 10;
@@ -24,7 +37,7 @@ const el = (tag, attrs = {}, ...kids) => {
   return node;
 };
 
-const engine = new Engine(new URL(PACK, location.href).href);
+let engine = null;
 const ui = {
   state: null, // the current picture's encoding
   source: null, // what was encoded (img or canvas)
@@ -44,7 +57,7 @@ const ui = {
   lastEditMs: null,
   lastEncodeMs: null,
 };
-window.__ii = { engine, ui }; // for tests and the curious
+window.__ii = { engine, ui }; // for tests and the curious; engine is set in boot()
 
 // ------------------------------------------------------------------ helpers
 
@@ -66,10 +79,17 @@ async function boot() {
   const fill = $("loader-fill");
   const text = $("loader-text");
   try {
+    const api = await apiUrl();
+    const base = new URL(PACK, location.href).href;
+    engine = api ? new RemoteEngine(base, new URL(api, location.href).href) : new Engine(base);
+    window.__ii.engine = engine;
     await engine.load({
-      preferGpu: !new URLSearchParams(location.search).has("cpu"), // ?cpu forces the CPU path
+      preferGpu: !PARAMS.has("cpu"), // ?cpu forces the CPU path
       onProgress: ({ phase, loaded, total, cached }) => {
-        if (phase === "download") {
+        if (phase === "connect") {
+          fill.style.width = "40%";
+          text.textContent = "Waking the model up. The first visit in a while takes a few seconds.";
+        } else if (phase === "download") {
           const frac = total ? loaded / total : 0;
           fill.style.width = `${Math.round(frac * 80)}%`;
           text.textContent = cached
@@ -82,14 +102,20 @@ async function boot() {
       },
     });
   } catch (err) {
-    text.textContent = `The model could not start in this browser (${err.message}). Try a recent Chrome, Edge, Firefox or Safari.`;
+    text.textContent =
+      engine && engine.backend === "remote"
+        ? `The model server could not be reached (${err.message}). Try again in a minute.`
+        : `The model could not start in this browser (${err.message}). Try a recent Chrome, Edge, Firefox or Safari.`;
     $("loader").classList.add("failed");
     console.error(err);
     return;
   }
   fill.style.width = "100%";
   const pack = engine.pack;
-  $("model-pill").textContent = `${pack.model.name.split("/").pop()} · ${engine.backend === "webgpu" ? "on your GPU" : "on your CPU"}`;
+  $("model-pill").textContent = `${pack.model.name.split("/").pop()} · ${WHERE[engine.backend]}`;
+  if (engine.backend === "remote") {
+    $("where-runs").textContent = "It runs on a small server in the cloud, which reads your picture and keeps nothing.";
+  }
   $("n-real").textContent = String(pack.n_real);
   $("loader").hidden = true;
   $("work").hidden = false;
@@ -709,10 +735,17 @@ function galleryFor(id) {
 
 // ------------------------------------------------------------------ footer
 
+const WHERE = { remote: "in the cloud", webgpu: "on your GPU", wasm: "on your CPU" };
+
 function renderPerf() {
   const t = engine.timings;
+  const where = {
+    remote: `Running on the model server (${engine.device === "cuda" ? "GPU" : "CPU"})`,
+    webgpu: "Running on WebGPU",
+    wasm: `Running on WebAssembly (${self.crossOriginIsolated ? "multi-threaded" : "one thread"})`,
+  };
   const parts = [
-    `Running on ${engine.backend === "webgpu" ? "WebGPU" : `WebAssembly (${self.crossOriginIsolated ? "multi-threaded" : "one thread"})`}`,
+    where[engine.backend],
     `ready in ${fmtMs(t.ready)}`,
   ];
   if (ui.lastEncodeMs != null) parts.push(`reading a picture ${fmtMs(ui.lastEncodeMs)}`);

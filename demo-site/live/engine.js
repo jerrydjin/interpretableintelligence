@@ -11,7 +11,10 @@
 
 const ORT_VERSION = "1.31.1";
 const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
-const CACHE_NAME = "ii-live-v1";
+// v1 keyed files by model sha only, so a re-exported pack could load a stale graph; v2 keys
+// each file by its digest in pack.json.
+const CACHE_NAME = "ii-live-v2";
+const OLD_CACHES = ["ii-live-v1"];
 
 export const KINDS = ["ablate", "scale", "clamp"];
 
@@ -126,6 +129,8 @@ export class Engine {
     this.backend = backend;
     const files = pack.files;
     const sha = (pack.model.sha || "").slice(0, 12);
+    const digests = pack.digests || {};
+    for (const old of OLD_CACHES) globalThis.caches?.delete(old)?.catch(() => {});
     const want = ["front", "back", "sae", "decoder"];
     const sizes = {};
     const loaded = {};
@@ -138,7 +143,7 @@ export class Engine {
     const [bytes, features] = await Promise.all([
       Promise.all(
         want.map((name) =>
-          fetchBytes(this.base + files[name], `${this.base}${files[name]}?v=${sha}`, (seen, total, cached) => {
+          fetchBytes(this.base + files[name], `${this.base}${files[name]}?v=${digests[name] || sha}`, (seen, total, cached) => {
             loaded[name] = seen;
             sizes[name] = total || seen;
             if (!cached) cachedAll = false;
