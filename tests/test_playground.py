@@ -9,6 +9,7 @@ import shutil
 import socket
 import threading
 import time
+import urllib.parse
 
 import numpy as np
 import pytest
@@ -286,9 +287,13 @@ def test_page_runs_on_the_backend(served, tmp_path):
             assert restored["k"] == "scale" and restored["v"] == 2 and restored["m"] == pytest.approx(before, abs=1e-9)
             # Your own picture travels inside the link.
             again.set_input_files("#file", str(served["pack"] / "samples" / f"{sample}.jpg"))
-            again.wait_for_function("() => window.__ii.ui.picture && window.__ii.ui.picture.img && window.__ii.ui.result !== null")
+            again.wait_for_function(
+                "() => { const ui = window.__ii.ui; return ui.picture && ui.picture.img && ui.result !== null && !ui.busy"
+                " && !location.hash.includes('p=') && location.hash.includes('e=scale'); }"
+            )
             link = again.evaluate("window.__ii.link({ withPicture: true })")
-            assert "img=" in link and "p=" not in link and "e=scale" in link
+            params = urllib.parse.parse_qs(link)
+            assert "img" in params and "p" not in params and params["e"] == ["scale"]
             third = browser.new_page()
             third.goto(f"{url}#{link}")
             third.wait_for_function("() => window.__ii && window.__ii.ui.result !== null", timeout=60_000)
