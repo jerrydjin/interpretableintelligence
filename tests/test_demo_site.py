@@ -549,3 +549,13 @@ def test_real_run_page_reports_its_own_scoreboard():
 
 def _nav_bar(page: str) -> str:
     return re.search(r'<nav class="demo-bar".*?</nav>', page, re.S).group(0)
+
+
+def test_try_it_page_has_a_plain_english_guide():
+    """/droid/ explains itself to newcomers in a collapsed guide, using the run's own clip count."""
+    run = json.loads((ROOT / "droid" / "data" / "run.json").read_text(encoding="utf-8"))
+    page = (ROOT / "droid" / "index.html").read_text(encoding="utf-8")
+    guide = re.search(r'<details class="droid-guide" data-testid="try-guide">(.*?)</details>', page, re.S).group(1)
+    assert "What am I looking at?" in guide
+    assert re.findall(r"<dt>(.*?)</dt>", guide) == ["The model", "Features", "Labels", "Verified", "Play"]
+    assert f"We showed it {run['export']['clips_total']} short videos" in guide

@@ -30,6 +30,13 @@
 .droid-banner details { margin: 0 0 6px; }
 .droid-banner summary { cursor: pointer; color: var(--ink-2); }
 .droid-banner pre { margin: 8px 0 0; overflow-x: auto; }
+.droid-guide dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 8px 0 4px; }
+.droid-guide dt { color: var(--ink); font-weight: 500; }
+.droid-guide dd { margin: 0; }
+@media (max-width: 560px) {
+  .droid-guide dl { grid-template-columns: 1fr; gap: 2px; }
+  .droid-guide dd { margin-bottom: 8px; }
+}
 
 /* Demo pages: one readable column. */
 .demo-top { grid-template-columns: 1fr auto; }
