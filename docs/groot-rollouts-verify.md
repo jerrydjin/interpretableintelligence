@@ -125,8 +125,9 @@ uv run ii rollouts runs/groot-1028-pick --policy groot-1028 --pick 2 --capture g
 
 Keep the arguments identical between the two calls: a run folder whose plan was built with other arguments is refused.
 Every arm runs `--episodes` paired episodes (no early stopping), the summary scores a rise (`direction: rise`), and a
-candidate is `finding: true` only when it is `causal` and above every random-SAE arm. Rule 1 (a Sobel–Wald rise call) is
-not part of `finding` on these fixed-budget plans. The GR00T plan's single-feature design on task 1028 was a null
+candidate is `finding: true` only when it is `causal`, above every random-SAE arm, and its `sprt_verdict` is `rise`
+(rule 1: the plan's Sobel–Wald design, `p0` = the capture's success rate, read on the arm's outcomes in episode order).
+The design needs at least 7 straight successes to call a rise, so use `--episodes` well above that. The GR00T plan's single-feature design on task 1028 was a null
 (AGENTS.md, "Current state"), so agree a new design in the research thread before running this on 1028.
 
 The Colab notebook and `v9_hotfix_cell.py` embed an older `ablate_v9.py` without random-SAE dictionaries. Run this

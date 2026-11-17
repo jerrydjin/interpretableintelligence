@@ -496,6 +496,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
             "stopped_early": bool(episodes_run < n),
             "reason": reason,
             "_recon": role == "recon",
+            "_flags": list(flags),
         }
 
     raw_features: list[dict] = []
@@ -512,7 +513,17 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
 
     features: list[dict] = []
     control_index = 0
-    for scored in raw_features:
+    sprt_verdicts: dict[int, str] = {}
+    if config.rise_sprt is not None:
+        from interpretableintelligence.adapters.groot.v9.ablate_v9 import sequential_decision
+
+        # Rule 1: the Sobel-Wald three-way SPRT on the arm's successes in episode (seed) order. A fixed-budget run
+        # never stops early, so the call is where the plan's SPRT would have stopped on this prefix (or cap_undecided).
+        for index, item in enumerate(raw_features):
+            if not item["_recon"] and item["role"] != "baseline":
+                sprt_verdicts[index] = sequential_decision(item["_flags"], config.rise_sprt)["verdict"]
+    for arm_key, scored in enumerate(raw_features):
+        scored.pop("_flags")
         recon = scored.pop("_recon")
         if scored["role"] == "control" and not recon:
             others = [delta for item, delta in enumerate(control_deltas) if item != control_index]
@@ -531,6 +542,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
         if scored["role"] == "candidate" and random_deltas:
             random_percentile = control_percentile(float(scored["delta"]), random_deltas)
             beats_random = bool(random_percentile is not None and random_percentile >= 100.0)
+        verdict = sprt_verdicts.get(arm_key)
         features.append(
             {
                 **scored,
@@ -540,7 +552,9 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
                 "random_sae_percentile": random_percentile,
                 "n_random_sae": len(random_deltas) if scored["role"] == "candidate" else 0,
                 "beats_random_sae": beats_random,
-                "finding": bool(scored["role"] == "candidate" and causal and beats_random is True),
+                "sprt_verdict": verdict,
+                # Rules 1, 2+3 (causal: McNemar p and above every matched control) and 4 (above every untrained SAE).
+                "finding": bool(scored["role"] == "candidate" and causal and beats_random is True and verdict == "rise"),
             }
         )
 
@@ -755,6 +769,16 @@ def execute_groot_rollouts(
     return summary
 
 
+def plan_rise_sprt(plan: dict) -> dict | None:
+    """The plan's rule 1 SPRT design, or None for a plan built before it carried one (then nothing is a finding)."""
+    from interpretableintelligence.rollout import RISE_SPRT_KEYS
+
+    block = plan.get("sprt") or {}
+    if block.get("p0") is None:
+        return None
+    return {key: block[key] for key in sorted(RISE_SPRT_KEYS)}
+
+
 def null_mock_outcome(cond: dict, ep: int, seed: int) -> bool:
     """``groot-mock`` with ``--pick``: success depends on the seed only, so every arm matches baseline (no effect)."""
     del cond, ep
@@ -829,6 +853,7 @@ def execute_groot_pick(
         random_sae_seeds=tuple(int(item) for item in info["random_sae_seeds"]),
         random_sae_feature_ids=tuple(tuple(int(x) for x in picks) for picks in info["random_sae_feature_ids"]),
         direction="rise",
+        rise_sprt=plan_rise_sprt(plan),
     )
     _check_config(config)
     rollout_dir = run_dir / "rollouts"
