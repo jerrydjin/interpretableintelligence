@@ -49,7 +49,8 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _MANIFEST_KEYS = {"run_id", "tool_version", "model", "layer", "d_model", "grid", "split", "clips"}
 # Resume metadata. Readers that only need the contract can ignore both.
 # ``import`` marks a run written by ``ii import`` (SCHEMA.md, "Imported runs").
-_MANIFEST_OPTIONAL = {"stages", "clips_dir", "import"}
+# ``sae_source`` marks a run whose SAE was copied in with ``ii run --sae-from`` (SCHEMA.md, "Reused SAEs").
+_MANIFEST_OPTIONAL = {"stages", "clips_dir", "import", "sae_source"}
 _IMPORT_KEYS = {"format", "cells", "clips", "nulls", "source", "notes"}
 _IMPORT_OPTIONAL = {"wall_s"}
 _IMPORT_CLIP_KEYS = {"clip_id", "source_id", "n_windows"}
@@ -1229,6 +1230,10 @@ def _allow_keys(payload: dict, required: set[str], optional: set[str], where: st
 def _check_manifest_extras(manifest: dict, errors: list[str]) -> None:
     if "clips_dir" in manifest and (not isinstance(manifest["clips_dir"], str) or not manifest["clips_dir"]):
         errors.append("manifest.clips_dir must be a non-empty string")
+    if "sae_source" in manifest:
+        from interpretableintelligence.sae_source import check_source  # noqa: PLC0415
+
+        check_source(manifest["sae_source"], errors)
     if "stages" not in manifest:
         return
     stages = manifest["stages"]

@@ -11,3 +11,6 @@ runs/
 /clips/
 .DS_Store
 *.ipynb
+
+# scripts/groot_gpu_setup.sh default LIBERO-plus checkout
+/.libero-plus/

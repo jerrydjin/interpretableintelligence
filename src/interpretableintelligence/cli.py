@@ -256,6 +256,16 @@ def run(
             help="hf, vjepa2, groot: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
         ),
     ] = None,
+    sae_from: Annotated[
+        Path | None,
+        typer.Option(
+            "--sae-from",
+            exists=True,
+            file_okay=False,
+            help="Copy this frozen SAE into the run instead of training one, so feature ids from elsewhere keep their meaning: "
+            "a run folder, a GR00T v9 capture or retrain-sae folder, or their sae/ directory. Needs --no-score.",
+        ),
+    ] = None,
     tiny: Annotated[
         bool,
         typer.Option(
@@ -337,6 +347,8 @@ def run(
         if adapter.startswith("groot:"):
             tiny = False  # groot:tiny names the stand-in itself, so the run folder can rebuild it
         layer = _default_layer(adapter) if layer is None else layer
+        if remote and sae_from is not None:
+            raise ValueError("--sae-from is not available with --remote yet")
         if remote:
             from interpretableintelligence.remote.client import execute_remote
             from interpretableintelligence.remote.pricing import DEFAULT_GPU, DEFAULT_MAX_COST
@@ -388,6 +400,7 @@ def run(
             steer=steer,
             use_cache=not no_cache,
             log=typer.echo,
+            sae_from=sae_from,
         )
     except RemoteSetupError as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -764,6 +777,38 @@ def rollouts(
         raise typer.Exit(code=1) from exc
     typer.echo(format_report(summary))
     typer.echo(f"wrote {run_dir / 'rollouts'}")
+
+
+@app.command("record-libero")
+def record_libero_cmd(
+    out: Annotated[Path, typer.Option("--out", file_okay=False, help="Clip folder to write (resumable), e.g. clips/groot-1028.")],
+    task: Annotated[int, typer.Option("--task", min=1, help="LIBERO-plus task id (libero_10 suite).")] = 1028,
+    episodes: Annotated[int, typer.Option("--episodes", min=1, help="Episodes to record. `ii run` needs at least 20.")] = 24,
+    seed0: Annotated[int, typer.Option("--seed0", help="Episode i uses seed seed0 + i and init state i mod the task's init states.")] = 60000,
+    checkpoint: Annotated[str, typer.Option("--checkpoint", help="LeRobot GR00T checkpoint.")] = "nvidia/gr00t17-lerobot-libero_10-640",
+    plus_dir: Annotated[
+        Path | None,
+        typer.Option("--plus-dir", file_okay=False, help="LIBERO-plus checkout; writes its LIBERO config (assets, bddl, init states)."),
+    ] = None,
+    max_steps: Annotated[int | None, typer.Option("--max-steps", min=1, help="Cap steps per episode. Default: the env's cap (520).")] = None,
+    no_parity: Annotated[bool, typer.Option("--no-parity", help="Skip the input parity check (debugging only).")] = False,
+) -> None:
+    """Record closed-loop GR00T episodes on LIBERO-plus as clips the groot adapter reads (main camera, wrist, state, task).
+
+    Needs a GPU box with lerobot[groot]==0.7.0 and LIBERO-plus (scripts/groot_gpu_setup.sh). Checks that the adapter
+    rebuilds the policy's own inputs from the recorded arrays before it records anything else.
+    """
+    from interpretableintelligence.adapters.groot.record_libero import LeRobotLibero, record
+
+    try:
+        runtime = LeRobotLibero(checkpoint, task, plus_dir=plus_dir)
+        report = record(
+            runtime, out, task_id=task, episodes=episodes, seed0=seed0, max_steps=max_steps, check_parity=not no_parity, log=typer.echo
+        )
+    except (ImportError, ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"recorded {len(report['episodes'])} episodes, {report['n_success']} successes, into {out}")
 
 
 @app.command("steer-scorecard")
