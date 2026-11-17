@@ -58,26 +58,57 @@
 }
 .prose p, .prose li { color: var(--ink-2); }
 .prose p { margin: 0 0 16px; max-width: 68ch; }
-.prose .lede { color: var(--ink-3); margin-bottom: 32px; }
+.prose .lede { margin-bottom: 32px; }
+.prose .crumb { margin: 0 0 12px; font-size: var(--t-small); }
+.prose .crumb a { color: var(--ink-3); text-decoration: none; }
+.prose .crumb a:hover { color: var(--ink); }
+.prose .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 56px; }
+.prose a.button.button-quiet, .prose a.button.button-quiet:hover { color: var(--ink); }
 .prose a { text-underline-offset: 3px; text-decoration-color: var(--line-2); }
 .prose a.button { color: var(--paper); text-decoration: none; }
 .prose a.button:hover { color: var(--paper); }
 .prose .badge { vertical-align: 1px; }
-.prose ul.commands { margin: 0 0 16px; padding-left: 1.2em; max-width: 68ch; }
-.prose ul.commands li { margin: 0 0 8px; }
+.prose ul.commands { list-style: none; margin: 0 0 16px; padding: 0; max-width: 68ch; }
+.prose ul.commands li {
+  display: grid;
+  grid-template-columns: 8em 1fr;
+  gap: 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.prose ul.commands li:last-child { border-bottom: 1px solid var(--line); }
 .prose ul.coming { list-style: none; margin: 0 0 16px; padding-left: 0; max-width: 68ch; }
 .prose ul.coming li { margin: 0 0 14px; }
 .quickstart {
   margin: 0 0 16px;
   padding: 16px 18px;
   max-width: 68ch;
-  background: var(--well);
+  background: var(--plate);
   border-radius: var(--radius);
   overflow-x: auto;
 }
-.quickstart code { background: transparent; padding: 0; }
+.quickstart code { color: var(--paper); }
 
-/* Home: the four sections as cards. */
+/* Home: three ways in, split by hairlines rather than boxed. */
+.doors {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 32px;
+}
+.doors a {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-2);
+  text-decoration: none;
+}
+.doors a:hover { border-top-color: var(--ink); }
+
+/* Lists of pages: hairline cards, no lift. */
 .section-list {
   list-style: none;
   margin: 0;
@@ -94,11 +125,11 @@
   padding: 20px 22px;
   border-radius: var(--radius);
   background: var(--sheet);
-  box-shadow: 0 0 0 1px var(--line);
+  box-shadow: inset 0 0 0 1px var(--line);
   text-decoration: none;
-  transition: box-shadow 0.15s, transform 0.15s;
 }
-.section-list a:hover { box-shadow: 0 0 0 1px var(--line-2), 0 6px 20px rgba(20, 20, 19, 0.06); transform: translateY(-1px); }
+.section-list a:hover { box-shadow: inset 0 0 0 1px var(--line-2); }
+.section-list-wide { grid-template-columns: 1fr; }
 .section-name { font-family: var(--serif); font-size: var(--t-lead); letter-spacing: var(--serif-track); color: var(--ink); }
 .section-text { color: var(--ink-2); }
 
@@ -134,7 +165,7 @@
   background: var(--sheet);
   border: 0;
   box-shadow: 0 0 0 1px var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 8px 14px;
   cursor: pointer;
 }
@@ -198,4 +229,6 @@ figcaption { font-size: var(--t-small); color: var(--ink-3); }
   .prose { padding-top: 24px; }
   .prose .compare { grid-template-columns: 1fr; }
   .demo-top .nav { width: 100%; justify-content: flex-start; }
+  .doors { grid-template-columns: 1fr; gap: 20px; }
+  .prose ul.commands li { grid-template-columns: 1fr; gap: 4px; }
 }
