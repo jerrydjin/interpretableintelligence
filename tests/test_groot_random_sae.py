@@ -242,7 +242,8 @@ def test_planted_rise_is_a_finding_only_above_every_random_sae_arm(tmp_path: Pat
     summary = execute_groot_pick(_run_dir(tmp_path / "a"), simulate=_planted(False), **kwargs)
     planted = next(f for f in summary["features"] if f["role"] == "candidate" and f["feature_id"] == PLANTED)
     assert planted["delta"] == pytest.approx(16 / 24)  # rise: intervention - baseline
-    assert planted["causal"] and planted["beats_random_sae"] is True and planted["finding"] is True
+    assert planted["causal"] and planted["beats_random_sae"] is True and planted["sprt_verdict"] == "rise"
+    assert planted["finding"] is True
     assert summary["finding_feature_ids"] == [PLANTED]
 
     blocked = execute_groot_pick(_run_dir(tmp_path / "b"), simulate=_planted(True), **kwargs)
@@ -257,3 +258,35 @@ def test_groot_random_sae_without_pick_is_refused(tmp_path: Path):
     assert result.exit_code != 0
     result = runner.invoke(app, ["rollouts", str(_run_dir(tmp_path / "x")), "--policy", "groot-mock", "--pick", "2"])
     assert result.exit_code != 0
+
+
+def test_rise_needs_the_sobel_wald_call_too(tmp_path: Path, capture: Path):
+    """Rule 1: causal and above every untrained SAE is still not a finding until the plan's SPRT calls a rise."""
+
+    def simulate(cond: dict, ep: int, seed: int) -> bool:
+        if cond["kind"] == "candidate" and cond["latents"] == [PLANTED]:
+            return ep % 3 != 1  # 16/24 against a 1/3 baseline: McNemar 8 to 0, but the LLR hovers near 0
+        return ep % 3 == 0
+
+    run = _run_dir(tmp_path)
+    kwargs = dict(policy="groot-mock", capture=capture, pick=2, random_sae=2, controls=2, episodes=24, log=lambda *_: None)
+    summary = execute_groot_pick(run, simulate=simulate, **kwargs)
+    plan = json.loads((run / "rollouts" / "ablate_plan.json").read_text())
+    assert plan["sprt"]["p0"] == 0.5 and plan["sprt"]["p1_rise"] == 0.8  # the capture's success rate, +0.30
+    assert summary["rise_sprt"] == {key: plan["sprt"][key] for key in summary["rise_sprt"]}
+    assert all(cond["sprt"] is False for cond in plan["conditions"])  # still a fixed budget
+    planted = next(f for f in summary["features"] if f["role"] == "candidate" and f["feature_id"] == PLANTED)
+    assert planted["causal"] and planted["beats_random_sae"] is True
+    assert planted["sprt_verdict"] == "cap_undecided"
+    assert planted["finding"] is False and summary["finding_feature_ids"] == []
+    errors: list[str] = []
+    _check_rollouts(run, 1, errors)  # ii validate rebuilds the same verdicts from the summary's rise_sprt
+    assert errors == []
+
+
+def test_plan_without_a_rise_design_has_no_findings():
+    """A --pick plan written before it carried the rule 1 design can no longer produce a finding."""
+    from interpretableintelligence.rollout_groot import plan_rise_sprt
+
+    assert plan_rise_sprt({"sprt": {"p0": None, "cap": 24}}) is None
+    assert plan_rise_sprt({}) is None
