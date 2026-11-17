@@ -23,6 +23,7 @@ from interpretableintelligence.view import load_run
 REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
 EXPORT_MARKER = export_run.MARKER
+LIVE_KEEP = ("live", "vercel.json")
 DROID_COMMANDS = (
     "uv run ii get-clips --out clips/droid",
     "# The labels here came from a vision-language model: set FIREWORKS_API_KEY (or another key, see README).",
@@ -58,9 +59,20 @@ def export_site(
     if (droid / EXPORT_MARKER).is_file():
         kept = Path(tempfile.mkdtemp(prefix="ii-droid-")) / "droid"
         shutil.copytree(droid, kept)
+    # The live playground (``ii export-live`` packs plus its page) and the host config are
+    # hand-kept parts of the site, so a regeneration keeps them as they are.
+    keep_dir = Path(tempfile.mkdtemp(prefix="ii-site-keep-"))
+    kept_live = [name for name in LIVE_KEEP if (out / name).exists()]
+    for name in kept_live:
+        source = out / name
+        (shutil.copytree if source.is_dir() else shutil.copy2)(source, keep_dir / name)
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    for name in kept_live:
+        source = keep_dir / name
+        (shutil.copytree if source.is_dir() else shutil.copy2)(source, out / name)
+    shutil.rmtree(keep_dir, ignore_errors=True)
     _copy_static(out / "static")
     (out / "favicon.ico").write_bytes(_favicon_png())
     work = Path(work_dir) if work_dir else out / ".work"
@@ -87,10 +99,11 @@ def export_site(
     checks = _groot_checks(groot)
     random_control = _random_control(randinit)
     atp_result = _atp(atp)
-    droid_run = _write_droid(out / "droid", kept)
+    live = (out / "live" / "index.html").is_file()
+    droid_run = _write_droid(out / "droid", kept, live=live)
     if kept is not None:
         shutil.rmtree(kept.parent, ignore_errors=True)
-    _write_product(out / "index.html", groot_summary, groot_status, droid_run)
+    _write_product(out / "index.html", groot_summary, groot_status, droid_run, live=live)
     _write_results(
         out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result, droid_run
     )
@@ -159,7 +172,7 @@ def _viewer_page(sentence: str) -> str:
     return html.replace("  </header>\n", "  </header>\n" + score, 1)
 
 
-def _write_droid(dest: Path, source: Path | None) -> dict | None:
+def _write_droid(dest: Path, source: Path | None, live: bool = False) -> dict | None:
     """Put an ``ii export`` of a real run at ``dest``, under the demo bar.
 
     The export's data (clips, features, precomputed playground) is copied as it is; nothing
@@ -187,7 +200,13 @@ def _write_droid(dest: Path, source: Path | None) -> dict | None:
         f'    <p data-testid="droid-banner">{escape(_droid_sentence(run))}</p>\n'
         f"{_droid_guide(run)}"
         f'    <details><summary>Run it yourself</summary><pre class="quickstart"><code>{commands}</code></pre></details>\n'
-        "  </section>\n"
+        + (
+            '    <p data-testid="droid-live"><a href="/live/">Try the same model live on your own picture</a>: '
+            "switch a feature off and watch its view change.</p>\n"
+            if live
+            else ""
+        )
+        + "  </section>\n"
     )
     html = html.replace("  </header>\n", "  </header>\n" + line, 1)
     (dest / "index.html").write_text(html, encoding="utf-8")
@@ -246,6 +265,14 @@ def _droid_clips(run: dict) -> int:
     return int(export.get("clips_total") or len(run["clips"]))
 
 
+def _live_cta() -> str:
+    return (
+        '    <p data-testid="live-cta"><a href="/live/">Or try it live on your own picture:</a> '
+        "see what a real vision model notices, switch a feature off and watch its view change. "
+        "Nothing to install.</p>\n"
+    )
+
+
 def _demo_bar(current: str) -> str:
     return (
         '  <nav class="demo-bar" aria-label="Site sections">'
@@ -271,6 +298,7 @@ SECTIONS = (
 )
 SECTION_OF = {
     "droid": "try",
+    "live": "try",
     "results": "research",
     "groot": "research",
     "vjepa": "research",
@@ -342,7 +370,7 @@ def _redirect(path: Path, target: str) -> None:
     )
 
 
-def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None) -> None:
+def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None, live: bool = False) -> None:
     """The front door: what ii is, three ways in, the latest result and what is coming."""
     headline = escape(_control_headline(summary))
     episodes = _episode_total(summary)
@@ -359,13 +387,12 @@ def _write_product(path: Path, summary: dict, status: str, droid_run: dict | Non
       <li><a href="/results/"><span class="section-name">Research</span><span class="section-text">What we measured on real robot models, and the controls that decide what counts.</span></a></li>
       <li><a href="/start/"><span class="section-name">Run it yourself</span><span class="section-text">Install ii, try it on a practice model, then point it at yours. Free and local.</span></a></li>
     </ul>
-    <h2>Latest result</h2>
+{_live_cta() if live else ""}    <h2>Latest result</h2>
     <p data-testid="control-headline">{headline}</p>
     <p data-testid="proof">GR00T N1.7 on LIBERO-plus, {episodes} rollouts, run with the repo's ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>). <span class="badge badge-unverified">{escape(status)}</span> <a href="/groot/" data-testid="proof-link">Read the study</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
-      <li>A live playground in the browser: any picture, every feature, edits that rerun the model.</li>
-      <li>Closed-loop rollouts at scale.</li>
+{"" if live else "      <li>A live playground: any picture, every feature, edits that rerun the model.</li>\n"}      <li>Closed-loop rollouts at scale.</li>
       <li>Your own model's dictionary, trained and checked on a GPU.</li>
     </ul>
     """
