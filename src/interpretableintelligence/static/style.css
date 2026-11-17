@@ -8,8 +8,9 @@
    uppercase tracking anywhere.
 
    Sizes:  --t-small 13  --t-body 16  --t-lead 21  --t-head 30  --t-display 52
-   Colour: warm ivory paper and ink. Ember marks activation, cobalt marks
-   steering, green appears only where something is verified (the tick, the
+   Colour: cool fog paper and navy ink, with ultramarine as the brand colour
+   (the button and the current page). Magenta marks activation, ultramarine
+   marks steering, green appears only where something is verified (the tick, the
    check ring and a verified feature's standing card). Sand marks the next
    experiment for a feature that is not verified yet.
 
@@ -22,26 +23,28 @@
 @font-face { font-family: Newsreader; src: url("/static/fonts/newsreader.woff2") format("woff2"); font-weight: 200 800; font-display: swap; }
 
 :root {
-  --paper: #faf9f5;
+  --paper: #eff1f4;
   --sheet: #ffffff;
-  --well: #f0eee6;
-  --ink: #141413;
-  --ink-2: #5e5d59;
-  --ink-3: #8f8d86;
-  --line: #e8e6dc;
-  --line-2: #d6d3c7;
-  --signal: #e8582a;
-  --signal-rgb: 232, 88, 42;
-  --signal-wash: #fbe6dc;
-  --steer: #3a5bd9;
-  --steer-rgb: 58, 91, 217;
-  --steer-wash: #e8ecfb;
-  --real: #2f6b4b;
-  --real-wash: #e3efe7;
-  --real-line: #c4dccc;
+  --well: #e3e7ed;
+  --ink: #121726;
+  --ink-2: #4c5568;
+  --ink-3: #8a93a6;
+  --line: #dbe0e8;
+  --line-2: #c6cdda;
+  --signal: #f0437f;
+  --signal-rgb: 240, 67, 127;
+  --signal-wash: #fde1eb;
+  --steer: #3a3af4;
+  --brand: #3a3af4;
+  --brand-hover: #2828d8;
+  --steer-rgb: 58, 58, 244;
+  --steer-wash: #e6e6fd;
+  --real: #1d7a52;
+  --real-wash: #dcefe5;
+  --real-line: #bcdccb;
   --warn: #8a5a00;
   --fail: #a33a2a;
-  --plate: #1f1e1b;
+  --plate: #151a29;
 
   --serif: Newsreader, "Iowan Old Style", Georgia, serif;
   --sans: Geist, ui-sans-serif, system-ui, sans-serif;
@@ -63,8 +66,8 @@
   --muted: var(--ink-2);
   --amber: var(--signal);
   --unv: var(--warn);
-  --unv-bg: #f7efdc;
-  --unv-line: #e9dab3;
+  --unv-bg: #f3ecdc;
+  --unv-line: #e6d9b8;
   color-scheme: light;
 }
 
@@ -126,7 +129,7 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
   color: var(--ink);
 }
 
-/* The one button shape: an ink pill. */
+/* The one button shape: an ultramarine pill. */
 .button, .steer-run {
   display: inline-flex;
   align-items: center;
@@ -134,14 +137,14 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
   padding: 10px 20px;
   border: 0;
   border-radius: 999px;
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--brand);
+  color: #fff;
   font-weight: 500;
   text-decoration: none;
   cursor: pointer;
   white-space: nowrap;
 }
-.button:hover, .steer-run:hover { background: #000; }
+.button:hover, .steer-run:hover { background: var(--brand-hover); }
 
 /* ---- header ------------------------------------------------------------ */
 .top {
@@ -176,7 +179,7 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
   white-space: nowrap;
 }
 .nav a:hover { color: var(--ink); border-color: var(--line-2); }
-.nav a[aria-current="page"] { color: var(--paper); background: var(--ink); border-color: var(--ink); }
+.nav a[aria-current="page"] { color: #fff; background: var(--brand); border-color: var(--brand); }
 .meta {
   justify-self: end;
   display: flex;
@@ -230,7 +233,7 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
   padding: 8px 14px;
   border-radius: 999px;
   background: var(--sheet);
-  box-shadow: 0 0 0 1px var(--line), 0 6px 20px rgba(20, 20, 19, 0.06);
+  box-shadow: 0 0 0 1px var(--line), 0 6px 20px rgba(18, 23, 38, 0.07);
   font-family: var(--sans);
   font-size: var(--t-small);
   color: var(--ink-2);
@@ -323,7 +326,7 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
 .stage img { image-rendering: pixelated; }
 .stage.is-empty { display: grid; place-items: center; }
 .pixels-message { color: #cfc9bd; padding: 24px; margin: 0; max-width: 36ch; text-align: center; }
-.crop-shade { position: absolute; z-index: 1; pointer-events: none; box-shadow: 0 0 0 100vmax rgba(20, 20, 19, 0.42); }
+.crop-shade { position: absolute; z-index: 1; pointer-events: none; box-shadow: 0 0 0 100vmax rgba(18, 23, 38, 0.42); }
 .heatmap { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 2; display: grid; pointer-events: none; }
 .heat-cell { min-width: 0; min-height: 0; box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.14); }
 .heatmap[data-dense="true"] .heat-cell { box-shadow: none; }
@@ -687,7 +690,7 @@ code { font: inherit; background: var(--well); padding: 1px 6px; border-radius: 
   text-decoration: none;
   transition: box-shadow 0.15s, transform 0.15s;
 }
-.feature-card:hover { box-shadow: 0 0 0 1px var(--line-2), 0 6px 20px rgba(20, 20, 19, 0.06); transform: translateY(-1px); }
+.feature-card:hover { box-shadow: 0 0 0 1px var(--line-2), 0 6px 20px rgba(18, 23, 38, 0.07); transform: translateY(-1px); }
 .card-art { display: grid; grid-template-columns: 1fr 1fr; aspect-ratio: 2 / 1; background: var(--well); }
 .card-shot { position: relative; background: var(--plate); overflow: hidden; }
 .card-shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; }

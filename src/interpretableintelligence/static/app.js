@@ -865,8 +865,8 @@ function isoTerrain(rows) {
   const y0 = lift + 2;
   const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
   const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
-  const base = [222, 218, 205];
-  const hot = [232, 88, 42];
+  const base = [220, 225, 233];
+  const hot = [240, 67, 127];
   const parts = [];
   for (let s = 0; s < w + h - 1; s += 1) {
     for (let r = 0; r < h; r += 1) {
@@ -883,11 +883,11 @@ function isoTerrain(rows) {
         [cx, cy + 2 * dy * k - z],
         [cx - dx * k, cy + dy * k - z],
       ];
-      const face = value > 0 ? mix([246, 205, 186], hot, Math.pow(value, 0.7)) : base;
+      const face = value > 0 ? mix([251, 208, 224], hot, Math.pow(value, 0.7)) : base;
       const pts = (list) => list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
       if (z > 0) {
-        const left = mix(face, [60, 30, 15], 0.22);
-        const right = mix(face, [60, 30, 15], 0.1);
+        const left = mix(face, [30, 20, 60], 0.22);
+        const right = mix(face, [30, 20, 60], 0.1);
         parts.push(`<polygon points="${pts([top[3], top[2], [top[2][0], top[2][1] + z], [top[3][0], top[3][1] + z]])}" fill="${rgb(left)}"/>`);
         parts.push(`<polygon points="${pts([top[2], top[1], [top[1][0], top[1][1] + z], [top[2][0], top[2][1] + z]])}" fill="${rgb(right)}"/>`);
       }
@@ -1436,7 +1436,7 @@ function emptyHeat(clip) {
   return Array.from({ length: height }, () => Array.from({ length: width }, () => 0));
 }
 
-function drawHeat(rows, rgb = themeRgb("--signal-rgb", "242, 84, 27")) {
+function drawHeat(rows, rgb = themeRgb("--signal-rgb", "240, 67, 127")) {
   const grid = document.querySelector("[data-testid=heatmap]");
   if (!grid || !rows.length) return;
   grid.replaceChildren();
@@ -1754,7 +1754,7 @@ function drawSteer() {
   grid.dataset.steer = "true";
   const t = Number(frame.t);
   const rows = (result.shift[t] || []).map((row) => row.map((value) => (value === null ? 0 : value)));
-  drawHeat(rows, themeRgb("--steer-rgb", "47, 85, 228"));
+  drawHeat(rows, themeRgb("--steer-rgb", "58, 58, 244"));
 }
 
 async function runSteer() {

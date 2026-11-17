@@ -490,7 +490,7 @@ def render_html(report: dict, clips_dir: Path | None = None) -> str:
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz@6..72&family=Geist:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root {{ --paper:#faf9f5; --ink:#1f1e1b; --soft:#6b6860; --line:#e6e3da; --ember:#d9653b; --cobalt:#3557c8; --card:#ffffff; }}
+:root {{ --paper:#eff1f4; --ink:#121726; --soft:#4c5568; --line:#dbe0e8; --ember:#f0437f; --cobalt:#3a3af4; --card:#ffffff; }}
 @media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ --paper:#1b1a17; --ink:#f1efe8; --soft:#a8a49a; --line:#34322d; --card:#24221f; }} }}
 :root[data-theme="dark"] {{ --paper:#1b1a17; --ink:#f1efe8; --soft:#a8a49a; --line:#34322d; --card:#24221f; }}
 * {{ box-sizing:border-box; }}
