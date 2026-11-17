@@ -22,7 +22,7 @@ uv run pytest
 
 `interpretableintelligence` is the long command name; **`ii` is the same CLI**. PyTorch is pinned to CPU wheels in `pyproject.toml` for CI and local dev; GR00T/LIBERO jobs use separate GPU environments (Colab), not this default install.
 
-On a fresh clone of `main` with `cargo`, Chrome and `node` on the machine (as in CI, on Ubuntu and macOS), expect **232 passed, 13 skipped, 3 deselected** (the three `slow` tests, excluded by default). Without `cargo` the 3 Rust parity tests in `tests/test_contract.py` also skip (**229 passed, 16 skipped**). Without Chrome or Chromium the 10 browser tests skip, and without `node` 4 guide tests skip. Every skip prints its reason with `pytest -rs`. Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
+On a fresh clone of `main` with `cargo`, Chrome and `node` on the machine (as in CI, on Ubuntu and macOS), expect **238 passed, 13 skipped, 3 deselected** (the three `slow` tests, excluded by default). Without `cargo` the 3 Rust parity tests in `tests/test_contract.py` also skip (**235 passed, 16 skipped**). Without Chrome or Chromium the 10 browser tests skip, and without `node` 4 guide tests skip. Every skip prints its reason with `pytest -rs`. Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
 
 ## `ii` CLI (public surface)
 
@@ -51,7 +51,7 @@ All experiments that belong in this repo should be reachable through these comma
 
 World-model path: `ii run fake --clips … --out runs/…` or `vjepa2`. Policy path on main: `ii rollouts runs/… --policy fake`.
 
-**Known gap:** GR00T is on `ii` for the offline lane (`ii run groot`: capture at DiT block 5 on the final denoise step, SAE, scoring, `ii view --steer`), but **closed-loop LIBERO-plus rollouts are not**. They still run through `src/interpretableintelligence/adapters/groot/v9/` (Colab, `ablate_v9.py`, ablation plans), the current pre-CLI route, not a violation of the long-term CLI rule. Steering GR00T in the playground is exploration, never evidence; the research rules below still decide findings.
+**Known gap:** GR00T is on `ii` for the offline lane (`ii run groot`: capture at DiT block 5 on the final denoise step, SAE, scoring, `ii view --steer`). Closed-loop LIBERO-plus rollouts go through `ii rollouts --policy groot-1028` (plans, including `--pick` with the random-weights SAE control), but they still execute on the v9 runner in `src/interpretableintelligence/adapters/groot/v9/` on Colab, not on a local simulator. Steering GR00T in the playground is exploration, never evidence; the research rules below still decide findings.
 
 ## Language: Rust for engineering and infra
 
@@ -91,7 +91,7 @@ These override intuition, offline plots, and demo-site copy.
 1. The **Sobel–Wald SPRT** stop rule calls a **rise** (not merely a fall or cap).
 2. The rise over the measured baseline on those seeds has **McNemar p < 0.05**.
 3. The effect **beats every matched random control** arm in the plan.
-4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. On `ii`: `ii rollouts --pick N` (with `--random-sae K`, default 5 with `--pick`) picks the candidates and each untrained SAE's features with the same picker and marks a candidate `finding: true` only when it is `causal` and strictly above every random-SAE arm (`SCHEMA.md`, "Random-weights SAE control"). It runs on any policy that sets `random_dictionaries`; the `fake` policies do. **GR00T does not yet** (known gap): its policy has to edit an untrained SAE and bring its picker as `pick_features`. Offline, `ii probe` uses the same untrained dictionary (`sae.random_weights_sae`) as a baseline for its held-out failure probe; that gate is a separate check and does not satisfy rule 4 on its own.
+4. It **beats the random-weights SAE control**: the same picker pipeline, but an SAE with **untrained (random) weights**—the feature must beat what a random dictionary would produce. On `ii`: `ii rollouts --pick N` (with `--random-sae K`, default 5 with `--pick`) picks the candidates and each untrained SAE's features with the same picker and marks a candidate `finding: true` only when it is `causal` and strictly above every random-SAE arm (`SCHEMA.md`, "Random-weights SAE control"). It runs on any policy that sets `random_dictionaries`; the `fake` policies do. On GR00T it is `ii rollouts --policy groot-1028 --pick N --capture <capture run>` (`groot-mock` in CI): `picker/pick_candidates.py` picks from the trained SAE and from each untrained SAE (the trainer's init, threshold set for the same `k`, `adapters/groot/random_sae.py`), the plan runs every arm through the v9 hook, and the summary scores a **rise** (`direction: rise`). Those runs use a fixed budget, so rule 1's Sobel–Wald rise call is not part of `finding` there; check it before calling a GR00T result a finding. Offline, `ii probe` uses the same untrained dictionary (`sae.random_weights_sae`) as a baseline for its held-out failure probe; that gate is a separate check and does not satisfy rule 4 on its own.
 
 **`recon_only` (groot ablation plans):** sanity check only—the hook applies SAE reconstruction with **no latent ablation** (empty edit set). On task 1028 it was **8/8 bit-identical to baseline**. This verifies the hook path; it is **not** the random-weights SAE control and does not satisfy rule 4.
 
@@ -99,7 +99,7 @@ These override intuition, offline plots, and demo-site copy.
 
 **How to run work:**
 
-- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. Until GR00T rollouts land on `ii` with the random-weights SAE control, the v9 adapter path above is the documented exception (known gap).
+- Target the **public `ii` CLI** and the standard run layout. If a capability is missing, **add a reusable `ii` command** first—build only what the experiment needs. GR00T rollouts with the random-weights SAE control go through `ii rollouts --pick` and execute on the v9 runner (Colab), the documented exception above.
 - **Never edit `split.json` or held-out labels** in an existing run.
 - **No paid compute** on behalf of this repo (no cloud GPU rental, etc.). GR00T rollouts use existing Colab/box paths under `adapters/groot/`. `ii run --remote` is a user feature that bills the user's own Modal account; agents do not run it unless the user asks for that run. Its tests use the in-process `LocalBackend` and never reach Modal.
 

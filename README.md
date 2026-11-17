@@ -147,7 +147,7 @@ The adapter is `groot:<checkpoint>`, and `--model` defaults to `nvidia/gr00t17-l
 
 GR00T also needs a wrist camera, the robot state and an instruction. Put them in a sidecar next to each clip, `<stem>.groot.json`: `{"task": "...", "state": [[8 floats per frame]], "wrist": "<stem>.wrist.npy"}`. Without one the model still runs, on the main frame twice, a zero state and an empty instruction, and warns that its actions are off-distribution.
 
-Weights stream in at half precision (6.3 GB). On a 4-core CPU the model loads in about a minute and each window takes a few seconds; a GPU is much faster. `ii run groot --tiny` runs a GR00T-shaped random network instead, with no download; it is for tests and is not GR00T. Closed-loop LIBERO rollouts for GR00T still go through `adapters/groot/v9/`.
+Weights stream in at half precision (6.3 GB). On a 4-core CPU the model loads in about a minute and each window takes a few seconds; a GPU is much faster. `ii run groot --tiny` runs a GR00T-shaped random network instead, with no download; it is for tests and is not GR00T. Closed-loop LIBERO rollouts for GR00T run through `ii rollouts --policy groot-1028`, which drives the v9 runner in `adapters/groot/v9/` on a GPU (`docs/groot-rollouts-verify.md`); `--pick N --capture <capture>` adds the random-weights SAE control.
 
 #### Import an existing GR00T capture
 
