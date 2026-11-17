@@ -87,7 +87,8 @@ def batchtopk_threshold(weights: dict[str, torch.Tensor], chunks, k: int) -> tup
         if x.numel() == 0:
             continue
         seen += int(x.shape[0])
-        merged = torch.cat([best, pre_activations(weights, x).reshape(-1)])
+        pre = pre_activations(weights, x).reshape(-1)
+        merged = torch.cat([best.to(pre.device), pre])
         best = torch.topk(merged, min(target, merged.numel()), sorted=False).values
     if seen != rows or best.numel() < target:
         raise RuntimeError(f"calibration rows changed between passes ({rows} then {seen})")
