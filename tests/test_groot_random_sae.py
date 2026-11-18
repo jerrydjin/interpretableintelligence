@@ -290,3 +290,80 @@ def test_plan_without_a_rise_design_has_no_findings():
 
     assert plan_rise_sprt({"sprt": {"p0": None, "cap": 24}}) is None
     assert plan_rise_sprt({}) is None
+
+
+def test_named_features_positive_control_scores_a_fall_and_validates(tmp_path: Path, capture: Path):
+    """--features with --capture: a fixed-budget plan for hand-named features, here scored as a fall (positive control)."""
+
+    def simulate(cond: dict, ep: int, seed: int) -> bool:
+        if cond["kind"] == "candidate":
+            return False  # the strong edit breaks every episode
+        return ep % 3 != 0  # baseline and controls succeed 2/3, on the same seeds
+
+    run = _run_dir(tmp_path)
+    from interpretableintelligence.rollout_groot import execute_groot_named
+
+    summary = execute_groot_named(run, policy="groot-mock", capture=capture, candidates=[PLANTED], controls=[1, 2, 3],
+                                  episodes=24, direction="fall", simulate=simulate, log=lambda *_: None)
+    plan = json.loads((run / "rollouts" / "ablate_plan.json").read_text())
+    assert plan["direction"] == "fall" and plan["pick"]["picker"] == "named"
+    assert [c["kind"] for c in plan["conditions"]] == ["baseline", "recon_only", "candidate", "control", "control", "control"]
+    assert summary["direction"] == "fall" and summary["candidate_source"] == "features" and summary["rise_sprt"] is None
+    planted = next(f for f in summary["features"] if f["role"] == "candidate")
+    assert planted["delta"] == pytest.approx(16 / 24)  # fall: baseline - intervention
+    assert planted["causal"] is True and planted["finding"] is False  # a fall is never a finding
+    errors: list[str] = []
+    _check_rollouts(run, 1, errors)
+    assert errors == []
+
+
+def test_named_features_cli_refuses_overlap_and_rebuild(tmp_path: Path, capture: Path):
+    run = _run_dir(tmp_path)
+    base = ["rollouts", str(run), "--policy", "groot-mock", "--capture", str(capture), "--episodes", "8"]
+    overlap = runner.invoke(app, [*base, "--features", str(PLANTED), "--control-features", f"1,{PLANTED}"])
+    assert overlap.exit_code != 0 and "both candidates and controls" in overlap.output
+    ok = runner.invoke(app, [*base, "--features", str(PLANTED), "--control-features", "1,2"])
+    assert ok.exit_code == 0, ok.output
+    changed = runner.invoke(app, [*base, "--features", str(PLANTED), "--control-features", "1,3"])
+    assert changed.exit_code != 0  # a plan built with other arguments is never overwritten
+
+
+def test_named_selection_with_random_sae_arms_can_be_a_finding(tmp_path: Path, capture: Path):
+    """--selection: the untrained SAEs' picks from the same selection become rule 4's arms, so a rise can be a finding."""
+    import shutil
+
+    random_dir = tmp_path / "random"
+    for item in (11, 12):
+        shutil.copytree(capture / "sae", random_dir / str(item) / "sae")
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps({"picker": "contrast_then_action_screen", "random_sae_dir": str(random_dir),
+                                     "random_sae": {"11": [7], "12": [8]}, "note": "test"}))
+
+    def simulate(cond: dict, ep: int, seed: int) -> bool:
+        return True if cond["kind"] == "candidate" else ep % 2 == 0
+
+    run = _run_dir(tmp_path)
+    from interpretableintelligence import rollout_groot
+
+    original = rollout_groot.null_mock_outcome
+    rollout_groot.null_mock_outcome = simulate
+    try:
+        result = runner.invoke(app, ["rollouts", str(run), "--policy", "groot-mock", "--capture", str(capture), "--episodes", "24",
+                                     "--features", str(PLANTED), "--control-features", "1,2", "--selection", str(selection)])
+    finally:
+        rollout_groot.null_mock_outcome = original
+    assert result.exit_code == 0, result.output
+    summary = json.loads((run / "rollouts" / "summary.json").read_text())
+    assert summary["candidate_source"] == "pick" and summary["picker"] == "contrast_then_action_screen"
+    assert summary["random_sae_seeds"] == [11, 12] and summary["random_sae_feature_ids"] == [[7], [8]]
+    planted = next(f for f in summary["features"] if f["role"] == "candidate")
+    assert planted["causal"] is True and planted["sprt_verdict"] == "rise" and planted["finding"] is True
+    assert summary["finding_feature_ids"] == [PLANTED]
+    errors: list[str] = []
+    _check_rollouts(run, 1, errors)
+    assert errors == []
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"random_sae_dir": str(random_dir), "random_sae": {"11": [7]}}))
+    refused = runner.invoke(app, ["rollouts", str(_run_dir(tmp_path / "b")), "--policy", "groot-mock", "--capture", str(capture),
+                                  "--episodes", "8", "--features", str(PLANTED), "--selection", str(bad)])
+    assert refused.exit_code != 0  # random-SAE arms without the selection's name

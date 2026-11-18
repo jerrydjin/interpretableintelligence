@@ -698,8 +698,35 @@ def rollouts(
             "--capture",
             exists=True,
             file_okay=False,
-            help="GR00T with --pick: capture run folder (acts, failure labels, trained SAE) the picker reads, "
-            "e.g. groot-1028-v9-n100.",
+            help="GR00T with --pick or --features: capture run folder (acts, failure labels, trained SAE) the plan is "
+            "built from, e.g. groot-1028-v9-n100.",
+        ),
+    ] = None,
+    control_features: Annotated[
+        str,
+        typer.Option(
+            "--control-features",
+            help="GR00T with --features and --capture: comma-separated control feature ids of the same SAE "
+            "(e.g. ii steer-scorecard's matched-feature controls), one arm each.",
+        ),
+    ] = "",
+    direction: Annotated[
+        str,
+        typer.Option(
+            "--direction",
+            help="GR00T with --features and --capture: rise (research rule 1; the only direction that can be a finding) "
+            "or fall (a positive control).",
+        ),
+    ] = "rise",
+    selection: Annotated[
+        Path | None,
+        typer.Option(
+            "--selection",
+            exists=True,
+            dir_okay=False,
+            help="GR00T with --features and --capture: JSON naming the selection that chose the candidates "
+            '({"picker": NAME, "random_sae_dir": DIR, "random_sae": {SEED: [IDS]}, "note": TEXT}); its random_sae picks, '
+            "one per candidate from each untrained SAE in DIR/<SEED>/sae/, become research rule 4's random-SAE arms.",
         ),
     ] = None,
 ) -> None:
@@ -724,6 +751,35 @@ def rollouts(
                 controls=controls,
                 episodes=episodes,
                 seed=seed if seed else GROOT_SEED_BASE,
+                alpha=alpha,
+                workers=workers,
+                sae_path=sae,
+                v9_out=v9_out,
+            )
+            typer.echo(format_groot_report(summary))
+            typer.echo(f"wrote {run_dir / 'rollouts'}")
+            return
+        if is_groot_policy(policy) and capture is not None and features.strip():
+            from interpretableintelligence.rollout_groot import GROOT_SEED_BASE, execute_groot_named
+
+            if verify_slice or only or plan is not None:
+                raise ValueError("GR00T --features with --capture builds its own plan: drop --verify-slice, --only and --plan")
+            if random_sae:
+                raise ValueError("--random-sae draws its own untrained SAEs: with --features pass them in --selection")
+            chosen = json.loads(selection.read_text()) if selection is not None else {}
+            summary = execute_groot_named(
+                run_dir,
+                policy=policy,
+                capture=capture,
+                candidates=parse_feature_ids(features),
+                controls=parse_feature_ids(control_features) if control_features.strip() else [],
+                episodes=episodes,
+                seed=seed if seed else GROOT_SEED_BASE,
+                direction=direction,
+                random_sae={int(k): [int(x) for x in v] for k, v in (chosen.get("random_sae") or {}).items()},
+                random_sae_dir=Path(chosen["random_sae_dir"]) if chosen.get("random_sae_dir") else None,
+                picker=chosen.get("picker"),
+                note=chosen.get("note"),
                 alpha=alpha,
                 workers=workers,
                 sae_path=sae,

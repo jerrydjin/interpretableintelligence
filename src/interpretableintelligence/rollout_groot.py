@@ -12,6 +12,8 @@ on latent 720 so ``episode_id`` differs from a true ablation of 720.
 from __future__ import annotations
 
 import hashlib
+import os
+import sys
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -675,22 +677,46 @@ def run_live_v9(
     sae_path: Path | None,
     only: tuple[str, ...] | None,
     dictionaries: dict[str, Path] | None = None,
+    checkpoint: str | None = None,
+    plus_dir: Path | None = None,
+    hours: float | None = None,
 ) -> Path:
+    """Run ``plan`` on a GPU box with ``lerobot[groot]`` and LIBERO-plus (Colab, ``scripts/groot_gpu_setup.sh`` or
+    ``scripts/modal_groot_steer.py``). Loads the policy with the adapter's loader, the one ``ii record-libero`` uses.
+
+    ``plus_dir`` defaults to ``$PLUS_DIR``; ``hours`` (default ``$GROOT_ABLATE_HOURS``, else 10.5) is the soft cap after
+    which the runner stops dispatching episodes. Resumable: episodes already in ``rollouts/v9-ablate`` are kept."""
+    del plan_path
     try:
-        import interpretableintelligence.adapters.groot.v9.ablate_v9 as ablate_v9
-        import interpretableintelligence.adapters.groot.v9.physint_inproc_v9 as v9
-        import interpretableintelligence.adapters.groot.v9.physint_inproc_v8 as v8
+        import torch
+
+        # The package registers the v8 / v9 / pot_events modules under the bare names the runner imports.
+        import interpretableintelligence.adapters.groot.v9 as v9_pkg
+
+        ablate_v9 = v9_pkg.ablate_v9
+        v9 = sys.modules["physint_inproc_v9"]
+        v8 = sys.modules["physint_inproc_v8"]
+        from interpretableintelligence.adapters.groot.adapter import DEFAULT_CHECKPOINT, LeRobotGroot
     except ImportError as exc:
         raise NotImplementedError(
-            "groot-1028 live rollouts need the Colab v9 stack (lerobot, LIBERO-plus, GPU). "
-            "See docs/groot-rollouts-verify.md"
+            "groot-1028 live rollouts need a GPU box with lerobot[groot] and LIBERO-plus "
+            "(scripts/groot_gpu_setup.sh, or scripts/modal_groot_steer.py). See docs/groot-rollouts-verify.md"
         ) from exc
-    v9_out = run_dir / "rollouts" / "v9-ablate"
+    if not torch.cuda.is_available():
+        raise NotImplementedError("groot-1028 live rollouts need a CUDA GPU")
+    v9_out = Path(run_dir) / "rollouts" / "v9-ablate"
     sae = sae_path or Path(plan["sae"].get("subset_file", "sae_subset.safetensors"))
     if not sae.is_file():
         raise FileNotFoundError(f"SAE subset not found: {sae}")
+    plus = Path(plus_dir or os.environ.get("PLUS_DIR") or "/content/LIBERO-plus")
+    v8.write_libero_config(plus, log=print)  # before anything imports libero, which asks for its paths on stdin
     v9_out.mkdir(parents=True, exist_ok=True)
-    ctx = v9.Ctx(run=v9_out, run_id=run_dir.name, layer=int(plan["hook"]["layer"]))  # run_ablation writes under ctx.run
+    ckpt = checkpoint or DEFAULT_CHECKPOINT
+    backend = LeRobotGroot(ckpt)
+    backend.load(random_init=False, device=torch.device("cuda"))
+    soft_cap = float(hours if hours is not None else os.environ.get("GROOT_ABLATE_HOURS", "10.5"))
+    ctx = v9.Ctx(run=v9_out, run_id=Path(run_dir).name, policy=backend.policy, ckpt=ckpt, layer=int(plan["hook"]["layer"]),
+                 plus_dir=plus, snapshot_tar=v9_out.parent / "v9-ablate-snapshot.tar", soft_cap_h=soft_cap)
     v8.setup(ctx, device="cuda")
     ablate_v9.run_ablation(ctx, plan, sae_path=sae, only=list(only) if only else None, dictionaries=dictionaries)
     return v9_out
@@ -820,7 +846,7 @@ def execute_groot_pick(
     effect anywhere), and scores it as a rise test with the random-SAE arms in the control family. Fixed budget: every
     arm runs ``episodes`` paired episodes.
     """
-    from interpretableintelligence.rollout_groot_pick import PICKER, build_pick_plan, dictionary_paths
+    from interpretableintelligence.rollout_groot_pick import PICKER, build_pick_plan
     from interpretableintelligence.rollout_pick import random_sae_seeds
 
     if not is_groot_policy(policy):
@@ -832,7 +858,30 @@ def execute_groot_pick(
     plan = build_pick_plan(
         run_dir, Path(capture), n=int(pick), random_seeds=seeds, controls=int(controls), episodes=int(episodes), seed=int(seed), log=log
     )
+    return run_groot_plan(run_dir, plan, policy=policy, alpha=alpha, workers=workers, sae_path=sae_path, v9_out=v9_out,
+                          simulate=simulate, candidate_source="pick", picker=PICKER)
+
+
+def run_groot_plan(
+    run_dir: Path,
+    plan: dict,
+    *,
+    policy: str,
+    alpha: float,
+    workers: int,
+    sae_path: Path | None,
+    v9_out: Path | None,
+    simulate,
+    candidate_source: str,
+    picker: str | None,
+) -> dict:
+    """Run a fixed-budget plan built by ``rollout_groot_pick`` (``--pick`` or named features) and score it."""
+    from interpretableintelligence.rollout_groot_pick import dictionary_paths
+
+    run_dir = Path(run_dir)
     info = plan["pick"]
+    episodes = max(int(c["n_max"]) for c in plan["conditions"] if c["id"] != "recon-only")
+    direction = str(plan.get("direction", "rise"))
     config = RolloutConfig(
         policy=policy,
         task_id=str(plan["task"]["id"]),
@@ -840,20 +889,21 @@ def execute_groot_pick(
         kind="ablate",
         value=0.0,
         seed=int(plan["seeds"]["base"]),
-        episodes_per_arm=int(episodes),
-        batch_size=int(episodes),
-        min_episodes=int(episodes),
+        episodes_per_arm=episodes,
+        batch_size=episodes,
+        min_episodes=episodes,
         alpha=float(alpha),
         workers=int(workers),
         candidate_feature_ids=tuple(int(item) for item in info["candidates"]),
         control_feature_ids=tuple(int(item) for item in info["controls"]),
-        candidate_source="pick",
-        picker=PICKER,
+        candidate_source=candidate_source,
+        picker=picker,
         pick_discovery_episodes=None,
         random_sae_seeds=tuple(int(item) for item in info["random_sae_seeds"]),
         random_sae_feature_ids=tuple(tuple(int(x) for x in picks) for picks in info["random_sae_feature_ids"]),
-        direction="rise",
-        rise_sprt=plan_rise_sprt(plan),
+        direction=direction,
+        # The rule 1 SPRT reads a rise; a fall plan (a positive control) is never a finding, so it carries none.
+        rise_sprt=plan_rise_sprt(plan) if direction == "rise" else None,
     )
     _check_config(config)
     rollout_dir = run_dir / "rollouts"
@@ -877,6 +927,40 @@ def execute_groot_pick(
     _write_summary(rollout_dir / "summary.json", summary)
     _bump_manifest(run_dir)
     return summary
+
+
+def execute_groot_named(
+    run_dir: Path,
+    *,
+    policy: str,
+    capture: Path,
+    candidates: list[int],
+    controls: list[int],
+    episodes: int,
+    seed: int = GROOT_SEED_BASE,
+    direction: str = "rise",
+    random_sae: dict[int, list[int]] | None = None,
+    random_sae_dir: Path | None = None,
+    picker: str | None = None,
+    note: str | None = None,
+    alpha: float = DEFAULT_ROLLOUT_ALPHA,
+    workers: int = DEFAULT_ROLLOUT_WORKERS,
+    sae_path: Path | None = None,
+    v9_out: Path | None = None,
+    simulate=None,
+    log=print,
+) -> dict:
+    """``ii rollouts --policy groot-* --features IDS --control-features IDS --capture CAPTURE``: a fixed-budget plan for
+    features chosen outside the picker (for example by the steering scorecard), scored as ``direction``."""
+    from interpretableintelligence.rollout_groot_pick import build_named_plan
+
+    if not is_groot_policy(policy):
+        raise ValueError(f"not a groot rollout policy: {policy!r}")
+    plan = build_named_plan(Path(run_dir), Path(capture), candidates=candidates, controls=controls, episodes=int(episodes),
+                            seed=int(seed), direction=direction, random_sae=random_sae, random_sae_dir=random_sae_dir, picker=picker, note=note,
+                            log=log)
+    return run_groot_plan(run_dir, plan, policy=policy, alpha=alpha, workers=workers, sae_path=sae_path, v9_out=v9_out,
+                          simulate=simulate, candidate_source="pick" if picker else "features", picker=picker)
 
 
 def format_groot_report(summary: dict, *, plan_sha: str | None = None) -> str:
