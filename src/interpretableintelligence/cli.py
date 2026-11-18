@@ -989,6 +989,96 @@ def export_cmd(
     typer.echo(f"preview: python -m http.server -d {summary.out_dir} 8000, then open http://localhost:8000")
 
 
+@app.command("export-live")
+def export_live_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder to pack (an hf image model with a trained SAE).")],
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the pack into, e.g. demo-site/live/packs/<name>.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Directory of clip files, for the sample frames. Overrides a clip path recorded in the manifest."),
+    ] = None,
+    meta_from: Annotated[
+        Path | None,
+        typer.Option(
+            "--meta-from",
+            help="Copy labels and badges from an ii export of the same run (checked against this SAE) instead of the run's scoreboard.",
+        ),
+    ] = None,
+    samples: Annotated[int, typer.Option("--samples", min=0, help="Sample frames to ship with the pack.")] = 16,
+    title: Annotated[str | None, typer.Option("--title", help="Name shown in the playground.")] = None,
+) -> None:
+    """Pack a run for the live in-browser playground: the model split at the SAE's layer, the SAE, labels and badges."""
+    from interpretableintelligence.live import LiveExportError, export_live
+
+    try:
+        summary = export_live(run_dir, out, clips_dir=clips, meta_from=meta_from, n_samples=samples, title=title, log=typer.echo)
+    except (LiveExportError, FileNotFoundError, OSError, KeyError, ValueError, RuntimeError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"wrote {summary.out_dir}: {summary.n_features} features ({summary.n_real} verified, from the {summary.meta_source}), "
+        f"{summary.samples} samples, {summary.bytes_total / 1e6:.1f} MB"
+    )
+
+
+LIVE_DIR = Path("demo-site/live")
+
+
+@app.command("serve-live")
+def serve_live_cmd(
+    packs: Annotated[Path, typer.Option("--packs", help="Directory of live packs (each with pack.json and sae.safetensors).")] = LIVE_DIR / "packs",
+    pack: Annotated[list[str] | None, typer.Option("--pack", help="Serve only this pack (repeatable). Default: every pack.")] = None,
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port")] = 8787,
+    origins: Annotated[str, typer.Option("--origins", help="Comma-separated origins allowed to call the API (CORS).")] = "*",
+) -> None:
+    """Run the live playground's model server on this machine (the API in docs/PLAYGROUND-API.md).
+
+    Open the page with ?api=http://127.0.0.1:8787 to use it. ii deploy-live hosts the same thing on Modal.
+    """
+    import uvicorn
+
+    from interpretableintelligence.playground.compute import PackLoadError, load_packs
+    from interpretableintelligence.playground.http import create_app
+
+    try:
+        models = load_packs(packs, only=pack or None)
+    except (PackLoadError, OSError, ValueError, RuntimeError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for model in models.values():
+        typer.echo(f"loaded {model.id} ({model.pack['model']['name']}, {model.n_features} features) on {model.device.type} in {model.load_ms / 1000:.1f} s")
+    typer.echo(f"playground API on http://{host}:{port}/v1/health")
+    uvicorn.run(create_app(models, allow_origins=[o.strip() for o in origins.split(",") if o.strip()]), host=host, port=port, log_level="warning")
+
+
+@app.command("deploy-live")
+def deploy_live_cmd(
+    packs: Annotated[Path, typer.Option("--packs", help="Directory of live packs to serve.")] = LIVE_DIR / "packs",
+    gpu: Annotated[str, typer.Option("--gpu", help="Modal GPU type, or none for CPU only (enough for DINOv2-small).")] = "T4",
+    idle: Annotated[int, typer.Option("--idle", min=2, help="Seconds a container stays warm after the last request.")] = 300,
+    max_containers: Annotated[int, typer.Option("--max-containers", min=1, help="Most containers at once; caps the bill.")] = 2,
+    origins: Annotated[str, typer.Option("--origins", help="Comma-separated origins allowed to call the API (CORS).")] = "*",
+    live_dir: Annotated[Path, typer.Option("--live-dir", help="The page's folder; its config.json gets the API URL.")] = LIVE_DIR,
+    api: Annotated[
+        str | None,
+        typer.Option("--api", help="Skip deploying: just point the page at this API URL (or 'none' to run in the browser)."),
+    ] = None,
+) -> None:
+    """Host the playground backend on Modal (your account; scales to zero) and point the page at it."""
+    from interpretableintelligence.playground.deploy import DeployError, deploy, write_config
+
+    try:
+        if api is None:
+            api = deploy(packs, gpu=gpu, idle_s=idle, max_containers=max_containers, origins=origins, log=typer.echo)
+        url = None if api.lower() == "none" else api
+        path = write_config(live_dir, url)
+    except (DeployError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {path}: the page now {'calls ' + url if url else 'runs the model in the browser'}. Commit it to publish.")
+
+
 @app.command("export-site")
 def export_site_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the static site into.")] = Path("demo-site"),
@@ -1051,6 +1141,63 @@ def import_cmd(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"next: ii validate {out}")
+
+
+@app.command("retrain-sae")
+def retrain_sae_cmd(
+    capture: Annotated[Path, typer.Argument(help="Unpacked GR00T capture folder (groot-1028-v9-n100 layout: acts/, split.json, sae/).")],
+    out: Annotated[Path, typer.Option("--out", help="Folder to write: the new sae/, retrain.json, and links to the capture's SAE-independent files.")],
+    n_latents: Annotated[int, typer.Option("--n-latents", min=1, help="Dictionary size.")] = 2048,
+    k: Annotated[int, typer.Option("--k", min=1, help="BatchTopK: active latents per token on average.")] = 32,
+    steps: Annotated[int, typer.Option("--steps", min=1, help="Optimiser steps.")] = 6000,
+    batch_tokens: Annotated[int, typer.Option("--batch-tokens", min=1, help="Tokens per batch.")] = 4096,
+    lr: Annotated[float, typer.Option("--lr", help="Adam learning rate.")] = 4e-4,
+    revive: Annotated[
+        str, typer.Option("--revive", help="Dead-latent revival: auxk (AuxK loss), resample (reinitialise dead latents on high-error tokens), or none.")
+    ] = "auxk",
+    aux_coeff: Annotated[float, typer.Option("--aux-coeff", help="AuxK loss weight.")] = 1 / 32,
+    aux_k: Annotated[int, typer.Option("--aux-k", min=0, help="Dead latents per token in the AuxK reconstruction.")] = 512,
+    dead_tokens: Annotated[
+        int, typer.Option("--dead-tokens", min=0, help="Training tokens without firing before a latent counts as dead. 0: one pass over the train split.")
+    ] = 0,
+    resample_every: Annotated[int, typer.Option("--resample-every", min=0, help="--revive resample: steps between resamples (first 60% of training). 0: steps // 10.")] = 0,
+    seed: Annotated[int, typer.Option("--seed", help="Init and batch-order seed. random:<seed> in the rollout control is this SAE's init.")] = 0,
+    norm: Annotated[str, typer.Option("--norm", help="keep: reuse the capture SAE's norm_mu / norm_scale. fit: recompute from train rows.")] = "keep",
+    device: Annotated[str, typer.Option("--device", help="auto, cpu, or cuda.")] = "auto",
+) -> None:
+    """Retrain the GR00T capture SAE with dead-latent revival and compare it with the old one.
+
+    BatchTopK with AuxK or resampling, trained on split.json's train episodes only, written in the capture's sae/ layout
+    so the picker, ii import and ii rollouts --pick read it unchanged. Reports alive, dead and dense latents, L0
+    and explained variance on train and held-out for both SAEs. Offline: never a finding, never touches a scoreboard.
+    """
+    import torch
+
+    from interpretableintelligence.adapters.groot.retrain_sae import RetrainConfig, format_report, retrain
+
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    config = RetrainConfig(
+        n_latents=n_latents,
+        k=k,
+        steps=steps,
+        batch_tokens=batch_tokens,
+        lr=lr,
+        aux_coeff=aux_coeff,
+        aux_k=aux_k,
+        dead_tokens=dead_tokens,
+        revive=revive,
+        resample_every=resample_every,
+        seed=seed,
+        norm=norm,
+    )
+    try:
+        report = retrain(capture, out, config, torch.device(device), log=typer.echo)
+    except (ValueError, FileNotFoundError, FileExistsError, KeyError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(format_report(report))
+    typer.echo(f"wrote {out}")
 
 
 @app.command("compare")

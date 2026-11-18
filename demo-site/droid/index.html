@@ -46,10 +46,12 @@
   </header>
   <section class="score-line droid-banner">
     <p data-testid="droid-banner">A real run: facebook/dinov2-small on 100 DROID robot clips, on a 4-core CPU. 5 of 3072 features passed every check (right edge of the frame, left edge of the frame, plain white ceiling or upper wall, bottom edge of the frame, white robot arm). The playground here is precomputed; it is for exploring, not evidence. A real badge means a feature passed the offline checks on held-out clips; it says nothing about what happens in a robot rollout.</p>
+    <details class="droid-guide" data-testid="try-guide"><summary>What am I looking at?</summary><dl><dt>The model</dt><dd>DINOv2 is a vision model that robots use as their eyes. We showed it 100 short videos of robot arms at work (DROID).</dd><dt>Features</dt><dd>A small tool splits the model&#x27;s numbers into features. Each one is something the model notices, such as the arm, the ceiling or the edges of the picture.</dd><dt>Labels</dt><dd>An AI names each feature by looking at the moments it lights up most.</dd><dt>Verified</dt><dd>Each name is tested on videos the tool never saw, against random features, and by switching the feature off to see whether the model&#x27;s view changes. Only features that pass every check get the badge.</dd><dt>Play</dt><dd>Pick a feature, turn it up, down or off, and watch how the model&#x27;s view changes.</dd></dl></details>
     <details><summary>Run it yourself</summary><pre class="quickstart"><code>uv run ii get-clips --out clips/droid
 # The labels here came from a vision-language model: set FIREWORKS_API_KEY (or another key, see README).
 uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid
 uv run ii export runs/droid --clips clips/droid --out site/droid --max-clips 10</code></pre></details>
+    <p data-testid="droid-live"><a href="/live/">Try the same model live on your own picture</a>: switch a feature off and watch its view change.</p>
   </section>
   <main id="app"></main>
   <div id="live-status" class="live-status" data-testid="live-status" role="status" aria-live="polite" hidden></div>

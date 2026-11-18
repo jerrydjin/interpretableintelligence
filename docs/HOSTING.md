@@ -53,3 +53,32 @@ There is no auth on this cut, same as the local API. Do not put the process on a
 ## When to leave DuckDB
 
 Move the feature and effect rows to Postgres if ingest needs many concurrent writers, or if a real query stops landing under 100 ms. Shards and SAE weights stay in object storage either way. `explain_clip` does not change.
+
+# Hosting the live playground's model
+
+The live playground (`demo-site/live/`) is a static page plus a small model service. The page and its pack files stay on the static host (Vercel); the service runs the model and the SAE in PyTorch behind playground API v1 (`docs/PLAYGROUND-API.md`). The service touches model tensors, so it is Python (AGENTS.md, "Language"); routing is a thin layer (`playground/http.py`) that a Rust gateway could replace without touching the compute or the page.
+
+## Deploy on Modal (your account)
+
+Once, on your machine:
+
+```bash
+uv sync --extra remote
+uv run modal setup          # signs in and stores a token in ~/.modal.toml
+```
+
+Then:
+
+```bash
+uv run ii deploy-live       # builds the image, deploys, writes demo-site/live/config.json
+git add demo-site/live/config.json && git commit -m "Point the playground at the model server"
+```
+
+The Vercel deploy of that commit makes the page use the server. `ii deploy-live --api none` points it back at the in-browser engine.
+
+## What it costs
+
+- Nothing while idle: no container runs until a request arrives, and one stops `--idle` seconds (default 300) after the last request.
+- A cold start is a few seconds: model weights are in the image and the loaded models are restored from a memory snapshot.
+- While warm, Modal bills the GPU (T4 by default, about $0.59 an hour) plus 2 CPU cores and 4 GiB. `--gpu none` runs on CPU only, about a tenth of the price; DINOv2-small reads a picture in about 70 ms and edits in about 50 ms on 4 CPU cores, so CPU is enough for this pack. Bigger models want the GPU.
+- `--max-containers` (default 2) caps how many run at once, which caps the bill if the page gets busy. There is no auth in v1, so this cap is the guard.
