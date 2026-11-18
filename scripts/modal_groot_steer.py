@@ -327,3 +327,105 @@ def fetch(out: str = "groot-steer-results.json", controls_from: str = "random") 
     results = _results.remote(controls_from)
     Path(out).write_text(json.dumps(results, indent=1) + "\n")
     print(f"wrote {out}: {sorted(results)}")
+
+
+ROLLOUT_RESULTS = f"{VOL}/results-rollouts"
+RESCALED_CAPTURE = f"{WORK}/capture-rescaled"
+
+
+def _rescaled_capture() -> str:
+    """The v9 capture's manifest and split with the rescaled SAE as its sae/: what `ii rollouts --capture` reads."""
+    import shutil
+
+    view = Path(RESCALED_CAPTURE)
+    view.mkdir(parents=True, exist_ok=True)
+    for name in ("manifest.json", "split.json"):
+        if not (view / name).is_file():
+            shutil.copy(Path(CAPTURE_DIR, name), view / name)
+    sae = view / "sae"
+    if not sae.exists():
+        sae.symlink_to(_rescaled_sae(), target_is_directory=True)
+    return str(view)
+
+
+@app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=8, memory=32768)
+def rollouts_remote(name: str, features: str, controls: str = "", episodes: int = 3, direction: str = "fall",
+                    seed: int = 70000, hours: float = 0.3) -> dict:
+    """`ii rollouts --policy groot-1028` for hand-named rescaled-SAE features, on LIBERO-plus in this container.
+    Each `name` gets its own run folder (a copy of run-rescaled's manifest and split), so plans never collide."""
+    import json
+    import shutil
+
+    env = _prepare()
+    env["GROOT_ABLATE_HOURS"] = str(hours + 0.25)  # the v9 runner stops dispatching once under 0.25 h are left
+    run = Path(WORK, f"rollouts-{name}")
+    run.mkdir(parents=True, exist_ok=True)
+    for item in ("manifest.json", "split.json"):
+        if not (run / item).is_file():
+            shutil.copy(Path(RESCALED_RUN, item), run / item)
+    cmd = ["ii", "rollouts", str(run), "--policy", "groot-1028", "--capture", _rescaled_capture(), "--features", features,
+           "--episodes", str(episodes), "--direction", direction, "--seed", str(seed)]
+    if controls:
+        cmd += ["--control-features", controls]
+    _run(cmd, env)
+    out = {"summary.json": json.loads((run / "rollouts" / "summary.json").read_text()),
+           "ablate_plan.json": json.loads((run / "rollouts" / "ablate_plan.json").read_text())}
+    results = Path(ROLLOUT_RESULTS, name)
+    results.mkdir(parents=True, exist_ok=True)
+    for key, data in out.items():
+        (results / key).write_text(json.dumps(data, indent=1) + "\n")
+    volume.commit()
+    return out
+
+
+@app.local_entrypoint()
+def rollouts(name: str, features: str, controls: str = "", episodes: int = 3, direction: str = "fall", seed: int = 70000,
+             hours: float = 0.3, out: str = "") -> None:
+    import json
+
+    result = rollouts_remote.remote(name, features, controls, episodes, direction, seed, hours)
+    Path(out or f"rollouts-{name}.json").write_text(json.dumps(result, indent=1) + "\n")
+    summary = result["summary.json"]
+    for row in summary.get("features", []):
+        print(row.get("feature_id"), row.get("role"), "delta", row.get("delta"), "p", row.get("p_value"), "causal", row.get("causal"))
+    print(json.dumps({k: summary.get(k) for k in ("baseline", "recon_only", "direction")}, indent=1)[:2000])
+
+
+@app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=4, memory=24576)
+def action_screen_remote(min_rate: float = 0.10, top: int = 16, controls: int = 3, episodes: int = 6, features: str = "") -> dict:
+    """Cheap remove/boost screen of the rescaled SAE's densest features on recorded clips (exploration, never a finding):
+    which edit moves GR00T's planned actions most. Features firing on >= min_rate of held-out tokens, by rate x max act."""
+    import json
+    import shutil
+
+    env = _prepare()
+    run = RESCALED_RUN
+    stats = json.loads(Path(run, "features", "stats.json").read_text())
+    n = float(stats["n_heldout"])
+    dense = [f for f in stats["features"] if f["freq"] / n >= min_rate]
+    dense.sort(key=lambda f: -f["freq"] * f["max_act"])
+    ids = [int(x) for x in features.split(",") if x] or [int(f["id"]) for f in dense[:top]]
+    _run(["ii", "steer-scorecard", run, "--clips", f"{WORK}/clips-run", "--features", ",".join(map(str, ids)), "--controls",
+          str(controls), "--controls-from", "features", "--max-episodes", str(episodes), "--bootstrap", "200"], env)
+    card = json.loads(Path(run, "steering", "scorecard.json").read_text())
+    tag = "screen" if not features else "screen-" + features.replace(",", "-")
+    results = Path(ROLLOUT_RESULTS, tag)
+    results.mkdir(parents=True, exist_ok=True)
+    shutil.copy(Path(run, "steering", "scorecard.json"), results / "scorecard.json")
+    volume.commit()
+    meta = [{"id": f["id"], "rate": f["freq"] / n, "max_act": f["max_act"]} for f in dense]
+    return {"scorecard.json": card, "dense": meta, "n_dense": len(dense), "screened": ids}
+
+
+@app.local_entrypoint()
+def action_screen(min_rate: float = 0.10, top: int = 16, controls: int = 3, episodes: int = 6, features: str = "",
+                  out: str = "action-screen.json") -> None:
+    import json
+
+    result = action_screen_remote.remote(min_rate, top, controls, episodes, features)
+    Path(out).write_text(json.dumps(result, indent=1) + "\n")
+    print("dense features:", result["n_dense"])
+    for row in result["scorecard.json"]["rows"]:
+        excess = (row.get("excess") or {}).get("mean")
+        print(row["feature_id"], row["kind"], "change", row.get("action_change"), "excess", excess, "ratio", row.get("ratio"),
+              "pct", row["control_percentile"])

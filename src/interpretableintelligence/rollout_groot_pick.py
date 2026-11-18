@@ -251,7 +251,6 @@ def build_pick_plan(
     to overwrite it.
     """
     from interpretableintelligence.adapters.groot import random_sae
-    from interpretableintelligence.adapters.groot.v9 import ablate_v9
 
     if n < 1:
         raise ValueError(f"--pick must be >= 1, got {n}")
@@ -331,11 +330,7 @@ def build_pick_plan(
             "so nothing can be a finding; raise --episodes")
     else:
         log(f"rule 1 SPRT: p0 {sprt['p0']}, p1_rise {sprt['p1_rise']}; a rise call needs at least {shortest} episodes")
-    conditions = [
-        {"id": "baseline", "arm": "baseline", "kind": "baseline", "latents": None, "n_max": int(episodes), "sprt": False, "dir": "baseline"},
-        {"id": "recon-only", "arm": "baseline", "kind": "recon_only", "latents": [], "n_max": min(int(episodes), RECON_EPISODES),
-         "sprt": False, "dir": "baseline/recon-only", "dictionary": "trained"},
-    ]
+    conditions = _base_conditions(episodes)
     for feature in candidates:
         conditions.append({"id": f"cand-{feature}", "arm": "pick", "kind": "candidate", "latents": [feature], "n_max": int(episodes),
                            "sprt": False, "dir": f"pick/cand-{feature}", "dictionary": "trained"})
@@ -347,7 +342,21 @@ def build_pick_plan(
             conditions.append({"id": f"rsae-{int(item)}-{feature}", "arm": "random_sae", "kind": "random_sae", "latents": [feature],
                                "n_max": int(episodes), "sprt": False, "dir": f"random-sae/{int(item)}/{feature}",
                                "dictionary": f"random:{int(item)}"})
-    plan = {
+    plan = _plan_dict(run_dir, manifest, info, dictionaries, conditions, sprt, seed, request["capture_sae_sha256"])
+    plan["pick"] = {"request": request, "picker": PICKER, "picker_path": "picker/pick_candidates.py",
+                    "ranking": "candidate_ids, then contrast.jsonl order; first n", "trained_argv": trained["argv"],
+                    "candidates": candidates, "controls": control_ids,
+                    "random_sae_seeds": [int(item) for item in random_seeds], "random_sae_feature_ids": random_picks}
+    _write_plan(plan_path, plan)
+    log(f"wrote {plan_path}: candidates {candidates}, controls {control_ids}, random-SAE picks {random_picks}")
+    return plan
+
+
+def _plan_dict(run_dir: Path, manifest: dict, info: dict, dictionaries: dict, conditions: list[dict], sprt: dict, seed: int,
+               full_sha256: str) -> dict:
+    from interpretableintelligence.adapters.groot.v9 import ablate_v9
+
+    return {
         "schema": ablate_v9.PLAN_SCHEMA,
         "version": ablate_v9.ABLATE_VERSION,
         "unvalidated": True,
@@ -360,7 +369,7 @@ def build_pick_plan(
                  "rule": "out = x - norm_scale * sum_{i in S} f_i W_dec[i]; f = JumpReLU_thr(((x-norm_mu)/norm_scale - b_dec) W_enc + b_enc); "
                          "the same rule for every dictionary"},
         "sae": {"subset_file": dictionaries["trained"]["subset_file"], "subset_sha256": dictionaries["trained"]["subset_sha256"],
-                "full_sha256": request["capture_sae_sha256"], "d_in": int(manifest.get("d_model") or 0) or None,
+                "full_sha256": full_sha256, "d_in": int(manifest.get("d_model") or 0) or None,
                 "dictionaries": dictionaries},
         "seeds": {"rule": "seed = base + i; init_state_id = i % n_init_states", "base": int(seed),
                   "noise": "v9 per-episode torch.Generator(seed) routed into GR00T sample_noise"},
@@ -373,16 +382,113 @@ def build_pick_plan(
         "schedule": {"rule": "lockstep: each free env slot gets the next episode index of the active condition with the fewest "
                              "episodes dispatched (ties: `order`)",
                      "order": [item["id"] for item in conditions]},
-        "pick": {"request": request, "picker": PICKER, "picker_path": "picker/pick_candidates.py",
-                 "ranking": "candidate_ids, then contrast.jsonl order; first n", "trained_argv": trained["argv"],
-                 "candidates": candidates, "controls": control_ids,
-                 "random_sae_seeds": [int(item) for item in random_seeds], "random_sae_feature_ids": random_picks},
     }
-    rollouts.mkdir(parents=True, exist_ok=True)
+
+
+def _base_conditions(episodes: int) -> list[dict]:
+    return [
+        {"id": "baseline", "arm": "baseline", "kind": "baseline", "latents": None, "n_max": int(episodes), "sprt": False, "dir": "baseline"},
+        {"id": "recon-only", "arm": "baseline", "kind": "recon_only", "latents": [], "n_max": min(int(episodes), RECON_EPISODES),
+         "sprt": False, "dir": "baseline/recon-only", "dictionary": "trained"},
+    ]
+
+
+def _write_plan(plan_path: Path, plan: dict) -> None:
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = plan_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(plan, indent=1) + "\n")
     tmp.replace(plan_path)
-    log(f"wrote {plan_path}: candidates {candidates}, controls {control_ids}, random-SAE picks {random_picks}")
+
+
+def build_named_plan(
+    run_dir: Path,
+    capture: Path,
+    *,
+    candidates: list[int],
+    controls: list[int],
+    episodes: int,
+    seed: int,
+    direction: str = "rise",
+    random_sae: dict[int, list[int]] | None = None,
+    random_sae_dir: Path | None = None,
+    note: str | None = None,
+    log=print,
+) -> dict:
+    """A fixed-budget plan for features named by hand (``ii rollouts --policy groot-* --features ... --capture``).
+
+    ``controls`` are explicit control feature ids of the same dictionary (for example the matched-feature controls of
+    ``ii steer-scorecard --controls-from features``). ``random_sae`` maps an untrained SAE's seed to the features of it
+    that went through the same selection as the candidates; each seed's full SAE is read from
+    ``random_sae_dir/<seed>/sae/weights.safetensors`` (``adapters/groot/random_sae.py`` layout). ``direction`` is what the
+    summary scores: ``rise`` (research rule 1, the only direction that can be a finding) or ``fall`` (a positive control).
+    A plan already on disk is reused when built from the same request, otherwise this refuses to overwrite it.
+    """
+    if direction not in ("rise", "fall"):
+        raise ValueError(f"direction must be rise or fall, got {direction!r}")
+    if not candidates:
+        raise ValueError("name at least one candidate feature")
+    overlap = set(candidates) & set(controls)
+    if overlap:
+        raise ValueError(f"features {sorted(overlap)} are both candidates and controls")
+    random_sae = {int(k): [int(x) for x in v] for k, v in (random_sae or {}).items()}
+    if random_sae and random_sae_dir is None:
+        raise ValueError("random-SAE arms need the folder their untrained SAEs were saved in")
+    rollouts = Path(run_dir) / "rollouts"
+    plan_path = rollouts / PLAN_FILE
+    info = capture_info(capture)
+    request = {
+        "capture": str(Path(capture).resolve()),
+        "capture_sae_sha256": _sha256(info["weights"]),
+        "candidates": [int(x) for x in candidates],
+        "controls": [int(x) for x in controls],
+        "random_sae": {str(k): v for k, v in sorted(random_sae.items())},
+        "episodes": int(episodes),
+        "seed": int(seed),
+        "direction": direction,
+    }
+    if plan_path.is_file():
+        plan = _read_json(plan_path)
+        if (plan.get("pick") or {}).get("request") != request:
+            raise ValueError(f"{plan_path} was built with other arguments; use a new run folder")
+        log(f"reusing {plan_path}")
+        return plan
+    sae_dir = rollouts / SAE_DIR
+    dictionaries = {"trained": {
+        "subset_file": f"{SAE_DIR}/trained.safetensors",
+        "subset_sha256": _subset(info["weights"], list(candidates) + list(controls), sae_dir / "trained.safetensors"),
+        "full_sha256": request["capture_sae_sha256"],
+        "picks": sorted(int(x) for x in candidates),
+    }}
+    for item, picks in sorted(random_sae.items()):
+        full = Path(random_sae_dir) / str(item) / "sae" / "weights.safetensors"
+        if not full.is_file():
+            raise FileNotFoundError(f"untrained SAE for seed {item} not found at {full}")
+        dictionaries[f"random:{item}"] = {
+            "subset_file": f"{SAE_DIR}/random-{item}.safetensors",
+            "subset_sha256": _subset(full, picks, sae_dir / f"random-{item}.safetensors"),
+            "full_sha256": _sha256(full),
+            "picks": sorted(picks),
+        }
+    sprt = rise_sprt(capture_success_rate(info["manifest"]), int(episodes))
+    conditions = _base_conditions(episodes)
+    for feature in candidates:
+        conditions.append({"id": f"cand-{feature}", "arm": "named", "kind": "candidate", "latents": [int(feature)],
+                           "n_max": int(episodes), "sprt": False, "dir": f"named/cand-{feature}", "dictionary": "trained"})
+    for index, feature in enumerate(controls):
+        conditions.append({"id": f"ctrl{index + 1:02d}-{feature}", "arm": "named", "kind": "control", "latents": [int(feature)],
+                           "n_max": int(episodes), "sprt": False, "dir": f"named/ctrl{index + 1:02d}-{feature}", "dictionary": "trained"})
+    for item, picks in sorted(random_sae.items()):
+        for feature in picks:
+            conditions.append({"id": f"rsae-{item}-{feature}", "arm": "random_sae", "kind": "random_sae", "latents": [int(feature)],
+                               "n_max": int(episodes), "sprt": False, "dir": f"random-sae/{item}/{feature}",
+                               "dictionary": f"random:{item}"})
+    plan = _plan_dict(run_dir, info["manifest"], info, dictionaries, conditions, sprt, seed, request["capture_sae_sha256"])
+    plan["direction"] = direction
+    plan["pick"] = {"request": request, "picker": "named", "note": note, "candidates": sorted(int(x) for x in candidates),
+                    "controls": [int(x) for x in controls], "random_sae_seeds": sorted(random_sae),
+                    "random_sae_feature_ids": [sorted(random_sae[k]) for k in sorted(random_sae)]}
+    _write_plan(plan_path, plan)
+    log(f"wrote {plan_path}: candidates {candidates}, controls {controls}, random-SAE arms {random_sae}, direction {direction}")
     return plan
 
 

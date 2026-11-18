@@ -698,10 +698,26 @@ def rollouts(
             "--capture",
             exists=True,
             file_okay=False,
-            help="GR00T with --pick: capture run folder (acts, failure labels, trained SAE) the picker reads, "
-            "e.g. groot-1028-v9-n100.",
+            help="GR00T with --pick or --features: capture run folder (acts, failure labels, trained SAE) the plan is "
+            "built from, e.g. groot-1028-v9-n100.",
         ),
     ] = None,
+    control_features: Annotated[
+        str,
+        typer.Option(
+            "--control-features",
+            help="GR00T with --features and --capture: comma-separated control feature ids of the same SAE "
+            "(e.g. ii steer-scorecard's matched-feature controls), one arm each.",
+        ),
+    ] = "",
+    direction: Annotated[
+        str,
+        typer.Option(
+            "--direction",
+            help="GR00T with --features and --capture: rise (research rule 1; the only direction that can be a finding) "
+            "or fall (a positive control).",
+        ),
+    ] = "rise",
 ) -> None:
     """Compare baseline and intervened task success. Resume skips episodes already written."""
     from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
@@ -724,6 +740,30 @@ def rollouts(
                 controls=controls,
                 episodes=episodes,
                 seed=seed if seed else GROOT_SEED_BASE,
+                alpha=alpha,
+                workers=workers,
+                sae_path=sae,
+                v9_out=v9_out,
+            )
+            typer.echo(format_groot_report(summary))
+            typer.echo(f"wrote {run_dir / 'rollouts'}")
+            return
+        if is_groot_policy(policy) and capture is not None and features.strip():
+            from interpretableintelligence.rollout_groot import GROOT_SEED_BASE, execute_groot_named
+
+            if verify_slice or only or plan is not None:
+                raise ValueError("GR00T --features with --capture builds its own plan: drop --verify-slice, --only and --plan")
+            if random_sae:
+                raise ValueError("--random-sae compares picker against picker on GR00T: pass --pick N with --capture")
+            summary = execute_groot_named(
+                run_dir,
+                policy=policy,
+                capture=capture,
+                candidates=parse_feature_ids(features),
+                controls=parse_feature_ids(control_features) if control_features.strip() else [],
+                episodes=episodes,
+                seed=seed if seed else GROOT_SEED_BASE,
+                direction=direction,
                 alpha=alpha,
                 workers=workers,
                 sae_path=sae,

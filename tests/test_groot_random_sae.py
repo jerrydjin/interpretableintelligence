@@ -290,3 +290,39 @@ def test_plan_without_a_rise_design_has_no_findings():
 
     assert plan_rise_sprt({"sprt": {"p0": None, "cap": 24}}) is None
     assert plan_rise_sprt({}) is None
+
+
+def test_named_features_positive_control_scores_a_fall_and_validates(tmp_path: Path, capture: Path):
+    """--features with --capture: a fixed-budget plan for hand-named features, here scored as a fall (positive control)."""
+
+    def simulate(cond: dict, ep: int, seed: int) -> bool:
+        if cond["kind"] == "candidate":
+            return False  # the strong edit breaks every episode
+        return ep % 3 != 0  # baseline and controls succeed 2/3, on the same seeds
+
+    run = _run_dir(tmp_path)
+    from interpretableintelligence.rollout_groot import execute_groot_named
+
+    summary = execute_groot_named(run, policy="groot-mock", capture=capture, candidates=[PLANTED], controls=[1, 2, 3],
+                                  episodes=24, direction="fall", simulate=simulate, log=lambda *_: None)
+    plan = json.loads((run / "rollouts" / "ablate_plan.json").read_text())
+    assert plan["direction"] == "fall" and plan["pick"]["picker"] == "named"
+    assert [c["kind"] for c in plan["conditions"]] == ["baseline", "recon_only", "candidate", "control", "control", "control"]
+    assert summary["direction"] == "fall" and summary["candidate_source"] == "features" and summary["rise_sprt"] is None
+    planted = next(f for f in summary["features"] if f["role"] == "candidate")
+    assert planted["delta"] == pytest.approx(16 / 24)  # fall: baseline - intervention
+    assert planted["causal"] is True and planted["finding"] is False  # a fall is never a finding
+    errors: list[str] = []
+    _check_rollouts(run, 1, errors)
+    assert errors == []
+
+
+def test_named_features_cli_refuses_overlap_and_rebuild(tmp_path: Path, capture: Path):
+    run = _run_dir(tmp_path)
+    base = ["rollouts", str(run), "--policy", "groot-mock", "--capture", str(capture), "--episodes", "8"]
+    overlap = runner.invoke(app, [*base, "--features", str(PLANTED), "--control-features", f"1,{PLANTED}"])
+    assert overlap.exit_code != 0 and "both candidates and controls" in overlap.output
+    ok = runner.invoke(app, [*base, "--features", str(PLANTED), "--control-features", "1,2"])
+    assert ok.exit_code == 0, ok.output
+    changed = runner.invoke(app, [*base, "--features", str(PLANTED), "--control-features", "1,3"])
+    assert changed.exit_code != 0  # a plan built with other arguments is never overwritten
