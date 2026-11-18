@@ -127,7 +127,7 @@ print(f"{'SAE':<16}{'latents':>8}{'alive tr':>9}{'alive ho':>9}{'dense ho':>9}{'
 for name, r in rows:
     tr, ho = r["train"], r["heldout"]
     print(f"{name:<16}{tr['alive_latents'] + tr['dead_latents']:>8}{tr['alive_latents']:>9}{ho['alive_latents']:>9}"
-          f"{ho['dense_latents']:>9}{ho['l0_mean']:>7.2f}{ho['ev_normalised']:>8.4f}{ho['ev_per_dim_mean']:>10.4f}")
+          f"{ho['dense_latents']:>9}{ho['l0_mean']:>7.2f}{ho['ev_raw']:>8.4f}{ho['ev_per_dim_mean']:>10.4f}")
 ho = rows[0][1]["heldout"]
 print(f"\\nInput check: the {len(ho['top_dims'])} largest-variance channels hold {ho['variance_share_top_dims']:.1%} of held-out variance "
       f"(channels {ho['top_dims']}).")

@@ -57,7 +57,11 @@ SAE_DIR = "sae"
 REPORT = "retrain.json"
 EVAL_FILE = "heldout_eval.json"
 CHUNK_ROWS = 8192
-NORMS = ("keep", "fit")
+NORMS = ("keep", "fit", "channel")
+# A channel-normalised SAE has a [D] norm_scale, which the v9 layout (one scalar) cannot express: the hook, the
+# picker and the importer read norm_scale[0]. So its weights go under this name, which none of them opens.
+CHANNEL_WEIGHTS = "weights.channel-norm.safetensors"
+CHANNEL_SCALE_FLOOR = 1e-3  # a channel's scale is at least this times the median channel std
 REVIVE = ("auxk", "resample", "none")
 TOP_DIMS = 8
 RESAMPLE_UNTIL = 0.6  # no resampling in the last 40% of steps, so revived latents settle before the threshold is set
@@ -83,7 +87,8 @@ class RetrainConfig:
     # Resample every this many steps during the first RESAMPLE_UNTIL of training. 0: steps // 10.
     resample_every: int = 0
     # "keep": reuse the capture SAE's norm_mu / norm_scale (data statistics, not weights), so old and new SAEs see
-    # the same inputs. "fit": recompute them from the train rows.
+    # the same inputs. "fit": recompute them from the train rows. "channel": per-channel standardisation (train
+    # mean and per-channel std), an experiment: the result is not readable by the v9 hook (see CHANNEL_WEIGHTS).
     norm: str = "keep"
 
     def check(self) -> None:
@@ -158,8 +163,9 @@ def load_capture(capture: Path, device: torch.device, log: Callable[[str], None]
 
 
 def norm_stats(train: Split, source: dict[str, torch.Tensor] | None, mode: str) -> tuple[torch.Tensor, torch.Tensor]:
-    """``norm_mu`` [D] and the scalar ``norm_scale`` (shape [1]). ``fit``: train mean, and the scale that makes a
-    centred row's mean squared norm ``D``."""
+    """``norm_mu`` [D] and ``norm_scale``. ``fit``: train mean, and the scalar scale (shape [1]) that makes a
+    centred row's mean squared norm ``D``. ``channel``: train mean and each channel's own std (shape [D], floored at
+    ``CHANNEL_SCALE_FLOOR`` times the median std), so every channel has unit variance."""
     device = train.acts.device
     if mode == "keep":
         if source is None:
@@ -173,7 +179,14 @@ def norm_stats(train: Split, source: dict[str, torch.Tensor] | None, mode: str) 
     sq = torch.zeros(d, dtype=torch.float64, device=device)
     for x in train.chunks():
         sq += ((x.double() - mean) ** 2).sum(0)
-    scale = torch.sqrt((sq / train.n).mean()).reshape(1)
+    var = sq / train.n
+    if mode == "channel":
+        std = torch.sqrt(var)
+        floor = CHANNEL_SCALE_FLOOR * float(std.median())
+        if not floor > 0:
+            raise ValueError("train rows have zero variance in most channels")
+        return mean.float(), std.clamp_min(floor).float()
+    scale = torch.sqrt(var.mean()).reshape(1)
     if not (bool((scale > 0).all()) and bool(torch.isfinite(scale).all())):
         raise ValueError("train rows have zero variance")
     return mean.float(), scale.float()
@@ -205,7 +218,7 @@ def train(
     gen = torch.Generator(device=device).manual_seed(int(config.seed))
     batch = min(config.batch_tokens, train_split.n)
     mu = mu.to(device)
-    scale = scale.to(device=device, dtype=torch.float32).reshape(1)
+    scale = scale.to(device=device, dtype=torch.float32).reshape(-1)
     curve: list[dict] = []
     resample_every = config.resample_every or max(config.steps // 10, 1)
     resampled = 0
@@ -308,7 +321,10 @@ def evaluate(weights: dict[str, torch.Tensor], split: Split) -> dict:
     """The ``sae-heldout-eval.json`` metrics for one split, with the JumpReLU-at-threshold encoder."""
     device = split.acts.device
     w = {key: value.float().to(device) for key, value in weights.items()}
-    scale = float(w["norm_scale"].reshape(-1)[0])
+    scale = w["norm_scale"].reshape(-1)  # [1] or [D] (norm="channel")
+    # Errors are also measured in raw units (scaled back by norm_scale), so SAEs with different normalisations
+    # compare on the same footing. For a scalar scale the two spaces give the same EV.
+    s2 = (scale.double() ** 2).expand(int(split.acts.shape[1]))
     thr = float(w["threshold"].reshape(-1)[0])
     mu = w["norm_mu"]
     d = int(split.acts.shape[1])
@@ -330,6 +346,7 @@ def evaluate(weights: dict[str, torch.Tensor], split: Split) -> dict:
     mean_pos = {p: (sum_pos[p] / count_pos[p]).float() for p in positions}
     # Pass 2: errors, variances, firing counts.
     sse = sst = 0.0
+    sse_raw = sst_raw = 0.0
     sse_dim = torch.zeros(d, dtype=torch.float64, device=device)
     sst_dim = torch.zeros(d, dtype=torch.float64, device=device)
     sse_pos = {p: 0.0 for p in positions}
@@ -344,34 +361,40 @@ def evaluate(weights: dict[str, torch.Tensor], split: Split) -> dict:
         recon = f @ w["W_dec"] + w["b_dec"]
         sq_err = (xn - recon) ** 2
         err = sq_err.sum(-1)
+        dev = (xn - mean_all) ** 2
         sse += float(err.sum())
-        sst += float(((xn - mean_all) ** 2).sum())
+        sst += float(dev.sum())
+        sse_raw += float((sq_err.double() @ s2).sum())
+        sst_raw += float((dev.double() @ s2).sum())
         sse_dim += sq_err.double().sum(0)
-        sst_dim += ((xn - mean_all) ** 2).double().sum(0)
+        sst_dim += dev.double().sum(0)
         on = f > 0
         fires += on.sum(0)
         l0 += float(on.sum())
         for p in positions:
             sel = tok == p
-            sse_pos[p] += float(err[sel].sum())
-            sst_pos[p] += float(((xn[sel] - mean_pos[p]) ** 2).sum())
+            sse_pos[p] += float((sq_err[sel].double() @ s2).sum())
+            sst_pos[p] += float((((xn[sel] - mean_pos[p]) ** 2).double() @ s2).sum())
     ev = 1.0 - sse / sst if sst > 0 else float("nan")
+    ev_raw = 1.0 - sse_raw / sst_raw if sst_raw > 0 else float("nan")
+    raw_dim = sst_dim * s2
     freq = fires.float() / split.n
     alive = int((fires > 0).sum())
     return {
         "n_tokens": split.n,
         "n_episodes": int(torch.unique(split.episode).numel()),
-        # x_n and x differ by a shift and one scalar scale, so EV is the same in both spaces.
+        # EV in the SAE's normalised space, and in raw activation units. Equal for a scalar norm_scale; for
+        # norm="channel" ev_normalised weighs every channel equally and ev_raw is the one to compare across SAEs.
         "ev_normalised": round(ev, 4),
-        "ev_raw": round(ev, 4),
-        "fvu": round(1.0 - ev, 4),
+        "ev_raw": round(ev_raw, 4),
+        "fvu": round(1.0 - ev_raw, 4),
         # Mean over dimensions of each dimension's own EV. A few high-variance dimensions can carry ev_normalised;
         # this weighs every dimension equally, so it drops when the SAE only reconstructs the large ones.
         "ev_per_dim_mean": round(float((1.0 - sse_dim / sst_dim.clamp_min(1e-30)).mean()), 4),
         # Share of the split's total variance in its TOP_DIMS largest-variance dimensions (input statistic, the same for
         # every SAE). Near 1 means a few outlier channels dominate and ev_normalised mostly measures those.
-        "variance_share_top_dims": round(float(sst_dim.topk(min(TOP_DIMS, d)).values.sum() / sst_dim.sum().clamp_min(1e-30)), 4),
-        "top_dims": [int(i) for i in sst_dim.topk(min(TOP_DIMS, d)).indices.tolist()],
+        "variance_share_top_dims": round(float(raw_dim.topk(min(TOP_DIMS, d)).values.sum() / raw_dim.sum().clamp_min(1e-30)), 4),
+        "top_dims": [int(i) for i in raw_dim.topk(min(TOP_DIMS, d)).indices.tolist()],
         "l0_mean": round(l0 / split.n, 2),
         "alive_latents": alive,
         "dead_latents": n_latents - alive,
@@ -413,7 +436,7 @@ def sae_config(config: RetrainConfig, d: int, threshold: float, scale: float, ca
         "n_latents": config.n_latents,
         "k": config.k,
         "inference_threshold": threshold,
-        "norm": {"pos_mean": None, "norm_scale": scale, "mode": config.norm},
+        "norm": {"pos_mean": None, "norm_scale": scale, "mode": config.norm, "norm_scale_shape": "per_channel" if config.norm == "channel" else "scalar"},
         "train": {
             "trainer": "ii retrain-sae (adapters/groot/retrain_sae.py)",
             "steps": config.steps,
@@ -446,7 +469,7 @@ def retrain(
     source = random_sae.load_tensors(source_path) if source_path.is_file() else None
     train_split, held_split = load_capture(capture, device, log)
     mu, scale = norm_stats(train_split, source, config.norm)
-    log(f"norm: {config.norm} (norm_scale {float(scale[0]):.4g})")
+    log(f"norm: {config.norm} (norm_scale {float(scale.min()):.4g}..{float(scale.max()):.4g} over {scale.numel()} value(s))")
     started = time.perf_counter()
     weights, curve = train(train_split, mu, scale, config, log)
     seconds = time.perf_counter() - started
@@ -458,7 +481,11 @@ def retrain(
     links = _link_capture(capture, out)
     d = int(train_split.acts.shape[1])
     threshold = float(weights["threshold"])
-    random_sae.save_sae_dir(weights, out / SAE_DIR, sae_config(config, d, threshold, float(weights["norm_scale"][0]), capture, train_split.n))
+    scale_note = float(weights["norm_scale"].reshape(-1)[0]) if config.norm != "channel" else float(weights["norm_scale"].median())
+    path = random_sae.save_sae_dir(weights, out / SAE_DIR, sae_config(config, d, threshold, scale_note, capture, train_split.n))
+    if config.norm == "channel":
+        # Not readable by the v9 hook, picker or importer (scalar norm_scale): keep it out of weights.safetensors.
+        path.rename(path.with_name(CHANNEL_WEIGHTS))
     eval_doc = dict(new, loss_recovered=None, loss_recovered_note="not computed: needs the action head with the reconstruction spliced in")
     (out / SAE_DIR / EVAL_FILE).write_text(json.dumps(eval_doc, indent=1) + "\n", encoding="utf-8")
     report = {
@@ -491,6 +518,6 @@ def format_report(report: dict) -> str:
             total = r["alive_latents"] + r["dead_latents"]
             lines.append(
                 f"{name:<4} {split:<8} {total:>7} {r['alive_latents']:>6} {r['dead_latents']:>6} "
-                f"{r['dense_latents']:>6} {r['l0_mean']:>6.2f} {r['ev_normalised']:>7.4f}"
+                f"{r['dense_latents']:>6} {r['l0_mean']:>6.2f} {r['ev_raw']:>7.4f}"
             )
     return "\n".join(lines)
