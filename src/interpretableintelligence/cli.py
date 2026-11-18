@@ -1249,6 +1249,36 @@ def retrain_sae_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("map-feature")
+def map_feature_cmd(
+    capture: Annotated[Path, typer.Argument(help="Unpacked GR00T capture folder (acts/, split.json) both SAEs were trained on.")],
+    from_sae: Annotated[Path, typer.Option("--from-sae", help="SAE folder the feature id belongs to (e.g. the capture's sae/).")],
+    to_sae: Annotated[Path, typer.Option("--to-sae", help="SAE folder to find its counterpart in (e.g. an ii retrain-sae output's sae/).")],
+    feature: Annotated[int, typer.Option("--feature", min=0, help="Feature id in --from-sae.")],
+    out: Annotated[Path, typer.Option("--out", help="Folder for mapping.json (and the picker runs with --direction).")],
+    direction: Annotated[
+        bool, typer.Option("--direction/--no-direction", help="Also run the GR00T picker through both SAEs and check each mapped feature fires more before failure.")
+    ] = True,
+) -> None:
+    """Find a GR00T SAE feature's counterpart in another dictionary trained on the same activations.
+
+    Activation correlation and raw-unit decoder cosine on the capture's held-out tokens decide one counterpart, a split
+    into up to 3 features, or none, by fixed rules (adapters/groot/map_feature.py). Offline: never a finding.
+    """
+    from interpretableintelligence.adapters.groot.map_feature import map_feature
+
+    try:
+        report = map_feature(capture, from_sae, to_sae, feature, out, direction=direction, log=typer.echo)
+    except (ValueError, FileNotFoundError, FileExistsError, KeyError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    decision = report["decision"]
+    typer.echo(f"{decision['outcome']}: {decision['features']}")
+    if report["direction"] is not None:
+        typer.echo(f"direction check: {'pass' if report['direction']['passed'] else 'fail'}")
+    typer.echo(f"wrote {Path(out) / 'mapping.json'}")
+
+
 @app.command("compare")
 def compare_cmd(
     runs: Annotated[list[Path], typer.Argument(help="Two or more finished run folders that captured the same clips.")],

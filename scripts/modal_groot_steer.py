@@ -12,6 +12,10 @@ Matched-feature controls (other live SAE features instead of random directions),
     II_MODAL_HOURS=1 modal run --detach scripts/modal_groot_steer.py::scorecard --controls-from features
     modal run scripts/modal_groot_steer.py::fetch --controls-from features
 
+Task 1028 test of feature 6262 on the rescaled (channel-normalised) SAE, which lives on the retrain sweep's Volume:
+
+    modal run scripts/modal_groot_steer.py::map_feature                                           # checks 0 and 1, CPU only
+
 Everything persistent lives on the Volume ``ii-groot-steer``: the capture, Hugging Face weights, the LIBERO-plus
 assets, and the work folder (clips, run, steering). The work folder is committed every few minutes, so a run that
 hits its timeout or is stopped resumes where it left off when started again. The GPU function has a hard
@@ -41,6 +45,11 @@ GPU = os.environ.get("II_MODAL_GPU", "T4")
 HOURS = float(os.environ.get("II_MODAL_HOURS", "3"))
 
 volume = modal.Volume.from_name("ii-groot-steer", create_if_missing=True)
+RETRAIN_VOL = "/retrain"
+retrain_volume = modal.Volume.from_name("ii-groot-sae-retrain", create_if_missing=False)
+RESCALED_SAE = f"{RETRAIN_VOL}/runs/auxk-8192-chnorm/sae"
+CAPTURE_DIR = f"{WORK}/groot-1028-v9-n100"
+MAP_RESULTS = f"{VOL}/results-map"
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
@@ -163,6 +172,45 @@ def steer_smoke(features: str = "6262,7353,7775", controls_from: str = "features
         raise SystemExit(f"no run at {run}; run scorecard first")
     _run(["ii", "steer-scorecard", run, "--clips", f"{WORK}/clips-run", "--features", features, "--controls", "19",
           "--controls-from", controls_from, "--max-episodes", "1", "--bootstrap", "50"], env)
+
+
+def _rescaled_sae() -> str:
+    """The channel-norm SAE was written before PR 59 under its old file name; give it the standard one."""
+    sae = Path(RESCALED_SAE)
+    old, new = sae / "weights.channel-norm.safetensors", sae / "weights.safetensors"
+    if not new.is_file():
+        if not old.is_file():
+            raise SystemExit(f"no rescaled SAE weights in {sae}")
+        old.rename(new)
+        retrain_volume.commit()
+    return str(sae)
+
+
+@app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, timeout=1800, cpu=4, memory=16384)
+def map_feature_remote(feature: int = 6262, name: str = "6262") -> dict:
+    """Checks 0 and 1 of the 6262 design: ii map-feature from the capture SAE into the rescaled SAE, with the picker's
+    failure-direction check. CPU only. Returns mapping.json."""
+    import json
+    import shutil
+
+    to_sae = _rescaled_sae()
+    out = Path(MAP_RESULTS) / name
+    if out.exists():
+        shutil.rmtree(out)
+    _run(["ii", "map-feature", CAPTURE_DIR, "--from-sae", f"{CAPTURE_DIR}/sae", "--to-sae", to_sae,
+          "--feature", str(int(feature)), "--out", str(out)], dict(os.environ))
+    return json.loads((out / "mapping.json").read_text())
+
+
+@app.local_entrypoint()
+def map_feature(feature: int = 6262, out: str = "mapping-6262.json") -> None:
+    import json
+
+    report = map_feature_remote.remote(feature, str(feature))
+    Path(out).write_text(json.dumps(report, indent=1) + "\n")
+    print(json.dumps(report["decision"], indent=1))
+    print(json.dumps(report.get("direction"), indent=1))
+    print(f"wrote {out}")
 
 
 @app.function(volumes={VOL: volume}, timeout=300)
