@@ -845,6 +845,14 @@ def steer_scorecard_cmd(
         int | None,
         typer.Option("--max-episodes", min=1, help="Score only the first N held-out clips (sorted by id)."),
     ] = None,
+    controls_from: Annotated[
+        str,
+        typer.Option(
+            "--controls-from",
+            help="random: random directions at the feature's decoder norm. features: decoder directions of other live SAE "
+            "features matched on train-split firing rate, mean activation and decoder norm (a stronger bar).",
+        ),
+    ] = "random",
 ) -> None:
     """Steering scorecard: remove and boost top features on held-out clips, against matched random controls.
 
@@ -865,6 +873,7 @@ def steer_scorecard_cmd(
             seed=seed,
             bootstrap=bootstrap,
             max_episodes=max_episodes,
+            controls_from=controls_from,
             log=typer.echo,
         )
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ExplainError) as exc:

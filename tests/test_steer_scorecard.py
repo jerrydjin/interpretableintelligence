@@ -215,3 +215,65 @@ def test_playwright_scorecard_page_and_feature_section(demo, tmp_path):
         assert page.evaluate("() => document.documentElement.scrollWidth") <= 390
         assert errors == []
         browser.close()
+
+
+def test_matched_feature_controls_use_live_features_and_validate(demo, tmp_path, monkeypatch):
+    """``--controls-from features``: each control is another live SAE feature's decoder direction, never a steered one."""
+    import interpretableintelligence.steer_scorecard as scorecard_module
+
+    # The fake SAE has 12 features, too few for 19 matched controls; allow 3 so the path runs end to end.
+    monkeypatch.setattr(scorecard_module, "min_controls", lambda alpha: 1)
+    run = _copy_run(demo, tmp_path)
+    card = scorecard_module.execute_steer_scorecard(run, clips_dir=demo.clips, controls=3, bootstrap=50, controls_from="features", log=lambda *_: None)
+    assert card["controls_from"] == "features" and "matched on train-split" in card["control"]
+    assert set(card["control_features"]) == {str(fid) for fid in card["feature_ids"]}
+    for entry in card["control_features"].values():
+        ids = [control["id"] for control in entry["controls"]]
+        assert len(ids) == 3 and not set(ids) & set(card["feature_ids"])
+        assert all(control["rate"] > 0 and control["abs_cos"] <= 0.5 for control in entry["controls"])
+        assert [control["distance"] for control in entry["controls"]] == sorted(control["distance"] for control in entry["controls"])
+    assert validate_run(run) == []
+    assert "matched-feature controls" in scorecard_module.format_report(card)
+
+    broken = json.loads((run / "steering" / "scorecard.json").read_text(encoding="utf-8"))
+    broken["control_features"] = None
+    (run / "steering" / "scorecard.json").write_text(json.dumps(broken), encoding="utf-8")
+    assert any("control_features" in error for error in validate_run(run))
+
+
+def test_scorecards_from_before_matched_controls_still_validate(demo, tmp_path):
+    run = _copy_run(demo, tmp_path)
+    assert runner.invoke(app, ["steer-scorecard", str(run), "--clips", str(demo.clips), *FAST]).exit_code == 0
+    path = run / "steering" / "scorecard.json"
+    card = json.loads(path.read_text(encoding="utf-8"))
+    assert card["controls_from"] == "random" and card["control_features"] is None
+    for key in ("controls_from", "control_features"):
+        card.pop(key)
+    path.write_text(json.dumps(card), encoding="utf-8")
+    assert validate_run(run) == []
+
+
+def test_matching_prefers_similar_live_features_and_skips_near_copies():
+    import torch
+
+    from interpretableintelligence.sae import SAE
+    from interpretableintelligence.steer_scorecard import match_control_features
+
+    sae = SAE(4, 6)
+    with torch.no_grad():
+        dec = torch.eye(4)[:, [0, 1, 2, 3, 1, 2]].clone()
+        dec[:, 5] = torch.tensor([0.9, 0.1, 0.0, 0.0])  # nearly feature 0's direction
+        sae.W_dec.copy_(dec)
+    stats = {
+        "rate": np.array([0.5, 0.45, 0.05, 0.0, 0.5, 0.5]),
+        "mean_act": np.array([1.0, 1.0, 1.0, 1.0, 2.0, 1.0]),
+        "dec_norm": np.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.906]),
+        "n_train_tokens": np.array(100),
+    }
+    matched = match_control_features(Path("."), sae, [0], 2, stats=stats)["0"]
+    # 3 is dead and 5 is a near copy of 0; 1 is closest on rate, then 4 (mean activation off by 2x) beats 2 (rate off by 10x).
+    assert [control["id"] for control in matched["controls"]] == [1, 4]
+    with pytest.raises(ValueError, match="fewer than --controls"):
+        match_control_features(Path("."), sae, [0], 4, stats=stats)
+    with pytest.raises(ValueError, match="never fires"):
+        match_control_features(Path("."), sae, [3], 1, stats=stats)

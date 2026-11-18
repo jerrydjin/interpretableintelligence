@@ -6,6 +6,12 @@
     modal run --detach scripts/modal_groot_steer.py::scorecard                                    # the full run
     modal run scripts/modal_groot_steer.py::fetch                                                 # print results
 
+Matched-feature controls (other live SAE features instead of random directions), reusing the recorded clips and run:
+
+    modal run scripts/modal_groot_steer.py::steer_smoke                                           # 1 held-out episode
+    II_MODAL_HOURS=1 modal run --detach scripts/modal_groot_steer.py::scorecard --controls-from features
+    modal run scripts/modal_groot_steer.py::fetch --controls-from features
+
 Everything persistent lives on the Volume ``ii-groot-steer``: the capture, Hugging Face weights, the LIBERO-plus
 assets, and the work folder (clips, run, steering). The work folder is committed every few minutes, so a run that
 hits its timeout or is stopped resumes where it left off when started again. The GPU function has a hard
@@ -137,18 +143,33 @@ def smoke() -> None:
     _run(["ii", "record-libero", "--out", f"{VOL}/smoke/clips", "--episodes", "1", "--max-steps", "48", "--plus-dir", PLUS_DIR], env)
 
 
+def _results_dir(controls_from: str) -> str:
+    return RESULTS if controls_from == "random" else f"{RESULTS}-{controls_from}"
+
+
 @app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=4, memory=24576)
-def scorecard(features: str = "6262,7353,7775", episodes: int = 24) -> None:
+def scorecard(features: str = "6262,7353,7775", episodes: int = 24, controls_from: str = "random") -> None:
     env = _prepare()
-    env.update(FEATURES=features, EPISODES=str(episodes), RESULTS=RESULTS)
+    env.update(FEATURES=features, EPISODES=str(episodes), RESULTS=_results_dir(controls_from), CONTROLS_FROM=controls_from)
     _run(["bash", "scripts/groot_steer_scorecard.sh", CAPTURE, WORK], env)
 
 
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, cpu=4, memory=24576)
+def steer_smoke(features: str = "6262,7353,7775", controls_from: str = "features") -> None:
+    """The scorecard step alone on one held-out episode of the existing run (needs a finished ``scorecard`` first)."""
+    env = _prepare()
+    run = f"{WORK}/run"
+    if not Path(run, "manifest.json").is_file():
+        raise SystemExit(f"no run at {run}; run scorecard first")
+    _run(["ii", "steer-scorecard", run, "--clips", f"{WORK}/clips-run", "--features", features, "--controls", "19",
+          "--controls-from", controls_from, "--max-episodes", "1", "--bootstrap", "50"], env)
+
+
 @app.function(volumes={VOL: volume}, timeout=300)
-def _results() -> dict:
+def _results(controls_from: str = "random") -> dict:
     out = {}
     for name in ("scorecard.json", "record.json", "features-stats.json"):
-        path = Path(RESULTS) / name
+        path = Path(_results_dir(controls_from)) / name
         if path.is_file():
             data = __import__("json").loads(path.read_text())
             if name == "features-stats.json":
@@ -160,10 +181,10 @@ def _results() -> dict:
 
 
 @app.local_entrypoint()
-def fetch(out: str = "groot-steer-results.json") -> None:
+def fetch(out: str = "groot-steer-results.json", controls_from: str = "random") -> None:
     """Copy the small result files off the Volume through the API (no direct storage download)."""
     import json
 
-    results = _results.remote()
+    results = _results.remote(controls_from)
     Path(out).write_text(json.dumps(results, indent=1) + "\n")
     print(f"wrote {out}: {sorted(results)}")

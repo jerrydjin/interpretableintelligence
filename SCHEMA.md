@@ -398,6 +398,8 @@ steering/scorecard.json
 
 **Edits.** On every window of every held-out clip (`split.json`), for each feature that fires on that window (some token above `DEAD_ACT_EPS`): `remove` scales the feature by 0 and `boost` scales it by `boost_factor`. The edit adds `(factor - 1) * f_i * W_dec[:, i]` on each token and keeps the SAE's reconstruction error. Each edit has `n_controls` matched controls. Control `k` of feature `i` is one random direction, rescaled to the norm of `W_dec[:, i]`, used on every window. On a window it adds the same per-token coefficients `(factor - 1) * f_i`, permuted across that window's tokens. `n_controls` is at least 19, so a p-value can reach 0.05.
 
+With `--controls-from features` (`controls_from: "features"`), control `k` of feature `i` is instead the decoder column of another live SAE feature `j_k`, rescaled to the norm of `W_dec[:, i]`, and on each window it adds `(factor - 1) * f_i` on the same tokens (no permutation). The `j_k` are the `n_controls` features nearest to `i` on the train split's firing rate (share of train tokens above `DEAD_ACT_EPS`), mean activation when firing and decoder norm, by the sum of absolute log ratios (ties toward the smaller id). Features that never fire on the train split, the other steered features, and features whose decoder has |cosine| above `STEER_MATCH_MAX_COS` (0.5) with `W_dec[:, i]` are skipped. Fewer qualifying features than `n_controls` stops the command.
+
 **effects.parquet.** One row per (feature, kind, arm, clip, window) where the feature fires. Columns, in order:
 
 | column | type | meaning |
@@ -411,7 +413,7 @@ steering/scorecard.json
 | `rel_change` | float32 | `‖edited − clean‖ / ‖clean‖` over the masked output (for GR00T, the planned action chunk). |
 | `abs_change` | float32 | Mean per-row L2 change (per action step for GR00T, in the policy's normalised units). |
 
-**scorecard.json.** Top-level keys: `schema_version` (1), `run_id`, `model_sha`, `layer`, `split_sha`, `adapter` (all matching the manifest), `target` (`action_chunk` for `groot:` adapters, else `masked_prediction`), `metric` (`relative_l2_change`), `selection`, `feature_ids`, `boost_factor`, `n_controls`, `control`, `seed`, `bootstrap`, `confidence` (0.95), `alpha` (0.05), `sae_usable`, `n_episodes` and `n_windows` (held-out clips and windows scored), `rows`, `rollout_finding` (always false), and `note`.
+**scorecard.json.** Top-level keys: `schema_version` (1), `run_id`, `model_sha`, `layer`, `split_sha`, `adapter` (all matching the manifest), `target` (`action_chunk` for `groot:` adapters, else `masked_prediction`), `metric` (`relative_l2_change`), `selection`, `feature_ids`, `boost_factor`, `n_controls`, `control`, `seed`, `bootstrap`, `confidence` (0.95), `alpha` (0.05), `sae_usable`, `n_episodes` and `n_windows` (held-out clips and windows scored), `rows`, `rollout_finding` (always false), and `note`. New scorecards also carry `controls_from` (`random` or `features`) and `control_features`: null for `random`, else one entry per feature id (as a string) with `feature` and `controls` (each `{id, rate, mean_act, dec_norm}`, controls also `distance` and `abs_cos`, nearest first), `n_pool` and `n_train_tokens`. A scorecard without these two keys was made with random controls and still validates.
 
 `rows` holds one object per feature and kind, features in `feature_ids` order, `remove` before `boost`. Over the rows of that feature and kind:
 

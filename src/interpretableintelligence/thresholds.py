@@ -133,6 +133,11 @@ STEER_ALPHA = 0.05
 # Relative changes at or below this are numerical dust when deciding whether the
 # feature moved the actions more than every control on a window.
 STEER_TIE_EPS = 1e-9
+# `--controls-from features`: controls are the decoder directions of other live SAE
+# features, matched to the steered feature on train-split firing rate, mean firing
+# activation and decoder norm. A feature whose decoder is closer than this |cosine|
+# to the steered feature's is skipped (it would be a near-copy, not a control).
+STEER_MATCH_MAX_COS = 0.5
 
 # Failure probe (`ii probe`, probe/). Independent of `real` and of the rollout
 # causal gate: it never rewrites scoreboard.json and never sets real. The gate

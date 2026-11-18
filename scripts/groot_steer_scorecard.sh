@@ -8,8 +8,8 @@
 #          dictionary whose feature ids are measured (default 6262,7353,7775: the PR 50 picks on the capture SAE).
 # WORK     output folder (default runs/groot-1028-steer): clips/, run/, run/steering/.
 #
-# Environment knobs: FEATURES, EPISODES (24), HELDOUT_FRAC (0.75), CONTROLS (19), BOOST (ii default), SEED0 (60000),
-# PLUS_DIR (LIBERO-plus checkout), MAX_STEPS, RESULTS (a folder to copy the small result files to).
+# Environment knobs: FEATURES, EPISODES (24), HELDOUT_FRAC (0.75), CONTROLS (19), CONTROLS_FROM (random|features), BOOST (ii default),
+# SEED0 (60000), PLUS_DIR (LIBERO-plus checkout), MAX_STEPS, RESULTS (a folder to copy the small result files to).
 # Every step resumes: rerun the same command after a disconnect.
 set -euo pipefail
 
@@ -48,7 +48,7 @@ echo "== 2/3 capture DiT block 5 on those clips, with the capture's SAE frozen i
 ii run groot --clips "$WORK/clips-run" --out "$WORK/run" --sae-from "$CAPTURE" --heldout-frac "$HELDOUT_FRAC" --no-score --no-serve
 
 echo "== 3/3 steering scorecard on held-out episodes"
-ii steer-scorecard "$WORK/run" --clips "$WORK/clips-run" --features "$FEATURES" --controls "$CONTROLS" ${BOOST:+--boost "$BOOST"}
+ii steer-scorecard "$WORK/run" --clips "$WORK/clips-run" --features "$FEATURES" --controls "$CONTROLS" ${CONTROLS_FROM:+--controls-from "$CONTROLS_FROM"} ${BOOST:+--boost "$BOOST"}
 
 python3 - "$WORK" "$FEATURES" <<'PYEOF'
 import json, sys
