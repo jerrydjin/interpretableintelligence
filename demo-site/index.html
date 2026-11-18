@@ -16,36 +16,26 @@
         <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
         <span class="wordmark-text">interpretable intelligence</span>
       </a>
-      <nav class="nav"><a href="/explore/">Explore</a><a href="/results/">Results</a><a href="/groot/">GR00T</a><a href="/vjepa/">V-JEPA 2</a><a href="/droid/">DINOv2</a><a href="/picker/">Picker</a><a href="/fake/">Pipeline demo</a></nav>
+      <nav class="nav"><a href="/droid/">Try it</a><a href="/results/">Research</a><a href="/start/">Run it yourself</a><a href="/demos/">Demos</a></nav>
     </div>
   </header>
   <main class="prose">
     <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
     <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
-    <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
-    <h2>What you get today</h2>
-    <p><code>ii</code> is free and local. <code data-cmd="run">ii run</code> captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); <code data-cmd="view">ii view</code> opens the run; <code data-cmd="validate">ii validate</code> checks it. <code data-cmd="rollouts">ii rollouts</code> compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. <code data-cmd="import">ii import</code> brings rollout logs you already have into a run folder that validate accepts.</p>
-    <h2>Proof</h2>
-    <p data-testid="control-headline">Feature 720 tracked failures, and turning it off dropped success from 39/75 to 1/9. Turning off random features caused falls too in 5 of 20 runs. `ii` makes you run that control before calling a feature real.</p>
-    <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>ablate_v9.py</code></a>), 641 rollouts. Label: <span class="badge badge-unverified">Tested: no causal effect found</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
-    <p data-testid="droid-proof"><a href="/droid/">Open a real run: facebook/dinov2-small on 100 DROID robot clips, with 5 features that passed every check and a playground to remove or boost them.</a></p>
-    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
+    <p class="actions"><a class="button" href="/start/" data-testid="cta">Run ii on your model</a><a class="button button-quiet" href="/droid/">Try a real model</a></p>
+    <ul class="doors" data-testid="doors">
+      <li><a href="/droid/"><span class="section-name">Try it</span><span class="section-text">Watch a real vision model on robot video, see which features fire where, and switch them off or turn them up.</span></a></li>
+      <li><a href="/results/"><span class="section-name">Research</span><span class="section-text">What we measured on real robot models, and the controls that decide what counts.</span></a></li>
+      <li><a href="/start/"><span class="section-name">Run it yourself</span><span class="section-text">Install ii, try it on a practice model, then point it at yours. Free and local.</span></a></li>
+    </ul>
+    <p data-testid="live-cta"><a href="/live/">Or try it live on your own picture:</a> see what a real vision model notices, switch a feature off and watch its view change. Nothing to install.</p>
+    <h2>Latest result</h2>
+    <p data-testid="control-headline">Feature 720 tracked failures, and turning it off dropped success from 39/75 to 1/9. Turning off random features caused falls too in 5 of 20 runs. ii makes you run that control before calling a feature real.</p>
+    <p data-testid="proof">GR00T N1.7 on LIBERO-plus, 641 rollouts, run with the repo's ablation runner (<a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>ablate_v9.py</code></a>). <span class="badge badge-unverified">Tested: no causal effect found</span> <a href="/groot/" data-testid="proof-link">Read the study</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
-      <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>
-      <li><span class="badge badge-unverified">Coming</span> Closed-loop rollouts at scale.</li>
-      <li><span class="badge badge-unverified">Coming</span> Live GR00T rollouts through <code>ii</code>.</li>
-    </ul>
-    <h2 id="quickstart">Quickstart</h2>
-    <pre class="quickstart"><code>uv sync
-uv run ii try</code></pre>
-    <p><code data-cmd="try">ii try</code> writes practice clips and runs the pipeline on the fake model.</p>
-    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code> — New here? Start with this. Finds features in a small practice model and opens the playground.</li><li><code data-cmd="run">ii run</code> — Capture, train, extract features, score what is missing, then serve the viewer.</li><li><code data-cmd="view">ii view</code> — Start a local viewer for a run folder and open it in a browser.</li><li><code data-cmd="rollouts">ii rollouts</code> — Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written.</li><li><code data-cmd="validate">ii validate</code> — Validate a run folder against the schema.</li></ul>
-    <p><a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md">The rest of the commands are in the README.</a></p>
-    <h2>Synthetic demos</h2>
-    <ul class="section-list" data-testid="synthetic-sections">
-      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer. Not a result on a real model.</span></a></li>
-      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> Generated clips with planted features. Shows the viewer end to end. Not a result on a real model.</span></a></li>
+      <li>Closed-loop rollouts at scale.</li>
+      <li>Your own model's dictionary, trained and checked on a GPU.</li>
     </ul>
     </main>
 </body>

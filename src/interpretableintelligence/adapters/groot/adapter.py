@@ -81,6 +81,9 @@ VLM_PROCESSOR_REPO = os.environ.get("GROOT_VLM_PROCESSOR_REPO", "Qwen/Qwen3-VL-2
 _LOADED: dict = {}
 # Edited copies per DiT batch in ``predict_masked_many``.
 MANY_BATCH = 32
+# Backbone outputs kept per window. They live on the GPU (a few MB each for N1.7), so a pass over hundreds of
+# windows (capture, the steering scorecard) keeps only the most recent ones; reruns of one window still hit.
+CONTEXT_CACHE = 8
 
 
 def parse_spec(spec: str) -> str:
@@ -379,6 +382,9 @@ class GrootAdapter:
         if cached is None:
             with torch.no_grad():
                 cached = self.backend.context(self.observation(clip, window))
+            contexts = [entry for entry in self._cache if entry[0] == "context"]
+            for entry in contexts[: max(0, len(contexts) - CONTEXT_CACHE + 1)]:
+                del self._cache[entry]
             self._cache[key] = cached
         return cached
 
@@ -493,11 +499,12 @@ class LeRobotGroot:
                 "rename_observations_processor": {"rename_map": {}},
                 "groot_n1_7_vlm_encode_v1": {"device": str(device), "model_name": VLM_PROCESSOR_REPO},
             }
-            pre, _post = make_pre_post_processors(
+            pre, post = make_pre_post_processors(
                 policy_cfg=policy.config, pretrained_path=self.checkpoint, preprocessor_overrides=overrides
             )
-            _LOADED[key] = (policy, pre)
-        policy, self.pre = _LOADED[key]
+            _LOADED[key] = (policy, pre, post)
+        # ``post`` maps policy actions back to env units; only ``ii record-libero`` drives an env with it.
+        policy, self.pre, self.post = _LOADED[key]
         model = policy._groot_model
         head = model.action_head
         if random_init:

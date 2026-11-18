@@ -219,6 +219,10 @@ A real run is larger, mostly video and frame images. `--max-clips N` carries onl
 
 `make demo-site` (or `ii export-site --out demo-site`) rebuilds the static site in `demo-site/`. Serve that directory with any static host. It does not start the viewer API.
 
+`demo-site/live/` is the live playground: DINOv2-small and the DROID dictionary. Any picture, a webcam or the sample frames; see which features fire on each patch, switch one off, turn it up or force it on, and watch the model's final view change. `ii export-live runs/<id> --out demo-site/live/packs/<name>` packs another `hf` image-model run; open it with `/live/?pack=packs/<name>/`.
+
+The model runs on a small backend (`ii serve-live` on your machine, `ii deploy-live` on your Modal account, scaled to zero when idle), and the page is a thin client of its versioned API (`docs/PLAYGROUND-API.md`). `demo-site/live/config.json` holds the backend's URL; with `"api": null` the page runs the pack in the browser instead (ONNX Runtime Web). `?api=http://127.0.0.1:8787` points one visit at a local backend.
+
 ## Layout
 
 | Path | What it is |

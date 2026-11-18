@@ -23,6 +23,7 @@ from interpretableintelligence.view import load_run
 REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
 EXPORT_MARKER = export_run.MARKER
+LIVE_KEEP = ("live", "vercel.json")
 DROID_COMMANDS = (
     "uv run ii get-clips --out clips/droid",
     "# The labels here came from a vision-language model: set FIREWORKS_API_KEY (or another key, see README).",
@@ -58,9 +59,20 @@ def export_site(
     if (droid / EXPORT_MARKER).is_file():
         kept = Path(tempfile.mkdtemp(prefix="ii-droid-")) / "droid"
         shutil.copytree(droid, kept)
+    # The live playground (``ii export-live`` packs plus its page) and the host config are
+    # hand-kept parts of the site, so a regeneration keeps them as they are.
+    keep_dir = Path(tempfile.mkdtemp(prefix="ii-site-keep-"))
+    kept_live = [name for name in LIVE_KEEP if (out / name).exists()]
+    for name in kept_live:
+        source = out / name
+        (shutil.copytree if source.is_dir() else shutil.copy2)(source, keep_dir / name)
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    for name in kept_live:
+        source = keep_dir / name
+        (shutil.copytree if source.is_dir() else shutil.copy2)(source, out / name)
+    shutil.rmtree(keep_dir, ignore_errors=True)
     _copy_static(out / "static")
     (out / "favicon.ico").write_bytes(_favicon_png())
     work = Path(work_dir) if work_dir else out / ".work"
@@ -87,17 +99,21 @@ def export_site(
     checks = _groot_checks(groot)
     random_control = _random_control(randinit)
     atp_result = _atp(atp)
-    droid_run = _write_droid(out / "droid", kept)
+    live = (out / "live" / "index.html").is_file()
+    droid_run = _write_droid(out / "droid", kept, live=live)
     if kept is not None:
         shutil.rmtree(kept.parent, ignore_errors=True)
-    _write_product(out / "index.html", groot_summary, groot_status, droid_run)
+    _write_product(out / "index.html", groot_summary, groot_status, droid_run, live=live)
     _write_results(
         out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result, droid_run
     )
     _write_picker(out / "picker", picker)
     _write_vjepa(out / "vjepa", vjepa, random_control, atp_result)
     _write_groot(out / "groot", groot / "groot-1028-ablate-summary.json", groot_summary, groot_status, checks)
-    _write_explore(out / "explore" / "index.html", groot_summary)
+    _write_start(out / "start" / "index.html")
+    _write_demos(out / "demos" / "index.html")
+    # /explore/ was its own page; it is now the top of the GR00T study.
+    _redirect(out / "explore" / "index.html", "/groot/")
     shutil.rmtree(work, ignore_errors=True)
     return out
 
@@ -156,7 +172,7 @@ def _viewer_page(sentence: str) -> str:
     return html.replace("  </header>\n", "  </header>\n" + score, 1)
 
 
-def _write_droid(dest: Path, source: Path | None) -> dict | None:
+def _write_droid(dest: Path, source: Path | None, live: bool = False) -> dict | None:
     """Put an ``ii export`` of a real run at ``dest``, under the demo bar.
 
     The export's data (clips, features, precomputed playground) is copied as it is; nothing
@@ -182,12 +198,35 @@ def _write_droid(dest: Path, source: Path | None) -> dict | None:
     line = (
         '  <section class="score-line droid-banner">\n'
         f'    <p data-testid="droid-banner">{escape(_droid_sentence(run))}</p>\n'
+        f"{_droid_guide(run)}"
         f'    <details><summary>Run it yourself</summary><pre class="quickstart"><code>{commands}</code></pre></details>\n'
-        "  </section>\n"
+        + (
+            '    <p data-testid="droid-live"><a href="/live/">Try the same model live on your own picture</a>: '
+            "switch a feature off and watch its view change.</p>\n"
+            if live
+            else ""
+        )
+        + "  </section>\n"
     )
     html = html.replace("  </header>\n", "  </header>\n" + line, 1)
     (dest / "index.html").write_text(html, encoding="utf-8")
     return run
+
+
+def _droid_guide(run: dict) -> str:
+    """A collapsed, plain-English "what am I looking at" for newcomers: five lines, no jargon."""
+    lines = (
+        ("The model", f"DINOv2 is a vision model that robots use as their eyes. We showed it {_droid_clips(run)} short videos of robot arms at work (DROID)."),
+        ("Features", "A small tool splits the model's numbers into features. Each one is something the model notices, such as the arm, the ceiling or the edges of the picture."),
+        ("Labels", "An AI names each feature by looking at the moments it lights up most."),
+        ("Verified", "Each name is tested on videos the tool never saw, against random features, and by switching the feature off to see whether the model's view changes. Only features that pass every check get the badge."),
+        ("Play", "Pick a feature, turn it up, down or off, and watch how the model's view changes."),
+    )
+    rows = "".join(f"<dt>{escape(term)}</dt><dd>{escape(text)}</dd>" for term, text in lines)
+    return (
+        '    <details class="droid-guide" data-testid="try-guide"><summary>What am I looking at?</summary>'
+        f"<dl>{rows}</dl></details>\n"
+    )
 
 
 def _droid_verified(run: dict) -> list[str]:
@@ -226,21 +265,17 @@ def _droid_clips(run: dict) -> int:
     return int(export.get("clips_total") or len(run["clips"]))
 
 
-def _droid_proof(run: dict | None) -> str:
-    if run is None:
-        return ""
-    model = (run.get("model") or {}).get("name") or "a real model"
-    count = len(_droid_verified(run))
+def _live_cta() -> str:
     return (
-        f'    <p data-testid="droid-proof"><a href="/droid/">Open a real run: {escape(str(model))} on '
-        f"{_droid_clips(run)} DROID robot clips, with {count} features that passed every check "
-        "and a playground to remove or boost them.</a></p>\n"
+        '    <p data-testid="live-cta"><a href="/live/">Or try it live on your own picture:</a> '
+        "see what a real vision model notices, switch a feature off and watch its view change. "
+        "Nothing to install.</p>\n"
     )
 
 
 def _demo_bar(current: str) -> str:
     return (
-        '  <nav class="demo-bar" aria-label="Demo sections">'
+        '  <nav class="demo-bar" aria-label="Site sections">'
         f'<a class="demo-home" href="/">Home</a>{_nav(current)}</nav>'
     )
 
@@ -254,26 +289,44 @@ def _wordmark() -> str:
     return match.group(0).replace('href="#/"', 'href="/"', 1)
 
 
+# The site has four sections. Every page belongs to one, and the nav marks that section.
+SECTIONS = (
+    ("try", "/droid/", "Try it"),
+    ("research", "/results/", "Research"),
+    ("start", "/start/", "Run it yourself"),
+    ("demos", "/demos/", "Demos"),
+)
+SECTION_OF = {
+    "droid": "try",
+    "live": "try",
+    "results": "research",
+    "groot": "research",
+    "vjepa": "research",
+    "start": "start",
+    "demos": "demos",
+    "picker": "demos",
+    "fake": "demos",
+}
+# Pages inside a section get a small link back to it above their title.
+PARENT = {"groot": "research", "vjepa": "research", "picker": "demos"}
+
+
 def _nav(current: str) -> str:
-    items = (
-        ("explore", "/explore/", "Explore"),
-        ("results", "/results/", "Results"),
-        ("groot", "/groot/", "GR00T"),
-        ("vjepa", "/vjepa/", "V-JEPA 2"),
-        ("droid", "/droid/", "DINOv2"),
-        ("picker", "/picker/", "Picker"),
-        ("fake", "/fake/", "Pipeline demo"),
-    )
+    section = SECTION_OF.get(current, "")
     parts = []
-    for key, href, label in items:
+    for key, href, label in SECTIONS:
         attrs = f' href="{href}"'
-        if key == current:
+        if key == section:
             attrs += ' aria-current="page"'
         parts.append(f"<a{attrs}>{label}</a>")
     return "".join(parts)
 
 
 def _page(title: str, current: str, body: str) -> str:
+    parent = PARENT.get(current)
+    if parent:
+        href, label = next((href, label) for key, href, label in SECTIONS if key == parent)
+        body = f'\n    <p class="crumb"><a href="{href}">{label}</a></p>' + body
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -298,44 +351,95 @@ def _page(title: str, current: str, body: str) -> str:
 """
 
 
-def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None) -> None:
-    commands = dict(_ii_commands())
-    known = set(commands)
-    headline = escape(_control_headline(summary))
-    useful = ("try", "run", "view", "rollouts", "validate")
-    command_items = "".join(
-        f"<li>{_cmd(name, known)} — {escape(commands[name])}</li>" for name in useful
+def _redirect(path: Path, target: str) -> None:
+    """An old address that now lives elsewhere: a static page that forwards to it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="0; url={target}">
+  <link rel="canonical" href="{target}">
+  <title>Moved · interpretableintelligence</title>
+</head>
+<body><p>This page moved to <a href="{target}">{target}</a>.</p></body>
+</html>
+""",
+        encoding="utf-8",
     )
+
+
+def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None, live: bool = False) -> None:
+    """The front door: what ii is, three ways in, the latest result and what is coming."""
+    headline = escape(_control_headline(summary))
     episodes = _episode_total(summary)
+    try_text = (
+        "Watch a real vision model on robot video, see which features fire where, "
+        "and switch them off or turn them up."
+    )
     body = f"""
     <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
     <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
-    <p><a class="button" href="#quickstart" data-testid="cta">Run `ii` on your policy.</a></p>
-    <h2>What you get today</h2>
-    <p><code>ii</code> is free and local. {_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. {_cmd("import", known)} brings rollout logs you already have into a run folder that validate accepts.</p>
-    <h2>Proof</h2>
+    <p class="actions"><a class="button" href="/start/" data-testid="cta">Run ii on your model</a><a class="button button-quiet" href="/droid/">Try a real model</a></p>
+    <ul class="doors" data-testid="doors">
+      <li><a href="/droid/"><span class="section-name">Try it</span><span class="section-text">{try_text}</span></a></li>
+      <li><a href="/results/"><span class="section-name">Research</span><span class="section-text">What we measured on real robot models, and the controls that decide what counts.</span></a></li>
+      <li><a href="/start/"><span class="section-name">Run it yourself</span><span class="section-text">Install ii, try it on a practice model, then point it at yours. Free and local.</span></a></li>
+    </ul>
+{_live_cta() if live else ""}    <h2>Latest result</h2>
     <p data-testid="control-headline">{headline}</p>
-    <p data-testid="proof">Run with the repo's GR00T ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), {episodes} rollouts. Label: <span class="badge badge-unverified">{escape(status)}</span>. <a href="/explore/" data-testid="proof-link">Explore this result</a>.</p>
-{_droid_proof(droid_run)}    <p data-testid="vjepa-proof"><a href="/results/">On V-JEPA 2, loss-based scores couldn't tell a trained SAE from a random one — so that control is now the bar.</a></p>
+    <p data-testid="proof">GR00T N1.7 on LIBERO-plus, {episodes} rollouts, run with the repo's ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>). <span class="badge badge-unverified">{escape(status)}</span> <a href="/groot/" data-testid="proof-link">Read the study</a></p>
     <h2>What's coming</h2>
     <ul class="coming" data-testid="coming">
-      <li><span class="badge badge-unverified">Coming</span> The random-weights SAE control (a feature has to beat an untrained SAE before it counts).</li>
-      <li><span class="badge badge-unverified">Coming</span> Closed-loop rollouts at scale.</li>
-      <li><span class="badge badge-unverified">Coming</span> Live GR00T rollouts through <code>ii</code>.</li>
-    </ul>
-    <h2 id="quickstart">Quickstart</h2>
-    <pre class="quickstart"><code>uv sync
-uv run ii try</code></pre>
-    <p>{_cmd("try", known)} writes practice clips and runs the pipeline on the fake model.</p>
-    <ul class="commands" data-testid="commands">{command_items}</ul>
-    <p><a href="{README_URL}">The rest of the commands are in the README.</a></p>
-    <h2>Synthetic demos</h2>
-    <ul class="section-list" data-testid="synthetic-sections">
-      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer. Not a result on a real model.</span></a></li>
-      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> Generated clips with planted features. Shows the viewer end to end. Not a result on a real model.</span></a></li>
+{"" if live else "      <li>A live playground: any picture, every feature, edits that rerun the model.</li>\n"}      <li>Closed-loop rollouts at scale.</li>
+      <li>Your own model's dictionary, trained and checked on a GPU.</li>
     </ul>
     """
     path.write_text(_page("ii", "", body), encoding="utf-8")
+
+
+def _write_start(path: Path) -> None:
+    """How to run ii: install, the practice run, your own model, and the commands."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    commands = dict(_ii_commands())
+    known = set(commands)
+    useful = ("try", "run", "view", "rollouts", "validate")
+    command_items = "".join(
+        f"<li>{_cmd(name, known)}<span>{escape(commands[name])}</span></li>" for name in useful
+    )
+    own = escape("\n".join(line for line in DROID_COMMANDS[:3] if not line.startswith("#")))
+    body = f"""
+    <h1>Run it yourself</h1>
+    <p class="lede"><code>ii</code> is free and local. Try it on a practice model in a few minutes, then point it at yours.</p>
+    <h2 id="quickstart">Quickstart</h2>
+    <pre class="quickstart"><code>uv sync
+uv run ii try</code></pre>
+    <p>{_cmd("try", known)} writes practice clips, finds features in a small practice model and opens the playground on the strongest verified one.</p>
+    <h2>On a real model</h2>
+    <p>Any Hugging Face vision model works. This is how the DINOv2 run in Try it was made, on short DROID robot clips:</p>
+    <pre class="quickstart"><code>{own}</code></pre>
+    <h2>What you get today</h2>
+    <p>{_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. {_cmd("import", known)} brings rollout logs you already have into a run folder that validate accepts.</p>
+    <h2>Commands</h2>
+    <ul class="commands" data-testid="commands">{command_items}</ul>
+    <p><a href="{README_URL}">The rest of the commands are in the README.</a></p>
+    """
+    path.write_text(_page("Run it yourself", "start", body), encoding="utf-8")
+
+
+def _write_demos(path: Path) -> None:
+    """The synthetic demos, kept apart from the research so neither is mistaken for the other."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = """
+    <h1>Demos</h1>
+    <p class="lede"><b>Synthetic examples with a known answer.</b> They show how ii works end to end. They are not results on a real model.</p>
+    <ul class="section-list" data-testid="synthetic-sections">
+      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text">30 generated clips with planted features, in the same viewer a real run uses.</span></a></li>
+      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text">The picker run on generated rollouts, to check it finds a planted feature and nothing in pure noise.</span></a></li>
+    </ul>
+    """
+    path.write_text(_page("Demos", "demos", body), encoding="utf-8")
 
 
 def _write_results(
@@ -347,24 +451,18 @@ def _write_results(
     atp: dict,
     droid_run: dict | None = None,
 ) -> None:
+    """The research hub: one card per study on a real model."""
     path.parent.mkdir(parents=True, exist_ok=True)
     headline = escape(_control_headline(summary))
     body = f"""
-    <h1>Results</h1>
-    <p class="lede"><b>What we measured on real robot models, and the controls that decide what counts.</b> Every number on these pages is read from a result file in the repo. A feature is called real only when it passes the scoreboard rule. The synthetic demos are at the bottom and labelled.</p>
-    <ul class="section-list" data-testid="real-sections">
-      <li><a href="/groot/"><span class="section-name">GR00T N1.7 on LIBERO</span><span class="section-text">{headline} <span class="badge badge-unverified">{escape(groot_status)}</span></span></a></li>
-      <li><a href="/groot/#checks"><span class="section-name">Method checks</span><span class="section-text">{escape(_checks_summary(checks))}</span></a></li>
-      <li><a href="/vjepa/#random-control"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">{escape(_control_summary(control))}</span></a></li>
-      <li><a href="/vjepa/#atp"><span class="section-name">Attribution vs ablation</span><span class="section-text">{escape(_atp_summary(atp))}</span></a></li>
+    <h1>Research</h1>
+    <p class="lede"><b>What we measured on real robot models, and the controls that decide what counts.</b> Every number on these pages is read from a result file in the repo. A feature is called real only when it passes the scoreboard rule.</p>
+    <ul class="section-list section-list-wide" data-testid="real-sections">
+      <li><a href="/groot/"><span class="section-name">GR00T task 1028</span><span class="section-text">{headline} <span class="badge badge-unverified">{escape(groot_status)}</span></span></a></li>
+      <li><a href="/vjepa/"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">{escape(_control_summary(control))} {escape(_atp_summary(atp))}</span></a></li>
 {_droid_result(droid_run)}    </ul>
-    <h2>Synthetic demos</h2>
-    <ul class="section-list" data-testid="synthetic-sections">
-      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> The picker run on generated rollouts with a known answer.</span></a></li>
-      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text"><span class="badge badge-unverified">Synthetic</span> 30 generated clips with planted features, layer 16, seed 0, held-out fraction 0.2. Shows the viewer end to end.</span></a></li>
-    </ul>
     """
-    path.write_text(_page("Results", "results", body), encoding="utf-8")
+    path.write_text(_page("Research", "results", body), encoding="utf-8")
 
 
 def _write_picker(dest: Path, picker: Path) -> None:
@@ -393,7 +491,7 @@ def _write_picker(dest: Path, picker: Path) -> None:
         final_bits.append(f"{int(block['runs_with_final_candidate'])}/{int(block['n'])} ({label})")
     body = f"""
     <h1>Candidate picker on synthetic rollouts</h1>
-    <p><span class="badge badge-unverified">Synthetic</span> A test of the picker itself on generated rollouts where the answer is known. It is not a result on a real model.</p>
+    <p class="lede">A test of the picker itself on generated rollouts where the answer is known. It is not a result on a real model.</p>
     <p>Null runs with a final candidate, from <code>picker/synth_test.py --null-seeds 30</code>.</p>
     <table class="score-table" data-testid="null-counts">
       <thead><tr><th>Match</th><th>Final candidate</th></tr></thead>
@@ -501,6 +599,7 @@ def _write_vjepa(dest: Path, vjepa: Path, control: dict, atp: dict) -> None:
 
 
 def _write_groot(dest: Path, summary_path: Path, summary: dict, status: str, checks: dict) -> None:
+    """GR00T task 1028 in one place: the answer, the arms to explore, the stop rule, every condition, the checks."""
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(summary_path, dest / summary_path.name)
     baseline = _one_row(summary, lambda cond: cond == "baseline")
@@ -508,31 +607,9 @@ def _write_groot(dest: Path, summary_path: Path, summary: dict, status: str, che
     candidate_html = "\n".join(
         f'    <p data-testid="groot-candidate">{escape(_candidate_text(row))}</p>' for row in candidates
     )
-    body = f"""
-    <h1>GR00T N1.7 on LIBERO</h1>
-    <p><a href="/explore/">Explore this result</a>.</p>
-    <p data-testid="control-headline">{escape(_control_headline(summary))}</p>
-    <p data-testid="ablation-runner">{_runner_html(summary)}</p>
-    <p><span class="badge badge-unverified" data-testid="groot-status">{escape(status)}</span></p>
-    <p data-testid="groot-result">{escape(_groot_result_sentence(summary))}</p>
-    <p data-testid="groot-baseline">{escape(_baseline_line(baseline))}</p>
-{candidate_html}
-    <p data-testid="groot-controls">{escape(_controls_line(summary))}</p>
-{_checks_html(checks)}
-{_conditions_html(summary)}
-    """
-    (dest / "index.html").write_text(_page("GR00T N1.7", "groot", body), encoding="utf-8")
-
-
-def _write_explore(path: Path, summary: dict) -> None:
-    """Static walkthrough of the task-1028 ablation. Every figure is read from the summary or the runner."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    status = _groot_status(summary)
     spec = _sprt_spec()
     identity = _groot_identity()
-    headline = _explore_headline(summary)
     episodes = _episode_total(summary)
-    baseline = _one_row(summary, lambda cond: cond == "baseline")
     order = ("baseline", "A-cand-720", "B-cand-7081+5852")
     buttons = []
     panels = []
@@ -546,22 +623,28 @@ def _write_explore(path: Path, summary: dict) -> None:
         panels.append(_arm_panel(summary, row, selected))
     body = f"""
     <h1>GR00T task {escape(identity["task"])}</h1>
+    <p class="lede"><b>Does switching off one learned feature in NVIDIA's GR00T change whether it completes a task?</b> {escape(identity["name"])}, checkpoint <code>{escape(identity["checkpoint"])}</code>, on LIBERO-plus task {escape(identity["task"])}.</p>
+    <section data-testid="explore">
     <p><span class="badge badge-unverified" data-testid="explore-verdict">{escape(status)}</span></p>
-    <p data-testid="explore-headline">{escape(headline)}</p>
+    <p data-testid="explore-headline">{escape(_explore_headline(summary))}</p>
     <p data-testid="explore-real">Every feature on this run is real=false.</p>
-    <p data-testid="explore-runner">{episodes} rollouts. This ablation ran through <a href="{RUNNER_URL}"><code>{escape(RUNNER_PATH)}</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts --policy groot-1028</code> can now import or replay these v9 logs as a standard run folder.</p>
-    <p data-testid="explore-model">{escape(identity["name"])}, checkpoint <code>{escape(identity["checkpoint"])}</code>, on LIBERO-plus task {escape(identity["task"])}. The edit is on transformer block {escape(spec["layer"])} at the final denoise step.</p>
-    <h2>Stop rule</h2>
-    <p data-testid="stop-rule" data-stop-rule="{escape(spec["stop_rule"])}">{escape(_stop_rule_text(spec))}</p>
+    <p data-testid="explore-model">The edit is on transformer block {escape(spec["layer"])} at the final denoise step.</p>
     <h2>Arms</h2>
     <div class="arm-switch" role="group" aria-label="Arms" data-testid="arm-switch">{''.join(buttons)}</div>
     <p data-testid="interval-note">Intervals are unadjusted for early stopping; read them as descriptive.</p>
     {''.join(panels)}
-    <p>Every condition is listed on the <a href="/groot/#conditions">GR00T page</a>.</p>
-    <h2>Now run it on yours</h2>
-    <pre class="quickstart"><code>uv sync
-uv run ii try</code></pre>
-    <p><code>ii try</code> writes practice clips and runs the pipeline on the fake model. <code>ii rollouts --policy groot-1028</code> brings GR00T rollouts onto <code>ii</code>, but the random-weights SAE control (research rule 4) does not run on GR00T yet, so no GR00T rollout result can count as a finding.</p>
+    <h2>Stop rule</h2>
+    <p data-testid="stop-rule" data-stop-rule="{escape(spec["stop_rule"])}">{escape(_stop_rule_text(spec))}</p>
+    <p data-testid="explore-runner">{episodes} rollouts. This ablation ran through <a href="{RUNNER_URL}"><code>{escape(RUNNER_PATH)}</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts --policy groot-1028 --pick</code> now runs GR00T rollouts with the random-weights SAE control (research rule 4); this ablation predates it, so it cannot count as a finding.</p>
+    </section>
+    <h2>In detail</h2>
+    <p data-testid="ablation-runner">{_runner_html(summary)}</p>
+    <p data-testid="groot-result">{escape(_groot_result_sentence(summary))}</p>
+    <p data-testid="groot-baseline">{escape(_baseline_line(baseline))}</p>
+{candidate_html}
+    <p data-testid="groot-controls">{escape(_controls_line(summary))}</p>
+{_conditions_html(summary)}
+{_checks_html(checks)}
     <script>
     (function () {{
       var root = document.querySelector("[data-testid=arm-switch]");
@@ -584,7 +667,7 @@ uv run ii try</code></pre>
     }})();
     </script>
     """
-    path.write_text(_page(f"GR00T task {identity['task']}", "explore", body), encoding="utf-8")
+    (dest / "index.html").write_text(_page(f"GR00T task {identity['task']}", "groot", body), encoding="utf-8")
 
 
 def _arm_button(row: dict) -> str:
@@ -846,7 +929,7 @@ def _control_headline(summary: dict) -> str:
         f"from {int(baseline['successes'])}/{int(baseline['n'])} "
         f"to {int(single['successes'])}/{int(single['n'])}. "
         f"Turning off random features caused falls too in {fell} of {len(controls)} runs. "
-        "`ii` makes you run that control before calling a feature real."
+        "ii makes you run that control before calling a feature real."
     )
 
 
@@ -1043,7 +1126,7 @@ def _control_summary(control: dict) -> str:
     return (
         f"An SAE on a random-weights V-JEPA 2 scored higher on the loss-based checks than the trained model "
         f"(loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}). "
-        "Those scores cannot tell trained from random. The random-weights SAE control is not in the tool yet."
+        "Those scores cannot tell trained from random. The random-weights SAE control has since shipped in ii rollouts --pick."
     )
 
 
@@ -1058,7 +1141,7 @@ def _control_html(control: dict) -> str:
     ]
     body = "".join(f"<tr><td>{escape(a)}</td><td>{escape(b)}</td><td>{escape(c)}</td></tr>" for a, b, c in rows)
     return f"""    <h2 id="random-control">Random-weights control</h2>
-    <p data-testid="random-control">The same SAE recipe, trained on a randomly initialised V-JEPA 2 (same DROID clips, layer 16), reconstructs its activations better than the trained model's SAE does: explained variance {random['ev_heldout']:.3f} vs {trained['ev_heldout']:.3f}, loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}. On the random model, zeroing layer 16 lowers the loss (L_zero {random['L_zero']:.3f} vs L_clean {random['L_clean']:.3f}), so its loss_recovered measures nothing, yet it still reads near 1. Only the context-mean floor check told the two apart. Explained variance and loss_recovered cannot separate a trained dictionary from a random one, so we closed this track. The random-weights SAE control is not in the tool yet.</p>
+    <p data-testid="random-control">The same SAE recipe, trained on a randomly initialised V-JEPA 2 (same DROID clips, layer 16), reconstructs its activations better than the trained model's SAE does: explained variance {random['ev_heldout']:.3f} vs {trained['ev_heldout']:.3f}, loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}. On the random model, zeroing layer 16 lowers the loss (L_zero {random['L_zero']:.3f} vs L_clean {random['L_clean']:.3f}), so its loss_recovered measures nothing, yet it still reads near 1. Only the context-mean floor check told the two apart. Explained variance and loss_recovered cannot separate a trained dictionary from a random one, so we closed this track. The random-weights SAE control has since shipped in ii rollouts --pick.</p>
     <table class="score-table" data-testid="random-control-table">
       <thead><tr><th></th><th>Trained V-JEPA 2</th><th>Random weights</th></tr></thead>
       <tbody>{body}</tbody>

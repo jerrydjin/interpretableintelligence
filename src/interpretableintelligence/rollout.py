@@ -98,6 +98,7 @@ SUMMARY_KEYS = {
     "pick_discovery_episodes",
     "random_sae_seeds",
     "random_sae_feature_ids",
+    "rise_sprt",
     "fixed_budget_episodes",
     "total_episodes",
     "episodes_saved",
@@ -107,6 +108,7 @@ SUMMARY_KEYS = {
     "conditions",
     "features",
 }
+RISE_SPRT_KEYS = {"p0", "p1_rise", "p1_fall", "alpha", "beta", "cap", "stop_rule"}
 CONDITION_KEYS = {
     "role",
     "condition",
@@ -143,6 +145,7 @@ FEATURE_KEYS = {
     "random_sae_percentile",
     "n_random_sae",
     "beats_random_sae",
+    "sprt_verdict",
     "finding",
     "episodes_run",
     "stopped_early",
@@ -174,6 +177,9 @@ class RolloutConfig:
     random_sae_feature_ids: tuple[tuple[int, ...], ...] = ()
     # "fall": the edit should lower success (fake policies). "rise": it should raise it (GR00T rise test).
     direction: str = "fall"
+    # Research rule 1 on GR00T --pick plans: the Sobel-Wald SPRT (adapters/groot/v9/ablate_v9.sequential_decision)
+    # read on each arm's outcomes in episode order. {p0, p1_rise, p1_fall, alpha, beta, cap, stop_rule}, or None.
+    rise_sprt: dict | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -196,6 +202,7 @@ class RolloutConfig:
             "pick_discovery_episodes": self.pick_discovery_episodes,
             "random_sae_seeds": list(self.random_sae_seeds),
             "random_sae_feature_ids": [list(item) for item in self.random_sae_feature_ids],
+            "rise_sprt": None if self.rise_sprt is None else dict(self.rise_sprt),
         }
 
 
@@ -320,6 +327,11 @@ def _check_config(config: RolloutConfig) -> None:
         raise ValueError(f"controls overlap candidates: {sorted(overlap)}")
     if config.direction not in DIRECTIONS:
         raise ValueError(f"direction must be one of {DIRECTIONS}, got {config.direction!r}")
+    if config.rise_sprt is not None:
+        if config.direction != "rise":
+            raise ValueError("rise_sprt is the rule 1 rise call: it needs direction rise")
+        if set(config.rise_sprt) != RISE_SPRT_KEYS:
+            raise ValueError(f"rise_sprt keys must be {sorted(RISE_SPRT_KEYS)}, got {sorted(config.rise_sprt)}")
     if config.candidate_source not in CANDIDATE_SOURCES:
         raise ValueError(f"candidate_source must be one of {CANDIDATE_SOURCES}, got {config.candidate_source!r}")
     if (config.candidate_source == "pick") != (config.picker is not None):
@@ -659,6 +671,7 @@ def summarize(rows: list[dict], config: RolloutConfig) -> dict:
                 "random_sae_percentile": random_percentile,
                 "n_random_sae": len(random_deltas) if scored["role"] == "candidate" else 0,
                 "beats_random_sae": beats_random,
+                "sprt_verdict": None,
                 "finding": bool(scored["role"] == "candidate" and causal and beats_random is True),
             }
         )
@@ -797,6 +810,7 @@ def config_from_summary(summary: dict) -> RolloutConfig:
         random_sae_seeds=tuple(int(item) for item in summary["random_sae_seeds"]),
         random_sae_feature_ids=tuple(tuple(int(item) for item in picks) for picks in summary["random_sae_feature_ids"]),
         direction=str(summary["direction"]),
+        rise_sprt=None if summary["rise_sprt"] is None else dict(summary["rise_sprt"]),
     )
 
 

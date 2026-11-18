@@ -220,6 +220,7 @@ def execute_pipeline(
     log=print,
     on_stage=None,
     manifest_clips_dir: str | None = None,
+    sae_from: Path | None = None,
 ) -> dict:
     """Run every missing stage and, unless ``serve`` is false, block on the viewer.
 
@@ -233,6 +234,9 @@ def execute_pipeline(
     are on disk (``ii run --remote`` uses it to ship finished stages back). ``manifest_clips_dir``
     is the ``clips_dir`` recorded on the manifest instead of ``clips_dir`` itself, for a run whose
     clips live at a different path on the machine that will view it.
+
+    ``sae_from`` copies a frozen SAE into the run instead of training one (``sae_source``), so
+    feature ids from another dataset keep their meaning. Such a run is never scored.
     """
     stage_done = on_stage if on_stage is not None else (lambda _name: None)
     if gpu_cost_per_hour is not None and (not math.isfinite(gpu_cost_per_hour) or gpu_cost_per_hour < 0):
@@ -247,6 +251,14 @@ def execute_pipeline(
         raise ValueError(f"prefilter K must be >= 1, got {prefilter}")
     prefilter = None if prefilter is None else int(prefilter)
     extra_effects = check_extra_effects(extra_effects)
+    if sae_from is not None:
+        if score:
+            raise ValueError(
+                "--sae-from runs are not scored: the scoreboard gates assume an SAE trained on this run's own "
+                "train split. Pass --no-score (ii steer-scorecard still measures features with --features)"
+            )
+        if sae_features is not None:
+            raise ValueError("--sae-features sets the size of a trained SAE; --sae-from keeps the given SAE's size")
 
     torch.set_num_threads(_cpu_threads(adapter_name))
     device = pick_device()
@@ -279,7 +291,15 @@ def execute_pipeline(
         meta=meta,
         tiny=tiny,
     )
-    config = sae_config_for(adapter.name, d_model, int(seed), sae_features)
+    external = None
+    if sae_from is not None:
+        from interpretableintelligence.sae_source import load_external_sae  # noqa: PLC0415
+
+        external = load_external_sae(Path(sae_from), d_model)
+        config = external.config
+        log(f"using the {external.record['format']} SAE at {external.record['path']} ({config.n_features} features, frozen)")
+    else:
+        config = sae_config_for(adapter.name, d_model, int(seed), sae_features)
     n_features = config.n_features
     if prefilter is None and n_features > SCORE_ALL_MAX_FEATURES:
         prefilter = DEFAULT_PREFILTER_K
@@ -294,6 +314,8 @@ def execute_pipeline(
                 f"unverified. Run again without --no-score to check the {prefilter} with the largest attribution."
             )
     sae_inputs = _with_kind(capture_inputs, "sae", sae=config.as_dict())
+    if external is not None:
+        sae_inputs = _with_kind(sae_inputs, "sae", source={k: external.record[k] for k in ("format", "config_sha256", "weights_sha256")})
 
     if _capture_ready(out, capture_inputs, grid, len(meta)):
         log("skip capture")
@@ -327,11 +349,16 @@ def execute_pipeline(
         log("run sae")
         _invalidate(out, "sae")
         with _measure(device) as measured:
-            trained = _train(out / "acts", config, device, log)
+            if external is not None:
+                save_sae(external.model, config, out / "sae")
+                trained = 0
+            else:
+                trained = _train(out / "acts", config, device, log)
             measured["rows"] = trained
             measured["tokens"] = trained
         _record_stage(out, "sae", measured["metrics"])
         _write_complete(out / "sae" / "complete.json", sae_inputs, measured["metrics"])
+    _set_sae_source(out, None if external is None else external.record)
     stage_done("sae")
 
     weights_sha = file_sha256(out / "sae" / "weights.safetensors")
@@ -2349,6 +2376,21 @@ def _canon(payload) -> str:
 def _write_complete(path: Path, inputs: dict, metrics: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json(path, {"inputs": inputs, "metrics": metrics})
+
+
+def _set_sae_source(out: Path, record: dict | None) -> None:
+    """Write ``manifest.sae_source`` for a frozen SAE, or drop it once the run trains its own."""
+    path = out / "manifest.json"
+    manifest = read_json(path)
+    if record is None and "sae_source" not in manifest:
+        return
+    if record is None:
+        manifest.pop("sae_source", None)
+    elif manifest.get("sae_source") == record:
+        return
+    else:
+        manifest["sae_source"] = record
+    write_json(path, manifest)
 
 
 def _record_stage(out: Path, name: str, metrics: dict) -> None:

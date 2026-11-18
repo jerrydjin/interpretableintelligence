@@ -256,6 +256,16 @@ def run(
             help="hf, vjepa2, groot: text file of concepts to label features with, one per line. Default: a built-in list of everyday objects, parts and textures.",
         ),
     ] = None,
+    sae_from: Annotated[
+        Path | None,
+        typer.Option(
+            "--sae-from",
+            exists=True,
+            file_okay=False,
+            help="Copy this frozen SAE into the run instead of training one, so feature ids from elsewhere keep their meaning: "
+            "a run folder, a GR00T v9 capture or retrain-sae folder, or their sae/ directory. Needs --no-score.",
+        ),
+    ] = None,
     tiny: Annotated[
         bool,
         typer.Option(
@@ -337,6 +347,8 @@ def run(
         if adapter.startswith("groot:"):
             tiny = False  # groot:tiny names the stand-in itself, so the run folder can rebuild it
         layer = _default_layer(adapter) if layer is None else layer
+        if remote and sae_from is not None:
+            raise ValueError("--sae-from is not available with --remote yet")
         if remote:
             from interpretableintelligence.remote.client import execute_remote
             from interpretableintelligence.remote.pricing import DEFAULT_GPU, DEFAULT_MAX_COST
@@ -388,6 +400,7 @@ def run(
             steer=steer,
             use_cache=not no_cache,
             log=typer.echo,
+            sae_from=sae_from,
         )
     except RemoteSetupError as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -766,6 +779,49 @@ def rollouts(
     typer.echo(f"wrote {run_dir / 'rollouts'}")
 
 
+@app.command("record-libero")
+def record_libero_cmd(
+    out: Annotated[Path, typer.Option("--out", file_okay=False, help="Clip folder to write (resumable), e.g. clips/groot-1028.")],
+    task: Annotated[int, typer.Option("--task", min=1, help="LIBERO-plus task id (libero_10 suite).")] = 1028,
+    episodes: Annotated[int, typer.Option("--episodes", min=1, help="Episodes to record. `ii run` needs at least 20.")] = 24,
+    seed0: Annotated[int, typer.Option("--seed0", help="Episode i uses seed seed0 + i and init state i mod the task's init states.")] = 60000,
+    checkpoint: Annotated[str, typer.Option("--checkpoint", help="LeRobot GR00T checkpoint.")] = "nvidia/gr00t17-lerobot-libero_10-640",
+    plus_dir: Annotated[
+        Path | None,
+        typer.Option("--plus-dir", file_okay=False, help="LIBERO-plus checkout; writes its LIBERO config (assets, bddl, init states)."),
+    ] = None,
+    max_steps: Annotated[int | None, typer.Option("--max-steps", min=1, help="Cap steps per episode. Default: the env's cap (520).")] = None,
+    no_parity: Annotated[bool, typer.Option("--no-parity", help="Skip the input parity check (debugging only).")] = False,
+    trim_out: Annotated[
+        Path | None,
+        typer.Option("--trim-out", file_okay=False, help="Also write every clip cut to the shortest episode's length (whole 16-step chunks), which ii run needs."),
+    ] = None,
+) -> None:
+    """Record closed-loop GR00T episodes on LIBERO-plus as clips the groot adapter reads (main camera, wrist, state, task).
+
+    Needs a GPU box with lerobot[groot]==0.7.0 and LIBERO-plus (scripts/groot_gpu_setup.sh). Checks that the adapter
+    rebuilds the policy's own inputs from the recorded arrays before it records anything else.
+    """
+    from interpretableintelligence.adapters.groot.record_libero import LeRobotLibero, episode_id, record, trim_to_common_length
+
+    try:
+        index = out / "clips.json"
+        have = {c["clip_id"] for c in json.loads(index.read_text(encoding="utf-8"))["clips"]} if index.is_file() else set()
+        if all(episode_id(i) in have for i in range(episodes)):
+            typer.echo(f"all {episodes} episodes are already in {out}; not loading the policy")
+        else:
+            runtime = LeRobotLibero(checkpoint, task, plus_dir=plus_dir)
+            report = record(
+                runtime, out, task_id=task, episodes=episodes, seed0=seed0, max_steps=max_steps, check_parity=not no_parity, log=typer.echo
+            )
+            typer.echo(f"recorded {len(report['episodes'])} episodes, {report['n_success']} successes, into {out}")
+        if trim_out is not None:
+            trim_to_common_length(out, trim_out, log=typer.echo)
+    except (ImportError, ValueError, RuntimeError, FileNotFoundError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
 @app.command("steer-scorecard")
 def steer_scorecard_cmd(
     run_dir: Annotated[Path, typer.Argument(help="Run folder. The scorecard is written under steering/.")],
@@ -922,6 +978,96 @@ def export_cmd(
     )
     typer.echo(f"wrote {summary.out_dir}: {summary.clips} clips, {summary.features} features, {playground}, {summary.bytes_total / 1e6:.1f} MB")
     typer.echo(f"preview: python -m http.server -d {summary.out_dir} 8000, then open http://localhost:8000")
+
+
+@app.command("export-live")
+def export_live_cmd(
+    run_dir: Annotated[Path, typer.Argument(help="Run folder to pack (an hf image model with a trained SAE).")],
+    out: Annotated[Path, typer.Option("--out", help="Directory to write the pack into, e.g. demo-site/live/packs/<name>.")],
+    clips: Annotated[
+        Path | None,
+        typer.Option("--clips", help="Directory of clip files, for the sample frames. Overrides a clip path recorded in the manifest."),
+    ] = None,
+    meta_from: Annotated[
+        Path | None,
+        typer.Option(
+            "--meta-from",
+            help="Copy labels and badges from an ii export of the same run (checked against this SAE) instead of the run's scoreboard.",
+        ),
+    ] = None,
+    samples: Annotated[int, typer.Option("--samples", min=0, help="Sample frames to ship with the pack.")] = 16,
+    title: Annotated[str | None, typer.Option("--title", help="Name shown in the playground.")] = None,
+) -> None:
+    """Pack a run for the live in-browser playground: the model split at the SAE's layer, the SAE, labels and badges."""
+    from interpretableintelligence.live import LiveExportError, export_live
+
+    try:
+        summary = export_live(run_dir, out, clips_dir=clips, meta_from=meta_from, n_samples=samples, title=title, log=typer.echo)
+    except (LiveExportError, FileNotFoundError, OSError, KeyError, ValueError, RuntimeError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"wrote {summary.out_dir}: {summary.n_features} features ({summary.n_real} verified, from the {summary.meta_source}), "
+        f"{summary.samples} samples, {summary.bytes_total / 1e6:.1f} MB"
+    )
+
+
+LIVE_DIR = Path("demo-site/live")
+
+
+@app.command("serve-live")
+def serve_live_cmd(
+    packs: Annotated[Path, typer.Option("--packs", help="Directory of live packs (each with pack.json and sae.safetensors).")] = LIVE_DIR / "packs",
+    pack: Annotated[list[str] | None, typer.Option("--pack", help="Serve only this pack (repeatable). Default: every pack.")] = None,
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port")] = 8787,
+    origins: Annotated[str, typer.Option("--origins", help="Comma-separated origins allowed to call the API (CORS).")] = "*",
+) -> None:
+    """Run the live playground's model server on this machine (the API in docs/PLAYGROUND-API.md).
+
+    Open the page with ?api=http://127.0.0.1:8787 to use it. ii deploy-live hosts the same thing on Modal.
+    """
+    import uvicorn
+
+    from interpretableintelligence.playground.compute import PackLoadError, load_packs
+    from interpretableintelligence.playground.http import create_app
+
+    try:
+        models = load_packs(packs, only=pack or None)
+    except (PackLoadError, OSError, ValueError, RuntimeError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for model in models.values():
+        typer.echo(f"loaded {model.id} ({model.pack['model']['name']}, {model.n_features} features) on {model.device.type} in {model.load_ms / 1000:.1f} s")
+    typer.echo(f"playground API on http://{host}:{port}/v1/health")
+    uvicorn.run(create_app(models, allow_origins=[o.strip() for o in origins.split(",") if o.strip()]), host=host, port=port, log_level="warning")
+
+
+@app.command("deploy-live")
+def deploy_live_cmd(
+    packs: Annotated[Path, typer.Option("--packs", help="Directory of live packs to serve.")] = LIVE_DIR / "packs",
+    gpu: Annotated[str, typer.Option("--gpu", help="Modal GPU type, or none for CPU only (enough for DINOv2-small).")] = "T4",
+    idle: Annotated[int, typer.Option("--idle", min=2, help="Seconds a container stays warm after the last request.")] = 300,
+    max_containers: Annotated[int, typer.Option("--max-containers", min=1, help="Most containers at once; caps the bill.")] = 2,
+    origins: Annotated[str, typer.Option("--origins", help="Comma-separated origins allowed to call the API (CORS).")] = "*",
+    live_dir: Annotated[Path, typer.Option("--live-dir", help="The page's folder; its config.json gets the API URL.")] = LIVE_DIR,
+    api: Annotated[
+        str | None,
+        typer.Option("--api", help="Skip deploying: just point the page at this API URL (or 'none' to run in the browser)."),
+    ] = None,
+) -> None:
+    """Host the playground backend on Modal (your account; scales to zero) and point the page at it."""
+    from interpretableintelligence.playground.deploy import DeployError, deploy, write_config
+
+    try:
+        if api is None:
+            api = deploy(packs, gpu=gpu, idle_s=idle, max_containers=max_containers, origins=origins, log=typer.echo)
+        url = None if api.lower() == "none" else api
+        path = write_config(live_dir, url)
+    except (DeployError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {path}: the page now {'calls ' + url if url else 'runs the model in the browser'}. Commit it to publish.")
 
 
 @app.command("export-site")

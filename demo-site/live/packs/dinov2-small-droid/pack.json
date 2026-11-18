@@ -1,0 +1,161 @@
+{
+  "format": "ii-live-pack",
+  "version": 1,
+  "title": "DINOv2-small, trained on 80 DROID robot videos",
+  "run_id": "droid",
+  "model": {
+    "name": "facebook/dinov2-small",
+    "adapter": "hf:facebook/dinov2-small",
+    "sha": "ca630cf93d93a8607d1ede034c3855fb1fd81ae9764022d0078dbc74fbc43eb3",
+    "layer": 6,
+    "n_layers": 12,
+    "image_size": 224,
+    "patch_px": 14,
+    "grid": {
+      "h": 16,
+      "w": 16
+    },
+    "prefix_tokens": 1,
+    "d_model": 384,
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "resize": "squash",
+    "readout": "last_hidden_state"
+  },
+  "sae": {
+    "n_features": 3072,
+    "activation": "topk",
+    "k": 32,
+    "threshold": null,
+    "usable": true,
+    "ev_heldout": 0.7289715006567073,
+    "loss_recovered": 0.8691477664857611
+  },
+  "n_real": 5,
+  "files": {
+    "front": "front.onnx",
+    "back": "back.onnx",
+    "sae": "sae.onnx",
+    "decoder": "decoder.bin",
+    "features": "features.json",
+    "sae_weights": "sae.safetensors"
+  },
+  "samples": [
+    {
+      "file": "samples/droid-001.jpg",
+      "clip_id": "droid-001",
+      "split": "heldout",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-016.jpg",
+      "clip_id": "droid-016",
+      "split": "heldout",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-054.jpg",
+      "clip_id": "droid-054",
+      "split": "heldout",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-091.jpg",
+      "clip_id": "droid-091",
+      "split": "heldout",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-006.jpg",
+      "clip_id": "droid-006",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-017.jpg",
+      "clip_id": "droid-017",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-024.jpg",
+      "clip_id": "droid-024",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-030.jpg",
+      "clip_id": "droid-030",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-036.jpg",
+      "clip_id": "droid-036",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-043.jpg",
+      "clip_id": "droid-043",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-051.jpg",
+      "clip_id": "droid-051",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-059.jpg",
+      "clip_id": "droid-059",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-067.jpg",
+      "clip_id": "droid-067",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-073.jpg",
+      "clip_id": "droid-073",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-081.jpg",
+      "clip_id": "droid-081",
+      "split": "train",
+      "frame": 30
+    },
+    {
+      "file": "samples/droid-088.jpg",
+      "clip_id": "droid-088",
+      "split": "train",
+      "frame": 30
+    }
+  ],
+  "train_clips": 80,
+  "meta_source": "export",
+  "evidence": false,
+  "note": "Exploration only. Badges are copied from the run's scoreboard; nothing in the browser changes them.",
+  "digests": {
+    "front": "379cd9823dc913d9",
+    "back": "9e7475fa33d54885",
+    "sae": "c8885200818c3402",
+    "decoder": "c5e9843eea8e80bd",
+    "features": "fadb6ae42e4193d5",
+    "sae_weights": "3048022eb7eab32f"
+  }
+}
