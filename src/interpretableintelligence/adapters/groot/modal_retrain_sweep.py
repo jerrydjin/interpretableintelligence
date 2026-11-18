@@ -44,8 +44,8 @@ SWEEP = [
     ("auxk-1024", 1024, "auxk"),
     ("none-2048", 2048, "none"),
     ("resample-2048", 2048, "resample"),
-    # auxk-8192 with per-channel input standardisation (norm="channel"): do a few outlier channels cause the dead
-    # latents? Its SAE is written as sae/weights.channel-norm.safetensors, which the v9 hook does not read.
+    # auxk-8192 with per-channel input standardisation (norm="channel", a [D] norm_scale). The Nov 17 2026 run on
+    # the Volume predates vector support and named its weights sae/weights.channel-norm.safetensors.
     ("auxk-8192-chnorm", 8192, "auxk", "channel"),
 ]
 STEPS, BATCH, LR, K = 6000, 4096, 4e-4, 32
