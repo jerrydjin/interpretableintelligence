@@ -366,7 +366,7 @@ class SAESubset:
     W_dec: torch.Tensor   # [m, D]
     b_dec: torch.Tensor   # [D]
     norm_mu: torch.Tensor  # [D]
-    norm_scale: float
+    norm_scale: "float | torch.Tensor"  # a float, or a [D] tensor for a per-channel normalised SAE
     threshold: float
     meta: dict
 
@@ -384,7 +384,8 @@ class SAESubset:
     def to(self, device) -> "SAESubset":
         f = lambda t: t.to(device=device, dtype=torch.float32)  # noqa: E731
         return SAESubset(list(self.latent_ids), f(self.W_enc), f(self.b_enc), f(self.W_dec), f(self.b_dec),
-                         f(self.norm_mu), self.norm_scale, self.threshold, dict(self.meta))
+                         f(self.norm_mu), f(self.norm_scale) if torch.is_tensor(self.norm_scale) else self.norm_scale,
+                         self.threshold, dict(self.meta))
 
     def encode(self, x32: torch.Tensor) -> torch.Tensor:
         """x32 [..., D] raw block output (fp32) -> f [..., m]."""
@@ -421,8 +422,19 @@ def load_sae(path, latents=None, norm_stats=None) -> SAESubset:
     sel = torch.tensor([ix[l] for l in want], dtype=torch.long)
     return SAESubset(want, d["W_enc"].float()[:, sel].contiguous(), d["b_enc"].float()[sel].contiguous(),
                      d["W_dec"].float()[sel].contiguous(), d["b_dec"].float().contiguous(), mu.contiguous(),
-                     float(scale[0]), float(d["threshold"].float().reshape(-1)[0]),
+                     _scale_value(scale, int(d["W_enc"].shape[0]), path), float(d["threshold"].float().reshape(-1)[0]),
                      {"path": str(path), "subset_file": "latent_ids" in d})
+
+
+def _scale_value(scale: torch.Tensor, d_in: int, path) -> "float | torch.Tensor":
+    """norm_scale as stored: one value (the v9 SAEs) -> float; d_in values (ii retrain-sae --norm channel) -> [D] tensor."""
+    if scale.numel() == 1:
+        return float(scale[0])
+    if scale.numel() != d_in:
+        raise ValueError(f"{path}: norm_scale has {scale.numel()} values; expected 1 or d_in={d_in}")
+    if not bool(torch.isfinite(scale).all()) or not bool((scale > 0).all()):
+        raise ValueError(f"{path}: norm_scale must be finite and positive")
+    return scale.contiguous()
 
 
 def write_subset(full_path, latents, out_path, norm_stats=None) -> str:
@@ -431,7 +443,8 @@ def write_subset(full_path, latents, out_path, norm_stats=None) -> str:
 
     s = load_sae(full_path, latents, norm_stats)
     t = {"W_enc": s.W_enc, "W_dec": s.W_dec, "b_enc": s.b_enc, "b_dec": s.b_dec, "norm_mu": s.norm_mu,
-         "norm_scale": torch.tensor([s.norm_scale], dtype=torch.float32), "threshold": torch.tensor(s.threshold, dtype=torch.float32),
+         "norm_scale": s.norm_scale.float() if torch.is_tensor(s.norm_scale) else torch.tensor([s.norm_scale], dtype=torch.float32),
+         "threshold": torch.tensor(s.threshold, dtype=torch.float32),
          "latent_ids": torch.tensor(s.latent_ids, dtype=torch.int64)}
     # one metadata key: safetensors orders multiple metadata keys nondeterministically (the sha would change per run)
     prov = json.dumps({"source": str(full_path), "source_sha256": sha256_file(full_path),

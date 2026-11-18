@@ -58,9 +58,6 @@ REPORT = "retrain.json"
 EVAL_FILE = "heldout_eval.json"
 CHUNK_ROWS = 8192
 NORMS = ("keep", "fit", "channel")
-# A channel-normalised SAE has a [D] norm_scale, which the v9 layout (one scalar) cannot express: the hook, the
-# picker and the importer read norm_scale[0]. So its weights go under this name, which none of them opens.
-CHANNEL_WEIGHTS = "weights.channel-norm.safetensors"
 CHANNEL_SCALE_FLOOR = 1e-3  # a channel's scale is at least this times the median channel std
 REVIVE = ("auxk", "resample", "none")
 TOP_DIMS = 8
@@ -88,7 +85,7 @@ class RetrainConfig:
     resample_every: int = 0
     # "keep": reuse the capture SAE's norm_mu / norm_scale (data statistics, not weights), so old and new SAEs see
     # the same inputs. "fit": recompute them from the train rows. "channel": per-channel standardisation (train
-    # mean and per-channel std), an experiment: the result is not readable by the v9 hook (see CHANNEL_WEIGHTS).
+    # mean and per-channel std): norm_scale is then a [D] vector, which the v9 hook, the picker and the importer read.
     norm: str = "keep"
 
     def check(self) -> None:
@@ -482,10 +479,7 @@ def retrain(
     d = int(train_split.acts.shape[1])
     threshold = float(weights["threshold"])
     scale_note = float(weights["norm_scale"].reshape(-1)[0]) if config.norm != "channel" else float(weights["norm_scale"].median())
-    path = random_sae.save_sae_dir(weights, out / SAE_DIR, sae_config(config, d, threshold, scale_note, capture, train_split.n))
-    if config.norm == "channel":
-        # Not readable by the v9 hook, picker or importer (scalar norm_scale): keep it out of weights.safetensors.
-        path.rename(path.with_name(CHANNEL_WEIGHTS))
+    random_sae.save_sae_dir(weights, out / SAE_DIR, sae_config(config, d, threshold, scale_note, capture, train_split.n))
     eval_doc = dict(new, loss_recovered=None, loss_recovered_note="not computed: needs the action head with the reconstruction spliced in")
     (out / SAE_DIR / EVAL_FILE).write_text(json.dumps(eval_doc, indent=1) + "\n", encoding="utf-8")
     report = {

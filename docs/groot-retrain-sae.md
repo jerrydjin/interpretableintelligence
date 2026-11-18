@@ -80,10 +80,13 @@ One run by hand: `ii retrain-sae groot-1028-v9-n100 --out runs/groot-1028-sae-20
 ### Per-channel normalisation (`--norm channel`)
 
 `--norm channel` standardises each input channel by its own train std (`norm_scale` becomes a [D] vector, floored
-at 1e-3 of the median std). The v9 layout has one scalar `norm_scale`, and the hook, the picker and the importer
-read `norm_scale[0]`, so such an SAE is written as `sae/weights.channel-norm.safetensors` (no `weights.safetensors`):
-nothing downstream opens it by mistake. It answers whether outlier channels cause the dead latents; using it in
-rollouts needs the vector scale in those readers first.
+at 1e-3 of the median std). The v9 hook (`ablate_v9.load_sae`), the picker (`picker/rollout_io.py`) and
+`ii import --format groot-v9` read either shape: one value as before, or `d_in` values. The importer folds a vector
+scale into `W_enc` and `b_dec` and multiplies the decoder rows by it, so the imported SAE's activations equal the
+source's and its decoder rows are in raw units (not unit-norm); a scalar scale is folded as before.
+
+On task 1028 (Nov 17 2026, Modal T4) `auxk-8192` with `--norm channel` had 4,756 of 8,192 latents alive on held-out
+tokens (auxk-8192: 1,032), 57 dense, EV 0.9994 and EV/dim 0.994.
 
 `EV` in the tables is `ev_raw`, measured in raw activation units, so SAEs with different normalisations compare
 fairly. `ev_normalised` is in the SAE's own space; for a scalar `norm_scale` the two are equal.

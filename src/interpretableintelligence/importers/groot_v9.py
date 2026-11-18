@@ -263,7 +263,11 @@ def _fold_sae(directory: Path, d_model: int) -> tuple[SAE, SAEConfig, dict]:
     if w_enc.shape != (d_model, n_features) or w_dec.shape != (n_features, d_model):
         raise ValueError(f"SAE weight shapes {w_enc.shape}, {w_dec.shape} do not match d={d_model}, M={n_features}")
     mu = weights["norm_mu"].astype(np.float32).reshape(-1) if "norm_mu" in weights else np.zeros(d_model, np.float32)
-    scale = float(np.asarray(weights["norm_scale"]).reshape(-1)[0]) if "norm_scale" in weights else 1.0
+    scales = np.asarray(weights["norm_scale"], dtype=np.float32).reshape(-1) if "norm_scale" in weights else np.ones(1, np.float32)
+    if scales.size not in (1, d_model):
+        raise ValueError(f"norm_scale has {scales.size} values; expected 1 or d_model={d_model}")
+    per_channel = scales.size > 1  # ii retrain-sae --norm channel
+    scale = float(scales[0]) if not per_channel else float(np.median(scales))
     if "threshold" in weights:
         threshold = float(np.asarray(weights["threshold"]).reshape(-1)[0])
     else:
@@ -271,7 +275,7 @@ def _fold_sae(directory: Path, d_model: int) -> tuple[SAE, SAEConfig, dict]:
     stated = raw.get("inference_threshold")
     if stated is not None and not math.isclose(float(stated), threshold, rel_tol=1e-5, abs_tol=1e-9):
         raise ValueError(f"inference_threshold {stated} in config.json != threshold {threshold} in the weights")
-    if not (math.isfinite(scale) and scale > 0 and math.isfinite(threshold) and threshold >= 0):
+    if not (np.isfinite(scales).all() and (scales > 0).all() and math.isfinite(threshold) and threshold >= 0):
         raise ValueError("norm_scale must be positive and the threshold finite and >= 0")
     norms = np.linalg.norm(w_dec, axis=1)
     if not np.allclose(norms, 1.0, atol=1e-3):
@@ -281,12 +285,22 @@ def _fold_sae(directory: Path, d_model: int) -> tuple[SAE, SAEConfig, dict]:
     #         x_hat = s * (f @ W_dec + b_dec) + mu.
     # ii with f' = s * f: pre' = relu(W_enc' (x - b_dec') + b_enc'), W_enc' = W_enc^T,
     #         b_enc' = s * b_enc, b_dec' = mu + s * b_dec, threshold' = s * thr, W_dec' = W_dec^T.
-    sae = SAE(d_model, n_features, activation="jumprelu", threshold=scale * threshold)
+    # Per-channel s [d]: one scale cannot move into the threshold, so the values stay the source's own:
+    #         W_enc' = (W_enc / s[:, None])^T, b_enc' = b_enc, threshold' = thr, b_dec' = mu + s * b_dec,
+    #         W_dec' = (W_dec * s)^T (rows in raw units, so not unit-norm).
+    fold_thr = threshold if per_channel else scale * threshold
+    sae = SAE(d_model, n_features, activation="jumprelu", threshold=fold_thr)
     with torch.no_grad():
-        sae.W_enc.copy_(torch.from_numpy(np.ascontiguousarray(w_enc.T)))
-        sae.b_enc.copy_(torch.from_numpy(scale * b_enc))
-        sae.W_dec.copy_(torch.from_numpy(np.ascontiguousarray(w_dec.T)))
-        sae.b_dec.copy_(torch.from_numpy(mu + scale * b_dec))
+        if per_channel:
+            sae.W_enc.copy_(torch.from_numpy(np.ascontiguousarray((w_enc / scales[:, None]).T)))
+            sae.b_enc.copy_(torch.from_numpy(b_enc))
+            sae.W_dec.copy_(torch.from_numpy(np.ascontiguousarray((w_dec * scales[None, :]).T)))
+            sae.b_dec.copy_(torch.from_numpy(mu + scales * b_dec))
+        else:
+            sae.W_enc.copy_(torch.from_numpy(np.ascontiguousarray(w_enc.T)))
+            sae.b_enc.copy_(torch.from_numpy(scale * b_enc))
+            sae.W_dec.copy_(torch.from_numpy(np.ascontiguousarray(w_dec.T)))
+            sae.b_dec.copy_(torch.from_numpy(mu + scale * b_dec))
     sae.eval()
     for param in sae.parameters():
         param.requires_grad_(False)
@@ -300,9 +314,9 @@ def _fold_sae(directory: Path, d_model: int) -> tuple[SAE, SAEConfig, dict]:
         steps=int(train.get("steps", 0)),
         batch_size=int(train.get("batch", 0)),
         seed=int(train.get("seed", 0)),
-        normalize_decoder=True,
+        normalize_decoder=not per_channel,
         activation="jumprelu",
-        threshold=scale * threshold,
+        threshold=fold_thr,
     )
     notes = {
         "source_arch": arch,
@@ -314,6 +328,13 @@ def _fold_sae(directory: Path, d_model: int) -> tuple[SAE, SAEConfig, dict]:
             "norm_scale. The active set equals the source's, and each value is norm_scale times the source's."
         ),
     }
+    if per_channel:
+        notes["norm_scale"] = {"per_channel": True, "median": scale, "min": float(scales.min()), "max": float(scales.max())}
+        notes["fold"] = (
+            "Per-channel norm_scale s: x_n = (x - norm_mu) / s is folded into W_enc (rows divided by s) and b_dec "
+            "(norm_mu + s * b_dec); W_dec rows are multiplied by s, so they are in raw units and not unit-norm. "
+            "The active set and every value equal the source's."
+        )
     return sae, config, notes
 
 

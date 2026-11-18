@@ -62,7 +62,11 @@ class PolicySAE:
         self.W_enc, self.b_enc, self.W_dec, self.b_dec = (w["W_enc"].float(), w["b_enc"].float(), w["W_dec"].float(), w["b_dec"].float())
         self.thr = float(w["threshold"]) if "threshold" in w else 0.0
         self.mu = w["norm_mu"].float() if "norm_mu" in w else torch.zeros(self.W_dec.shape[1])
-        self.s = float(w["norm_scale"].reshape(-1)[0]) if "norm_scale" in w else 1.0
+        s = w["norm_scale"].float().reshape(-1) if "norm_scale" in w else torch.ones(1)
+        if s.numel() not in (1, w["W_enc"].shape[0]):
+            raise ValueError(f"{sae_dir}: norm_scale has {s.numel()} values; expected 1 or d_in={w['W_enc'].shape[0]}")
+        # One value (v9 SAEs) -> float; d_in values (ii retrain-sae --norm channel) -> per-channel [D] tensor.
+        self.s = float(s[0]) if s.numel() == 1 else s
         self.pm = w["pos_mean"].float() if "pos_mean" in w else None
         self.M, self.D = self.W_dec.shape
 

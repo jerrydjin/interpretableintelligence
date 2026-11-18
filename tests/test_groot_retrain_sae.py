@@ -179,12 +179,53 @@ def test_scalar_norm_ev_is_the_same_in_both_spaces():
     assert result["ev_raw"] == pytest.approx(result["ev_normalised"], abs=1e-4)
 
 
-def test_channel_norm_sae_is_kept_away_from_the_v9_readers(tmp_path):
+def test_channel_norm_sae_is_read_by_the_hook_picker_and_importer(tmp_path, monkeypatch):
+    """A [D] norm_scale: the v9 hook, the picker's reader and ii import all encode and decode it per channel."""
+    import sys
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     capture = make_v9_capture(tmp_path)
     out = tmp_path / "chnorm"
     result = runner.invoke(app, ["retrain-sae", str(capture), "--out", str(out), "--norm", "channel", *FAST])
     assert result.exit_code == 0, result.output
-    assert not (out / "sae" / "weights.safetensors").exists()
-    weights = random_sae.load_tensors(out / "sae" / R.CHANNEL_WEIGHTS)
-    assert weights["norm_scale"].numel() == weights["norm_mu"].numel()
+    path = out / "sae" / "weights.safetensors"
+    weights = random_sae.load_tensors(path)
+    d = weights["norm_mu"].numel()
+    assert weights["norm_scale"].shape == (d,) and not torch.allclose(weights["norm_scale"], weights["norm_scale"][0])
     assert json.loads((out / "sae" / "config.json").read_text())["norm"]["norm_scale_shape"] == "per_channel"
+
+    train_split, _held = R.load_capture(capture, torch.device("cpu"), log=lambda _m: None)
+    x = train_split.acts[:64].float()
+    want = random_sae.pre_activations(weights, x)
+    want = want * (want > float(weights["threshold"]))
+    sub = ablate_v9.load_sae(path, list(range(32)))
+    assert torch.is_tensor(sub.norm_scale) and sub.norm_scale.shape == (d,)
+    torch.testing.assert_close(sub.encode(x), want, rtol=1e-5, atol=1e-5)
+    # write_subset keeps the vector, and the subset reads back the same.
+    ablate_v9.write_subset(path, [0, 3], tmp_path / "subset.safetensors")
+    again = ablate_v9.load_sae(tmp_path / "subset.safetensors")
+    assert torch.equal(again.norm_scale, sub.norm_scale)
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "picker"))
+    try:
+        from rollout_io import PolicySAE
+    finally:
+        sys.path.pop(0)
+    policy = PolicySAE(out / "sae")
+    torch.testing.assert_close(policy.encode(x), want, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(policy.raw_dir([1]), weights["W_dec"][[1]] * weights["norm_scale"])
+
+    run = tmp_path / "run"
+    import_run("groot-v9", out, run, log=lambda _m: None, model_sha="ab" * 32)
+    assert validate_run(run) == []
+
+
+def test_v9_readers_reject_a_norm_scale_of_the_wrong_length(tmp_path):
+    from safetensors.torch import save_file
+
+    d, m = 6, 4
+    w = {"W_enc": torch.randn(d, m), "W_dec": torch.randn(m, d), "b_enc": torch.zeros(m), "b_dec": torch.zeros(d),
+         "norm_mu": torch.zeros(d), "norm_scale": torch.ones(3), "threshold": torch.tensor(0.1)}
+    save_file(w, str(tmp_path / "w.safetensors"))
+    with pytest.raises(ValueError, match="norm_scale has 3 values"):
+        ablate_v9.load_sae(tmp_path / "w.safetensors")
