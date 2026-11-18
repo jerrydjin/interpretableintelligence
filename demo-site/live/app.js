@@ -3,9 +3,12 @@
 
 import { Engine } from "./engine.js";
 import { RemoteEngine } from "./remote.js";
+import { mountModelPicker } from "./byom.js";
 
 const PARAMS = new URLSearchParams(location.search);
 const PACK = PARAMS.get("pack") || "packs/dinov2-small-droid/";
+// ?model=<pack id>: a pack the server built from a model picked on the page (byom.js).
+const BUILT = PARAMS.get("model");
 
 async function apiUrl() {
   if (PARAMS.has("api")) return PARAMS.get("api") || null; // ?api= (empty) forces the browser
@@ -80,8 +83,10 @@ async function boot() {
   const text = $("loader-text");
   try {
     const api = await apiUrl();
-    const base = new URL(PACK, location.href).href;
-    engine = api ? new RemoteEngine(base, new URL(api, location.href).href) : new Engine(base);
+    const apiHref = api ? new URL(api, location.href).href.replace(/\/+$/, "") : null;
+    if (BUILT && !apiHref) throw new Error("this model lives on the model server, and none is set");
+    const base = BUILT ? `${apiHref}/v1/packs/${encodeURIComponent(BUILT)}/files/` : new URL(PACK, location.href).href;
+    engine = apiHref ? new RemoteEngine(base, apiHref, BUILT) : new Engine(base);
     window.__ii.engine = engine;
     await engine.load({
       preferGpu: !PARAMS.has("cpu"), // ?cpu forces the CPU path
@@ -119,6 +124,10 @@ async function boot() {
       "The model runs on a small server in the cloud. It reads each picture to answer you and keeps nothing; a shared link carries its own picture.";
   }
   $("n-real").textContent = String(pack.n_real);
+  if (pack.built) {
+    $("model-name").textContent = pack.model.name;
+  }
+  if (engine.backend === "remote") mountModelPicker($("byom"), engine);
   $("loader").hidden = true;
   $("work").hidden = false;
   buildThumbs();

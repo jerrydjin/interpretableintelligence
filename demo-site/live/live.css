@@ -91,6 +91,19 @@ main { padding: 0 var(--gutter) 80px; max-width: 1320px; margin: 0 auto; }
 .intro .lede { max-width: 860px; }
 
 /* ------------------------------------------------------------ loader */
+/* Bring your own model: one quiet line under the intro until opened. */
+.byom { margin: 18px 0 0; max-width: 640px; }
+.byom summary { cursor: pointer; color: var(--ink-2); font-size: var(--t-small); width: max-content; }
+.byom summary:hover { color: var(--ink); }
+.byom .fine { color: var(--ink-2); margin: 10px 0 12px; }
+.byom-form { display: flex; gap: 8px; }
+.byom-form input { flex: 1; min-width: 0; font: inherit; font-size: var(--t-small); padding: 8px 12px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--sheet); color: var(--ink); }
+.byom-form input:focus { outline: none; border-color: var(--ink); }
+.byom .loader-track { margin: 12px 0 0; }
+.byom-status { font-size: var(--t-small); color: var(--ink-2); margin: 8px 0 0; }
+.byom-status.failed { color: var(--fail); }
+.byom-status:empty { display: none; }
+
 .loader { max-width: 820px; padding: 24px 0 48px; }
 .loader-track { height: 6px; border-radius: 999px; background: var(--well); overflow: hidden; }
 .loader-fill { height: 100%; width: 3%; background: var(--signal); border-radius: 999px; transition: width 0.25s ease; }

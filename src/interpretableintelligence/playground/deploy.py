@@ -42,7 +42,9 @@ def deploy(
     max_containers: int,
     origins: str,
     log: Callable[[str], None] = print,
+    build_env: dict[str, str] | None = None,
 ) -> str:
+    """``build_env`` (``II_BUILD_*`` settings) turns on bring your own model; ``None`` leaves it off."""
     try:
         import modal  # noqa: F401
     except ImportError as exc:
@@ -56,7 +58,9 @@ def deploy(
         II_PLAYGROUND_IDLE=str(idle_s),
         II_PLAYGROUND_MAX_CONTAINERS=str(max_containers),
         II_PLAYGROUND_ORIGINS=origins,
+        II_PLAYGROUND_BUILDS="1" if build_env else "0",
     )
+    env.update(build_env or {})
     process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     lines = []
     assert process.stdout is not None
@@ -69,3 +73,17 @@ def deploy(
     if url is None:
         raise DeployError("deployed, but no *.modal.run URL in the output; pass it with ii deploy-live --api <url>")
     return url
+
+
+def build_cost_line(gpu: str, per_day: int, timeout_s: int) -> str:
+    """The most builds can cost in a day: every allowed build running until its timeout."""
+    from interpretableintelligence.remote.pricing import format_usd, rate_for
+
+    # A build container reserves the same CPU and memory as ii run --remote, so its rate is the same.
+    rate = rate_for(gpu)
+    worst = rate.cost(timeout_s) * per_day
+    return (
+        f"builds: one at a time on {rate.gpu}, at most {per_day} a day, each stopped after {timeout_s // 60} min. "
+        f"Worst case {format_usd(rate.cost(timeout_s))} a build, {format_usd(worst)} a day ({rate.source}); "
+        "a typical build takes a few minutes."
+    )
