@@ -412,6 +412,7 @@ def build_named_plan(
     random_sae: dict[int, list[int]] | None = None,
     random_sae_dir: Path | None = None,
     note: str | None = None,
+    picker: str | None = None,
     log=print,
 ) -> dict:
     """A fixed-budget plan for features named by hand (``ii rollouts --policy groot-* --features ... --capture``).
@@ -421,6 +422,8 @@ def build_named_plan(
     that went through the same selection as the candidates; each seed's full SAE is read from
     ``random_sae_dir/<seed>/sae/weights.safetensors`` (``adapters/groot/random_sae.py`` layout). ``direction`` is what the
     summary scores: ``rise`` (research rule 1, the only direction that can be a finding) or ``fall`` (a positive control).
+    ``picker`` names the selection procedure that chose the candidates and, with ``random_sae``, the untrained SAEs'
+    features (research rule 4 compares a selection against itself on untrained dictionaries, so random-SAE arms need it).
     A plan already on disk is reused when built from the same request, otherwise this refuses to overwrite it.
     """
     if direction not in ("rise", "fall"):
@@ -433,6 +436,11 @@ def build_named_plan(
     random_sae = {int(k): [int(x) for x in v] for k, v in (random_sae or {}).items()}
     if random_sae and random_sae_dir is None:
         raise ValueError("random-SAE arms need the folder their untrained SAEs were saved in")
+    if random_sae and not picker:
+        raise ValueError("random-SAE arms need the name of the selection that chose every arm's features (picker)")
+    for item, picks in random_sae.items():
+        if len(picks) != len(candidates) or len(set(picks)) != len(picks):
+            raise ValueError(f"random:{item} needs {len(candidates)} distinct picks, one per candidate, got {picks}")
     rollouts = Path(run_dir) / "rollouts"
     plan_path = rollouts / PLAN_FILE
     info = capture_info(capture)
@@ -445,6 +453,7 @@ def build_named_plan(
         "episodes": int(episodes),
         "seed": int(seed),
         "direction": direction,
+        "picker": picker,
     }
     if plan_path.is_file():
         plan = _read_json(plan_path)
@@ -484,7 +493,7 @@ def build_named_plan(
                                "dictionary": f"random:{item}"})
     plan = _plan_dict(run_dir, info["manifest"], info, dictionaries, conditions, sprt, seed, request["capture_sae_sha256"])
     plan["direction"] = direction
-    plan["pick"] = {"request": request, "picker": "named", "note": note, "candidates": sorted(int(x) for x in candidates),
+    plan["pick"] = {"request": request, "picker": picker or "named", "note": note, "candidates": sorted(int(x) for x in candidates),
                     "controls": [int(x) for x in controls], "random_sae_seeds": sorted(random_sae),
                     "random_sae_feature_ids": [sorted(random_sae[k]) for k in sorted(random_sae)]}
     _write_plan(plan_path, plan)

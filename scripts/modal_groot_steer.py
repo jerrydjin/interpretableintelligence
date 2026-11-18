@@ -350,7 +350,7 @@ def _rescaled_capture() -> str:
 
 @app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=8, memory=32768)
 def rollouts_remote(name: str, features: str, controls: str = "", episodes: int = 3, direction: str = "fall",
-                    seed: int = 70000, hours: float = 0.3) -> dict:
+                    seed: int = 70000, hours: float = 0.3, exp2_random: str = "") -> dict:
     """`ii rollouts --policy groot-1028` for hand-named rescaled-SAE features, on LIBERO-plus in this container.
     Each `name` gets its own run folder (a copy of run-rescaled's manifest and split), so plans never collide."""
     import json
@@ -367,6 +367,18 @@ def rollouts_remote(name: str, features: str, controls: str = "", episodes: int 
            "--episodes", str(episodes), "--direction", direction, "--seed", str(seed)]
     if controls:
         cmd += ["--control-features", controls]
+    if exp2_random:  # research rule 4: each untrained SAE's pick from experiment 2's selection becomes an arm
+        picks = {item: json.loads(Path(EXP2, f"select-{item}.json").read_text())["pick"] for item in exp2_random.split(",")}
+        selection = run / "selection.json"
+        selection.write_text(json.dumps({
+            "picker": "groot_contrast_then_remove_screen",
+            "note": "picker (--W 48 --match time, seed 40000) features with d > 0 firing on >= 2% of held-out tokens, top 10 "
+                    "by d; ii steer-scorecard remove edit vs 19 matched-feature controls on 6 held-out episodes; passes "
+                    "confirmed on all 18; first by (confirmed, screened, screen ratio). Same procedure on every dictionary.",
+            "random_sae_dir": f"{EXP2}/random",
+            "random_sae": {item: [int(pick)] for item, pick in picks.items()},
+        }, indent=1) + "\n")
+        cmd += ["--selection", str(selection)]
     _run(cmd, env)
     out = {"summary.json": json.loads((run / "rollouts" / "summary.json").read_text()),
            "ablate_plan.json": json.loads((run / "rollouts" / "ablate_plan.json").read_text())}
@@ -380,10 +392,10 @@ def rollouts_remote(name: str, features: str, controls: str = "", episodes: int 
 
 @app.local_entrypoint()
 def rollouts(name: str, features: str, controls: str = "", episodes: int = 3, direction: str = "fall", seed: int = 70000,
-             hours: float = 0.3, out: str = "") -> None:
+             hours: float = 0.3, exp2_random: str = "", out: str = "") -> None:
     import json
 
-    result = rollouts_remote.remote(name, features, controls, episodes, direction, seed, hours)
+    result = rollouts_remote.remote(name, features, controls, episodes, direction, seed, hours, exp2_random)
     Path(out or f"rollouts-{name}.json").write_text(json.dumps(result, indent=1) + "\n")
     summary = result["summary.json"]
     for row in summary.get("features", []):
@@ -392,7 +404,7 @@ def rollouts(name: str, features: str, controls: str = "", episodes: int = 3, di
 
 
 @app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=4, memory=24576)
-def action_screen_remote(min_rate: float = 0.10, top: int = 16, controls: int = 3, episodes: int = 6, features: str = "") -> dict:
+def action_screen_remote(min_rate: float = 0.10, top: int = 8, controls: int = 19, episodes: int = 6, features: str = "") -> dict:
     """Cheap remove/boost screen of the rescaled SAE's densest features on recorded clips (exploration, never a finding):
     which edit moves GR00T's planned actions most. Features firing on >= min_rate of held-out tokens, by rate x max act."""
     import json
@@ -418,7 +430,7 @@ def action_screen_remote(min_rate: float = 0.10, top: int = 16, controls: int = 
 
 
 @app.local_entrypoint()
-def action_screen(min_rate: float = 0.10, top: int = 16, controls: int = 3, episodes: int = 6, features: str = "",
+def action_screen(min_rate: float = 0.10, top: int = 8, controls: int = 19, episodes: int = 6, features: str = "",
                   out: str = "action-screen.json") -> None:
     import json
 
@@ -429,3 +441,126 @@ def action_screen(min_rate: float = 0.10, top: int = 16, controls: int = 3, epis
         excess = (row.get("excess") or {}).get("mean")
         print(row["feature_id"], row["kind"], "change", row.get("action_change"), "excess", excess, "ratio", row.get("ratio"),
               "pct", row["control_percentile"])
+
+
+EXP2 = f"{WORK}/exp2"
+EXP2_SEED = 70000  # the rollouts' base seed; the untrained SAEs' seeds derive from it as with ii rollouts --pick
+
+
+@app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, timeout=7200, cpu=8, memory=32768)
+def exp2_pick_remote(n_random: int = 5) -> dict:
+    """Experiment 2, step 1 (CPU): the --pick picker on the capture through the rescaled SAE and through each of
+    n_random untrained SAEs (ii rollouts --pick's construction and seeds). Saves each untrained SAE under
+    exp2/random/<seed>/sae for the capture runs and the rollout plan."""
+    import json
+
+    from interpretableintelligence.adapters.groot import random_sae
+    from interpretableintelligence.rollout_groot_pick import capture_info, ranked_features, run_picker, train_chunks
+    from interpretableintelligence.rollout_pick import random_sae_seeds
+
+    capture = Path(CAPTURE_DIR)
+    trained = Path(_rescaled_sae())
+    info = capture_info(Path(_rescaled_capture()))
+    base_config = json.loads((trained / "config.json").read_text())
+    report: dict = {"seed": PICK_SEED, "random_seeds": random_sae_seeds(EXP2_SEED, n_random), "dictionaries": {}}
+    sources = [("trained", trained)]
+    for item in report["random_seeds"]:
+        sae = Path(EXP2, "random", str(item), "sae")
+        if not (sae / "weights.safetensors").is_file():
+            weights, record = random_sae.build_untrained_sae(trained / "weights.safetensors", int(item),
+                                                             lambda: train_chunks(capture, info["train"]), k=info["k"])
+            random_sae.save_sae_dir(weights, sae, {**base_config, "arch": "batchtopk_untrained", **record})
+            volume.commit()
+        sources.append((f"random:{item}", sae))
+    for name, sae in sources:
+        out = Path(EXP2, "pick", name.replace(":", "-"))
+        result = run_picker(capture, sae, out, seed=PICK_SEED, top=20)
+        rows = [json.loads(line) for line in (out / "contrast.jsonl").read_text().splitlines() if line.strip()]
+        report["dictionaries"][name] = {
+            "sae": str(sae), "ranked": ranked_features(out, result["result"])[:40],
+            "candidate_ids": [int(x) for x in result["result"].get("candidate_ids") or []],
+            "contrast": [{k: r.get(k) for k in ("feature_id", "d", "q", "firing_rate")} for r in rows],
+        }
+        volume.commit()
+    Path(EXP2, "pick.json").write_text(json.dumps(report, indent=1) + "\n")
+    volume.commit()
+    return report
+
+
+@app.local_entrypoint()
+def exp2_pick(n_random: int = 5, out: str = "exp2-pick.json") -> None:
+    import json
+
+    report = exp2_pick_remote.remote(n_random)
+    Path(out).write_text(json.dumps(report, indent=1) + "\n")
+    for name, d in report["dictionaries"].items():
+        rows = d["contrast"]
+        pos = [r for r in rows if (r["d"] or 0) > 0 and (r["firing_rate"] or 0) >= 0.02]
+        print(name, "tested", len(rows), "d>0 & rate>=2%", len(pos), "gated", d["candidate_ids"])
+
+
+def _screen_rows(card: dict) -> dict[int, dict]:
+    return {int(r["feature_id"]): r for r in card["rows"] if r["kind"] == "remove"}
+
+
+@app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=4, memory=24576)
+def exp2_random_remote(seed: int, top: int = 10) -> dict:
+    """Experiment 2's selection on one untrained SAE, exactly as on the trained one: its picker's top `top` features with
+    d > 0 firing on >= 2% of tokens, a remove screen (19 matched controls, 6 held-out episodes), then the screen's
+    passes confirmed on all 18 held-out episodes. The pick is the first feature by (confirmed, screened, screen ratio)."""
+    import json
+    import shutil
+
+    env = _prepare()
+    report = json.loads(Path(EXP2, "pick.json").read_text())["dictionaries"][f"random:{seed}"]
+    pos = sorted([r for r in report["contrast"] if (r["d"] or 0) > 0 and (r["firing_rate"] or 0) >= 0.02], key=lambda r: -r["d"])
+    ids = [int(r["feature_id"]) for r in pos[:top]]
+    run = Path(EXP2, f"run-{seed}")
+    if not Path(run, "features", "stats.json").is_file():
+        if run.exists():
+            shutil.rmtree(run)
+        # ii run --sae-from reads BatchTopK SAEs; an untrained one runs by the same threshold rule, so give the capture a
+        # view whose config says batchtopk (and keeps the untrained provenance under "untrained").
+        sae = Path(report["sae"])
+        view = sae.parent / "sae-as-batchtopk"
+        view.mkdir(exist_ok=True)
+        if not (view / "weights.safetensors").exists():
+            (view / "weights.safetensors").symlink_to(sae / "weights.safetensors")
+        config = json.loads((sae / "config.json").read_text())
+        (view / "config.json").write_text(json.dumps({**config, "arch": "batchtopk", "inference_threshold": config["threshold"], "untrained": config}, indent=1) + "\n")
+        _run(["ii", "run", "groot", "--clips", f"{WORK}/clips-run", "--out", str(run), "--sae-from", str(view),
+              "--heldout-frac", "0.75", "--no-score", "--no-serve"], env)
+    base = ["ii", "steer-scorecard", str(run), "--clips", f"{WORK}/clips-run", "--controls", "19", "--controls-from", "features",
+            "--bootstrap", "200"]
+    _run(base + ["--features", ",".join(map(str, ids)), "--max-episodes", "6"], env)
+    screen = json.loads(Path(run, "steering", "scorecard.json").read_text())
+    rows = _screen_rows(screen)
+    passed = [f for f in ids if rows.get(f, {}).get("beats_controls")]
+    confirm = None
+    if passed:
+        _run(base + ["--features", ",".join(map(str, passed))], env)
+        confirm = json.loads(Path(run, "steering", "scorecard.json").read_text())
+    crow = _screen_rows(confirm) if confirm else {}
+
+    def key(f: int) -> tuple:
+        ratio = (rows.get(f, {}).get("ratio") or {}).get("mean")
+        return (bool(crow.get(f, {}).get("beats_controls")), bool(rows.get(f, {}).get("beats_controls")),
+                -1.0 if ratio is None else float(ratio))
+
+    pick = max(ids, key=key)
+    out = {"seed": seed, "screened": ids, "screen_passed": passed,
+           "confirmed": [f for f in passed if crow.get(f, {}).get("beats_controls")], "pick": pick,
+           "screen": screen, "confirm": confirm}
+    Path(EXP2, f"select-{seed}.json").write_text(json.dumps(out, indent=1) + "\n")
+    volume.commit()
+    return out
+
+
+@app.local_entrypoint()
+def exp2_random(seeds: str, out: str = "exp2-random.json") -> None:
+    import json
+
+    results = list(exp2_random_remote.map([int(x) for x in seeds.split(",")]))
+    Path(out).write_text(json.dumps(results, indent=1) + "\n")
+    for r in results:
+        print(r["seed"], "screened", r["screened"], "passed", r["screen_passed"], "confirmed", r["confirmed"], "pick", r["pick"])

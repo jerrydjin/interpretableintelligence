@@ -718,6 +718,17 @@ def rollouts(
             "or fall (a positive control).",
         ),
     ] = "rise",
+    selection: Annotated[
+        Path | None,
+        typer.Option(
+            "--selection",
+            exists=True,
+            dir_okay=False,
+            help="GR00T with --features and --capture: JSON naming the selection that chose the candidates "
+            '({"picker": NAME, "random_sae_dir": DIR, "random_sae": {SEED: [IDS]}, "note": TEXT}); its random_sae picks, '
+            "one per candidate from each untrained SAE in DIR/<SEED>/sae/, become research rule 4's random-SAE arms.",
+        ),
+    ] = None,
 ) -> None:
     """Compare baseline and intervened task success. Resume skips episodes already written."""
     from interpretableintelligence.rollout import execute_rollouts, format_report, parse_feature_ids
@@ -754,7 +765,8 @@ def rollouts(
             if verify_slice or only or plan is not None:
                 raise ValueError("GR00T --features with --capture builds its own plan: drop --verify-slice, --only and --plan")
             if random_sae:
-                raise ValueError("--random-sae compares picker against picker on GR00T: pass --pick N with --capture")
+                raise ValueError("--random-sae draws its own untrained SAEs: with --features pass them in --selection")
+            chosen = json.loads(selection.read_text()) if selection is not None else {}
             summary = execute_groot_named(
                 run_dir,
                 policy=policy,
@@ -764,6 +776,10 @@ def rollouts(
                 episodes=episodes,
                 seed=seed if seed else GROOT_SEED_BASE,
                 direction=direction,
+                random_sae={int(k): [int(x) for x in v] for k, v in (chosen.get("random_sae") or {}).items()},
+                random_sae_dir=Path(chosen["random_sae_dir"]) if chosen.get("random_sae_dir") else None,
+                picker=chosen.get("picker"),
+                note=chosen.get("note"),
                 alpha=alpha,
                 workers=workers,
                 sae_path=sae,

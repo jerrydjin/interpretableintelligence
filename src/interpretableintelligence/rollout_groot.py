@@ -941,6 +941,8 @@ def execute_groot_named(
     direction: str = "rise",
     random_sae: dict[int, list[int]] | None = None,
     random_sae_dir: Path | None = None,
+    picker: str | None = None,
+    note: str | None = None,
     alpha: float = DEFAULT_ROLLOUT_ALPHA,
     workers: int = DEFAULT_ROLLOUT_WORKERS,
     sae_path: Path | None = None,
@@ -955,9 +957,10 @@ def execute_groot_named(
     if not is_groot_policy(policy):
         raise ValueError(f"not a groot rollout policy: {policy!r}")
     plan = build_named_plan(Path(run_dir), Path(capture), candidates=candidates, controls=controls, episodes=int(episodes),
-                            seed=int(seed), direction=direction, random_sae=random_sae, random_sae_dir=random_sae_dir, log=log)
+                            seed=int(seed), direction=direction, random_sae=random_sae, random_sae_dir=random_sae_dir, picker=picker, note=note,
+                            log=log)
     return run_groot_plan(run_dir, plan, policy=policy, alpha=alpha, workers=workers, sae_path=sae_path, v9_out=v9_out,
-                          simulate=simulate, candidate_source="features", picker=None)
+                          simulate=simulate, candidate_source="pick" if picker else "features", picker=picker)
 
 
 def format_groot_report(summary: dict, *, plan_sha: str | None = None) -> str:
