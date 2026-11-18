@@ -16,6 +16,12 @@ Task 1028 test of feature 6262 on the rescaled (channel-normalised) SAE, which l
 
     modal run scripts/modal_groot_steer.py::map_feature                                           # checks 0 and 1, CPU only
 
+The rescaled SAE's own picks, scored offline against matched real-feature controls:
+
+    modal run scripts/modal_groot_steer.py::pick_rescaled                                         # picker top 3, CPU only
+    modal run scripts/modal_groot_steer.py::rescaled_scorecard --features A,B,C --smoke           # capture + 1 episode
+    II_MODAL_HOURS=1.5 modal run --detach scripts/modal_groot_steer.py::rescaled_scorecard --features A,B,C
+
 Everything persistent lives on the Volume ``ii-groot-steer``: the capture, Hugging Face weights, the LIBERO-plus
 assets, and the work folder (clips, run, steering). The work folder is committed every few minutes, so a run that
 hits its timeout or is stopped resumes where it left off when started again. The GPU function has a hard
@@ -210,6 +216,91 @@ def map_feature(feature: int = 6262, out: str = "mapping-6262.json") -> None:
     Path(out).write_text(json.dumps(report, indent=1) + "\n")
     print(json.dumps(report["decision"], indent=1))
     print(json.dumps(report.get("direction"), indent=1))
+    print(f"wrote {out}")
+
+
+RESCALED_RUN = f"{WORK}/run-rescaled"
+RESCALED_RESULTS = f"{VOL}/results-rescaled"
+PICK_SEED = 40000  # ii rollouts --pick's default base seed, which the picker runs with
+
+
+@app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, timeout=3600, cpu=4, memory=16384)
+def pick_rescaled_remote(top: int = 3) -> dict:
+    """The GR00T picker (ii rollouts --pick's arguments) on the capture through the rescaled SAE. CPU only."""
+    import json
+    import shutil
+
+    from interpretableintelligence.rollout_groot_pick import ranked_features, run_picker
+
+    out = Path(RESCALED_RESULTS) / "pick"
+    if out.exists():
+        shutil.rmtree(out)
+    run = run_picker(Path(CAPTURE_DIR), Path(_rescaled_sae()), out, seed=PICK_SEED, top=20)
+    ranked = ranked_features(out, run["result"])
+    contrast = {}
+    for line in (out / "contrast.jsonl").read_text().splitlines():
+        if line.strip():
+            row = json.loads(line)
+            if int(row["feature_id"]) in ranked[:top]:
+                contrast[str(row["feature_id"])] = row
+    report = {"picks": ranked[:top], "candidate_ids": [int(x) for x in run["result"].get("candidate_ids") or []],
+              "argv": run["argv"], "contrast": contrast}
+    (out / "picks.json").write_text(json.dumps(report, indent=1) + "\n")
+    volume.commit()
+    return report
+
+
+@app.local_entrypoint()
+def pick_rescaled(top: int = 3, out: str = "rescaled-picks.json") -> None:
+    import json
+
+    report = pick_rescaled_remote.remote(top)
+    Path(out).write_text(json.dumps(report, indent=1) + "\n")
+    print(json.dumps({k: report[k] for k in ("picks", "candidate_ids")}))
+    print(f"wrote {out}")
+
+
+@app.function(volumes={VOL: volume, RETRAIN_VOL: retrain_volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=4, memory=24576)
+def rescaled_scorecard_remote(features: str, smoke: bool = False) -> dict:
+    """Capture the recorded clips with the rescaled SAE frozen in (once), then the matched-feature scorecard.
+    ``smoke``: one held-out episode, 50 bootstrap resamples, results not copied."""
+    import json
+    import shutil
+
+    env = _prepare()
+    run, clips = RESCALED_RUN, f"{WORK}/clips-run"
+    if not Path(run, "features", "stats.json").is_file():
+        if Path(run).exists():
+            shutil.rmtree(run)
+        _run(["ii", "run", "groot", "--clips", clips, "--out", run, "--sae-from", _rescaled_sae(), "--heldout-frac", "0.75",
+              "--no-score", "--no-serve"], env)
+    cmd = ["ii", "steer-scorecard", run, "--clips", clips, "--features", features, "--controls", "19", "--controls-from", "features"]
+    if smoke:
+        cmd += ["--max-episodes", "1", "--bootstrap", "50"]
+    _run(cmd, env)
+    card = json.loads(Path(run, "steering", "scorecard.json").read_text())
+    stats = json.loads(Path(run, "features", "stats.json").read_text())
+    if not smoke:
+        results = Path(RESCALED_RESULTS)
+        results.mkdir(parents=True, exist_ok=True)
+        shutil.copy(Path(run, "steering", "scorecard.json"), results / "scorecard.json")
+        shutil.copy(Path(run, "features", "stats.json"), results / "features-stats.json")
+        volume.commit()
+    wanted = {int(x) for x in features.split(",") if x}
+    return {"scorecard.json": card, "stats": {**{k: v for k, v in stats.items() if k != "features"},
+            "picked": [f for f in stats.get("features", []) if int(f.get("id", -1)) in wanted]}}
+
+
+@app.local_entrypoint()
+def rescaled_scorecard(features: str, smoke: bool = False, out: str = "rescaled-scorecard.json") -> None:
+    import json
+
+    result = rescaled_scorecard_remote.remote(features, smoke)
+    Path(out).write_text(json.dumps(result, indent=1) + "\n")
+    for row in result["scorecard.json"]["rows"]:
+        excess = (row.get("excess") or {}).get("mean")
+        print(row["feature_id"], row["kind"], "windows", row["n_windows"], "excess", None if excess is None else round(excess, 4),
+              "pct", row["control_percentile"], "beats", row["beats_controls"])
     print(f"wrote {out}")
 
 
