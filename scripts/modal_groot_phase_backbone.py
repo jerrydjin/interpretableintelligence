@@ -31,7 +31,7 @@ app = modal.App("ii-groot-phase-backbone", image=image.pip_install("scikit-learn
 
 
 @app.function(volumes={VOL: volume, "/retrain": retrain_volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=4, memory=24576)
-def backbone_gate(smoke: bool = False, controls: int = 19) -> dict:
+def backbone_gate(smoke: bool = False, controls: int = 19, save_dom: str = "") -> dict:
     import numpy as np
     import torch
     from safetensors.torch import load_file
@@ -73,6 +73,13 @@ def backbone_gate(smoke: bool = False, controls: int = 19) -> dict:
                          "bb": bb[0].mean(0).cpu().numpy(), "n_tok": int(bb.shape[1]), "base": base.detach().float().cpu().numpy()})
     lab = np.array([r["label"] for r in rows]); is_tr = np.array([not r["heldout"] for r in rows])
     B = np.stack([r["bb"] for r in rows]); win = np.array([r["window"] for r in rows])
+    if save_dom:  # the rollout test's fixed vector: class-mean difference over every recorded window (train + held-out)
+        vec = (B[lab == 1].mean(0) - B[lab == 0].mean(0)).astype(np.float32)
+        Path(save_dom).parent.mkdir(parents=True, exist_ok=True)
+        np.save(save_dom, vec)
+        volume.commit()
+        return {"saved": save_dom, "norm": float(np.linalg.norm(vec)), "windows": len(rows), "phase1_frac": float(lab.mean()),
+                "cos_with_train_only_dom": None}
     bmu, bsd = B[is_tr].mean(0), B[is_tr].std(0) + 1e-6
     probe = LogisticRegression(C=0.05, max_iter=5000).fit((B[is_tr] - bmu) / bsd, lab[is_tr])
     score = ((B - bmu) / bsd) @ probe.coef_[0]
@@ -159,7 +166,7 @@ def backbone_gate(smoke: bool = False, controls: int = 19) -> dict:
 
 
 @app.local_entrypoint()
-def main(smoke: bool = False, controls: int = 19, out: str = "backbone-gate.json") -> None:
-    result = backbone_gate.remote(smoke, 3 if smoke else controls)
+def main(smoke: bool = False, controls: int = 19, out: str = "backbone-gate.json", save_dom: str = "") -> None:
+    result = backbone_gate.remote(smoke, 3 if smoke else controls, save_dom)
     Path(out).write_text(json.dumps(result, indent=1) + "\n")
     print(json.dumps(result, indent=1))
