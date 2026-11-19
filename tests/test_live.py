@@ -244,7 +244,8 @@ def test_browser_engine_matches_torch(tiny_run, tmp_path):
     handler = functools.partial(_Quiet, directory=str(site))
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{httpd.server_address[1]}/live/?pack=packs/tiny/"
+    # api= (empty) keeps the page on the in-browser engine even when config.json names a backend.
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/live/?pack=packs/tiny/&api="
     try:
         with sync_api.sync_playwright() as playwright:
             browser = playwright.chromium.launch(executable_path=chrome, headless=True, args=["--no-sandbox", "--disable-gpu"])
