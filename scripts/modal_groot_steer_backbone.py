@@ -98,6 +98,12 @@ def fetch_remote(smoke: bool = False) -> dict:
 
 @app.local_entrypoint()
 def main(smoke: bool = False, fetch: bool = False, out: str = "") -> None:
+    if not fetch and not smoke:
+        # Spawn and return: a blocking .remote() was cancelled when the launching shell went away,
+        # even under --detach. The runner resumes from the volume, so relaunching is safe.
+        call = steer_remote.spawn(smoke)
+        print("spawned", call.object_id, "- fetch with --fetch")
+        return
     result = fetch_remote.remote(smoke) if fetch else steer_remote.remote(smoke)
     Path(out or ("steer-backbone-smoke.json" if smoke else "steer-backbone.json")).write_text(json.dumps(result, indent=1) + "\n")
     for row in result.get("table", []):
