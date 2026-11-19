@@ -52,6 +52,10 @@ BUILD_TIMEOUT = int(os.environ.get("II_BUILD_TIMEOUT", "1200"))
 BUILD_CLIPS = int(os.environ.get("II_BUILD_CLIPS", "40"))
 # Passed through to the containers, where playground.builds.Limits.from_env reads them.
 BUILD_SETTINGS = {key: os.environ[key] for key in ("II_BUILD_PER_DAY", "II_BUILD_TIMEOUT", "II_BUILD_MAX_PARAMS", "II_BUILD_CLIPS") if os.environ.get(key)}
+# The containers import this module again, so BUILDS must read the same there as at deploy time:
+# otherwise the build function and the Volume exist locally but not remotely, and Modal refuses
+# to start the containers ("Function has 1 dependencies but container got 2 object ids").
+BUILD_SETTINGS["II_PLAYGROUND_BUILDS"] = "1" if BUILDS else "0"
 DATA = "/data"
 BUILDS_ROOT = f"{DATA}/builds"
 BUILD_HF = f"{DATA}/hf"
