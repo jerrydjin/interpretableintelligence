@@ -268,6 +268,20 @@ def test_browser_engine_matches_torch(tiny_run, tmp_path):
             page.wait_for_selector("[data-kind=ablate]")
             page.click("[data-kind=ablate]")
             page.wait_for_function("() => window.__ii.ui.result !== null")
+            # The back half loads after the first picture; the edit above needed it.
+            assert page.evaluate("() => window.__ii.engine.timings.back") is not None
+            # Your own set: several pictures at once are all read, and the panel sums them up.
+            mine = sorted(str(p) for p in (tiny_run["pack"] / "samples").glob("*.jpg"))
+            assert len(mine) >= 2
+            page.set_input_files("#file", mine)
+            page.wait_for_function(
+                f"() => window.__ii.ui.mine.length === {len(mine)} && window.__ii.ui.mine.every((m) => m.state)"
+            )
+            page.evaluate("() => { window.__ii.ui.view = 'overview'; }")
+            page.click(f".thumb[data-key='mine-1']")
+            page.wait_for_selector("[data-testid=across-mine]")
+            assert f"Across your {len(mine)} pictures" in page.inner_text("[data-testid=across-mine]")
+            assert errors == []
             browser.close()
     finally:
         httpd.shutdown()

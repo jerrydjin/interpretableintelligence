@@ -22,6 +22,8 @@ async function apiUrl() {
 const EMBER = [232, 88, 42];
 const COBALT = [58, 91, 217];
 const TOP_N = 10;
+const MAX_MINE = 24; // pictures in your own set
+const VIDEO_FRAMES = 8; // frames taken from each video, evenly spaced
 const EDITS = {
   ablate: { name: "Switch off", hint: "Sets the feature to zero on every patch." },
   scale: { name: "Turn up or down", hint: "Multiplies the feature where it already fires." },
@@ -53,6 +55,7 @@ const ui = {
   result: null,
   show: "fires", // fires | change
   gallery: [], // [{sample, state, img}]
+  mine: [], // your own set: [{key, name, url, img, state}], read in the background
   cam: null,
   camLoop: false,
   busy: false,
@@ -145,10 +148,18 @@ async function boot() {
 function buildThumbs() {
   const box = $("thumbs");
   box.replaceChildren();
+  $("examples-btn").hidden = !ui.mine.length;
+  $("thumbs").setAttribute("aria-label", ui.mine.length ? "Your pictures" : "Example pictures");
+  if (ui.mine.length) {
+    for (const item of ui.mine) {
+      box.append(el("button", { class: "thumb", type: "button", "data-key": item.key, title: item.name, onclick: () => showItem(item) }, el("img", { src: item.url, alt: item.name })));
+    }
+    return;
+  }
   for (const sample of engine.pack.samples) {
     const img = el("img", { src: engine.base + sample.file, alt: `Robot video ${sample.clip_id}`, loading: "lazy" });
     box.append(
-      el("button", { class: "thumb", type: "button", "data-clip": sample.clip_id, title: sample.split === "heldout" ? "A robot video the dictionary never saw" : "A robot video", onclick: () => showSample(sample) }, img),
+      el("button", { class: "thumb", type: "button", "data-clip": sample.clip_id, "data-key": sample.clip_id, title: sample.split === "heldout" ? "A robot video the dictionary never saw" : "A robot video", onclick: () => showSample(sample) }, img),
     );
   }
 }
@@ -165,8 +176,9 @@ function loadImage(src) {
 
 async function showSample(sample) {
   stopCam();
+  if (ui.mine.length) clearMine();
   ui.picture = { sample: sample.clip_id };
-  document.querySelectorAll(".thumb").forEach((t) => t.classList.toggle("on", t.dataset.clip === sample.clip_id));
+  markThumb(sample.clip_id);
   const img = await loadImage(engine.base + sample.file);
   await showPicture(img, img.src);
 }
@@ -188,22 +200,145 @@ async function showPicture(img, src) {
   render();
 }
 
-async function showFile(file) {
-  if (!file || !file.type.startsWith("image/")) return;
-  document.querySelectorAll(".thumb").forEach((t) => t.classList.remove("on"));
-  const url = URL.createObjectURL(file);
+function markThumb(key) {
+  document.querySelectorAll(".thumb").forEach((t) => t.classList.toggle("on", t.dataset.key === key));
+}
+
+// ------------------------------------------------------------------ your own set
+
+// Pictures and videos you add become your set: every picture (and evenly spaced frames from
+// each video) is read in the background, and the panel shows what fires across all of them.
+// Nothing leaves the device. A set is plain data, so it could be saved or shared later.
+async function addFiles(list) {
+  const files = [...(list || [])].filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/"));
+  if (!files.length) {
+    if (list && list.length) flash("Those files are not pictures or videos this browser can read.");
+    return;
+  }
+  const items = [];
+  for (const file of files) {
+    if (items.length >= MAX_MINE) break;
+    try {
+      if (file.type.startsWith("video/")) items.push(...(await videoFrames(file, VIDEO_FRAMES)));
+      else {
+        const url = URL.createObjectURL(file);
+        items.push({ name: file.name, url, img: await loadImage(url) });
+      }
+    } catch (err) {
+      flash(`${file.name}: ${err.message}`);
+    }
+  }
+  if (!items.length) return;
+  if (items.length > MAX_MINE) flash(`Kept the first ${MAX_MINE} pictures.`);
+  clearMine();
+  ui.mine = items.slice(0, MAX_MINE).map((item, i) => ({ ...item, key: `mine-${i}`, state: null }));
+  buildThumbs();
+  await showItem(ui.mine[0]);
+  encodeMine();
+}
+
+async function videoFrames(file, n) {
+  const src = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
   try {
-    const img = await loadImage(url);
-    stopCam();
-    ui.picture = { img };
-    await showPicture(img, url);
-  } catch (err) {
-    flash(err.message);
+    await new Promise((resolve, reject) => {
+      video.onloadeddata = resolve;
+      video.onerror = () => reject(new Error("this browser cannot read that video"));
+      video.src = src;
+    });
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    const count = duration ? n : 1;
+    const scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
+    const w = Math.round(video.videoWidth * scale);
+    const h = Math.round(video.videoHeight * scale);
+    const frames = [];
+    for (let i = 0; i < count; i++) {
+      const at = (duration * (i + 0.5)) / count;
+      if (duration) await new Promise((resolve) => { video.onseeked = resolve; video.currentTime = at; });
+      const canvas = el("canvas", { width: w, height: h });
+      canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+      const url = URL.createObjectURL(blob);
+      frames.push({ name: `${file.name}, ${at.toFixed(1)} s`, url, img: await loadImage(url) });
+    }
+    return frames;
+  } finally {
+    URL.revokeObjectURL(src);
   }
 }
 
+function clearMine() {
+  for (const item of ui.mine) URL.revokeObjectURL(item.url);
+  ui.mine = [];
+  buildThumbs();
+}
+
+async function showItem(item) {
+  stopCam();
+  ui.picture = { img: item.img };
+  markThumb(item.key);
+  await showPicture(item.img, item.url);
+  if (!item.state && ui.state) item.state = { rows: ui.state.rows, peaks: ui.state.peaks };
+}
+
+async function encodeMine() {
+  const set = ui.mine;
+  for (const item of set) {
+    if (item.state) continue;
+    while (ui.busy || ui.camLoop) await new Promise((r) => setTimeout(r, 100));
+    if (ui.mine !== set) return; // a new set replaced this one
+    ui.busy = true;
+    try {
+      const state = await engine.encode(item.img, { readout: false });
+      item.state = { rows: state.rows, peaks: state.peaks };
+    } finally {
+      ui.busy = false;
+    }
+    if (ui.pending) runEdit();
+    if (ui.view === "overview") renderPanel();
+    const box = $("gallery");
+    if (box && ui.feature != null) box.replaceChildren(galleryFor(ui.feature));
+  }
+}
+
+// What fires across your set: each feature's peak on each picture, as a share of the most
+// it ever reached in training, summed; and on how many pictures it fires at all.
+function acrossMine() {
+  const done = ui.mine.filter((m) => m.state);
+  const n = ui.mine.length;
+  const head = el("h2", {}, `Across your ${n} pictures`);
+  if (!done.length) return el("div", { class: "view" }, head, el("p", { class: "muted" }, "Reading them…"));
+  const score = new Float32Array(engine.nFeatures);
+  const count = new Uint16Array(engine.nFeatures);
+  for (const m of done) {
+    const peaks = m.state.peaks;
+    for (let f = 0; f < engine.nFeatures; f++) {
+      if (peaks[f] > 0) {
+        count[f]++;
+        score[f] += peaks[f] / (engine.features[f].max || 1);
+      }
+    }
+  }
+  const order = [...score.keys()].filter((i) => score[i] > 0).sort((a, b) => score[b] - score[a]).slice(0, 8);
+  const top = score[order[0]] || 1;
+  return el(
+    "div",
+    { class: "view across", "data-testid": "across-mine" },
+    head,
+    el("p", { class: "muted" }, `The features that fire most across everything you added${done.length < n ? ` (read ${done.length} of ${n} so far)` : ""}. Click one to see where it fires on each picture, then change it.`),
+    el("div", { class: "flist" }, order.map((i) => featureRow(featureById(i), score[i], top, `${count[i]} of ${done.length}`))),
+  );
+}
+
 function wireInputs() {
-  $("file").addEventListener("change", (e) => showFile(e.target.files[0]));
+  $("file").addEventListener("change", (e) => {
+    addFiles(e.target.files);
+    e.target.value = "";
+  });
+  $("examples-btn").addEventListener("click", () => showSample(engine.pack.samples[0]));
   window.addEventListener("dragover", (e) => {
     e.preventDefault();
     document.body.classList.add("dragging");
@@ -214,11 +349,11 @@ function wireInputs() {
   window.addEventListener("drop", (e) => {
     e.preventDefault();
     document.body.classList.remove("dragging");
-    showFile(e.dataTransfer.files[0]);
+    addFiles(e.dataTransfer.files);
   });
   window.addEventListener("paste", (e) => {
     const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
-    if (item) showFile(item.getAsFile());
+    if (item) addFiles([item.getAsFile()]);
   });
   $("cam-btn").addEventListener("click", () => (ui.cam ? snapCam() : startCam()));
   $("search").addEventListener("input", () => {
@@ -469,7 +604,7 @@ function renderPanel() {
   if (ui.view === "feature") renderResult();
 }
 
-function featureRow(f, strength, peak) {
+function featureRow(f, strength, peak, note = null) {
   const row = el(
     "button",
     {
@@ -500,6 +635,7 @@ function featureRow(f, strength, peak) {
     const bar = el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((strength / (peak || 1)) * 100))}%` }));
     row.append(bar);
   }
+  if (note) row.append(el("span", { class: "fcount" }, note));
   return row;
 }
 
@@ -513,6 +649,7 @@ function overview() {
   return el(
     "div",
     { class: "view" },
+    ui.mine.length > 1 ? acrossMine() : null,
     el("h2", {}, "What it notices here"),
     firstStep(top),
     el("p", { class: "muted" }, `${order.length.toLocaleString("en-GB")} of ${engine.nFeatures.toLocaleString("en-GB")} features fire on this picture. The strongest are below: hover one to see where, click it to change it.`),
@@ -656,7 +793,7 @@ function featureView() {
     control,
     el("div", { class: "result", id: "result" }),
     toggle,
-    el("h3", {}, "Where else it fires"),
+    el("h3", {}, ui.mine.length ? "Where it fires on your pictures" : "Where else it fires"),
     el("div", { class: "gallery", id: "gallery" }, galleryFor(f.id)),
   );
 }
@@ -722,16 +859,32 @@ async function encodeGallery() {
   }
 }
 
+function galleryPool() {
+  if (ui.mine.length) {
+    return {
+      items: ui.mine.filter((m) => m.state).map((m) => ({ img: m.img, state: m.state, title: m.name, open: () => showItem(m) })),
+      total: ui.mine.length,
+      what: "your pictures",
+    };
+  }
+  return {
+    items: ui.gallery.map((g) => ({ img: g.img, state: g.state, title: g.sample.clip_id, open: () => showSample(g.sample) })),
+    total: engine.pack.samples.length,
+    what: "sample pictures",
+  };
+}
+
 function galleryFor(id) {
-  if (!ui.gallery.length) return el("p", { class: "muted" }, "Looking through the sample pictures…");
+  const pool = galleryPool();
+  if (!pool.items.length) return el("p", { class: "muted" }, `Looking through the ${pool.what}…`);
   const f = featureById(id);
-  const ranked = ui.gallery
+  const ranked = pool.items
     .map((g) => ({ g, peak: g.state.peaks[id] }))
     .filter((x) => x.peak > 0)
     .sort((a, b) => b.peak - a.peak)
-    .slice(0, 6);
-  const done = ui.gallery.length === engine.pack.samples.length;
-  if (!ranked.length) return el("p", { class: "muted" }, done ? `It does not fire on any of the ${ui.gallery.length} sample pictures. Try your own.` : "Not on the pictures checked so far…");
+    .slice(0, ui.mine.length ? 12 : 6);
+  const done = pool.items.length === pool.total;
+  if (!ranked.length) return el("p", { class: "muted" }, done ? `It does not fire on any of the ${pool.total} ${pool.what}.${ui.mine.length ? "" : " Try your own."}` : "Not on the pictures checked so far…");
   return ranked.map(({ g, peak }) => {
     const canvas = el("canvas", { width: 160, height: 120 });
     const ctx = canvas.getContext("2d");
@@ -752,7 +905,7 @@ function galleryFor(id) {
     ctx.drawImage(tmp, 0, 0, 160, 120);
     return el(
       "button",
-      { class: "gthumb", type: "button", title: `Open ${g.sample.clip_id}`, onclick: () => showSample(g.sample) },
+      { class: "gthumb", type: "button", title: `Open ${g.title}`, onclick: g.open },
       canvas,
       el("span", {}, pct(peak / (f.max || 1))),
     );
