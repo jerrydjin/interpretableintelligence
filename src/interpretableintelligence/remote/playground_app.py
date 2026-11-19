@@ -102,8 +102,10 @@ build_image = (
     .uv_pip_install(*RUNTIME_DEPENDENCIES)
     .env({"PYTHONUNBUFFERED": "1", "HF_HOME": "/root/clips-hf"})
     .add_local_python_source("interpretableintelligence", copy=True)
+    # The source lands in /root, which Modal puts on the path only in running containers, not
+    # in image build steps, so the build command adds it itself.
     .run_commands(
-        "python -c \"from interpretableintelligence.sample_clips import fetch_droid_clips; "
+        "PYTHONPATH=/root python -c \"from interpretableintelligence.sample_clips import fetch_droid_clips; "
         f"fetch_droid_clips('{CLIPS_IN_IMAGE}', n={BUILD_CLIPS})\""
     )
     .env({"HF_HOME": BUILD_HF, **BUILD_SETTINGS})
