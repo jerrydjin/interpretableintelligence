@@ -2,41 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#faf9f5">
-  <title>Candidate picker · interpretableintelligence</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/demo.css">
-  <link rel="icon" href="/favicon.ico">
+  <meta http-equiv="refresh" content="0; url=/blog/">
+  <link rel="canonical" href="/blog/">
+  <title>Moved · interpretable intelligence</title>
 </head>
-<body>
-  <header class="top demo-top">
-    <div class="brand-row">
-      <a class="wordmark" href="/" aria-label="interpretable intelligence">
-        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
-        <span class="wordmark-text">interpretable intelligence</span>
-      </a>
-      <nav class="nav"><a href="/droid/">Try it</a><a href="/results/">Research</a><a href="/start/">Run it yourself</a><a href="/demos/" aria-current="page">Demos</a></nav>
-    </div>
-  </header>
-  <main class="prose">
-    <p class="crumb"><a href="/demos/">Demos</a></p>
-    <h1>Candidate picker on synthetic rollouts</h1>
-    <p class="lede">A test of the picker itself on generated rollouts where the answer is known. It is not a result on a real model.</p>
-    <p>Null runs with a final candidate, from <code>picker/synth_test.py --null-seeds 30</code>.</p>
-    <table class="score-table" data-testid="null-counts">
-      <thead><tr><th>Match</th><th>Final candidate</th></tr></thead>
-      <tbody><tr><td>time + detrend</td><td>0/30</td></tr><tr><td>time, no detrend</td><td>1/30</td></tr><tr><td>phase + detrend</td><td>0/30</td></tr></tbody>
-    </table>
-    <p>Planted feature recovered as a candidate, from <code>picker/synth_test_extra.py</code>, 50 episodes per run, 5 seeds. <code>plant</code> is the fraction of tokens that fire in the window before failure.</p>
-    <table class="score-table" data-testid="plant-counts">
-      <thead><tr><th>Plant fraction</th><th>Recovered</th></tr></thead>
-      <tbody>
-        <tr><td>0.15</td><td>4/5</td></tr>
-        <tr><td>0.05</td><td>1/5</td></tr>
-      </tbody>
-    </table>
-    <p>Rerun of those two scripts. Final candidates: 0/30 (time + detrend); 1/30 (time, no detrend); 0/30 (phase + detrend). Recovered: 4/5 at plant 0.15 and 1/5 at plant 0.05.</p>
-    </main>
-</body>
+<body><p>This page moved to <a href="/blog/">/blog/</a>.</p></body>
 </html>

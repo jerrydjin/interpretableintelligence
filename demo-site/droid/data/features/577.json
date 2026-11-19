@@ -1,1 +1,0 @@
-{"id":577,"label":"","label_model":"clip-concepts-v2:openai/clip-vit-base-patch16","badge":"unverified","status":null,"scored":true,"candidate":true,"distinct_clips_top20":6,"label_holds_heldout":false,"ablation_effect":null,"random_percentile":null,"n_random":0,"absent_in_random_init":true,"real":false,"top_clips":[],"viz":false}

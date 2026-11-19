@@ -1,7 +1,9 @@
-"""Write the static demo site.
+"""Write the static site: the front door, the run-it-yourself page and the blog.
 
-The fake section is the clip viewer, with every request turned into a file.
-The other sections are pages rendered from the vendored measurements.
+The live playground (``demo-site/live/``) and the host config are hand-kept, so a
+regeneration leaves them as they are. Every page here shares one stylesheet
+(``static/site.css``) and one header, the same ones the playground uses.
+Every number on the blog is read from a vendored result file.
 """
 
 from __future__ import annotations
@@ -12,303 +14,91 @@ import shutil
 import tempfile
 from html import escape
 from pathlib import Path
-from types import SimpleNamespace
-
-from interpretableintelligence import export_run
-from interpretableintelligence.adapters.fake import generate_clips
-from interpretableintelligence.export_run import write_viewer_data
-from interpretableintelligence.pipeline import execute_pipeline
-from interpretableintelligence.view import load_run
 
 REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
-EXPORT_MARKER = export_run.MARKER
 LIVE_KEEP = ("live", "vercel.json")
-DROID_COMMANDS = (
-    "uv run ii get-clips --out clips/droid",
-    "# The labels here came from a vision-language model: set FIREWORKS_API_KEY (or another key, see README).",
-    "uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid",
-    "uv run ii export runs/droid --clips clips/droid --out site/droid --max-clips 10",
+GITHUB_URL = "https://github.com/jerrydjin/interpretableintelligence"
+RUNNER_PATH = "src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"
+RUNNER_URL = GITHUB_URL + "/blob/main/" + RUNNER_PATH
+README_URL = GITHUB_URL + "/blob/main/README.md"
+POST_SLUG = "groot-1028"
+POST_TITLE = "A feature tracked our robot's failures. The control said it wasn't the cause."
+POST_DATE = "November 2026"
+V9_NOTES = REPO / "src" / "interpretableintelligence" / "adapters" / "groot" / "v9" / "V9_NOTES.md"
+
+# The site has three sections. Every page belongs to one, and the nav marks it.
+SECTIONS = (
+    ("play", "/live/", "Playground"),
+    ("model", "/start/", "Your model"),
+    ("blog", "/blog/", "Blog"),
 )
-DROID_TITLE = "DINOv2 on DROID robot video: verified features you can steer"
-CAUSAL = ("stripe", "pulse", "corner")
-DECOYS = ("flicker", "band", "speckle")
+SECTION_OF = {"live": "play", "start": "model", "blog": "blog", "post": "blog"}
+# Old addresses and where they live now. The pages behind them were cut.
+REDIRECTS = {
+    "droid": "/live/",
+    "fake": "/start/",
+    "demos": "/",
+    "picker": "/blog/",
+    "results": "/blog/",
+    "vjepa": "/blog/",
+    "groot": f"/blog/{POST_SLUG}/",
+    "explore": f"/blog/{POST_SLUG}/",
+}
+MARK_SVG = (
+    '<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">'
+    '<path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/>'
+    '<path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/>'
+    '<path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>'
+)
 
 
-def export_site(
-    out_dir: Path,
-    vjepa_dir: Path | None = None,
-    picker_dir: Path | None = None,
-    groot_dir: Path | None = None,
-    work_dir: Path | None = None,
-    randinit_dir: Path | None = None,
-    atp_dir: Path | None = None,
-    droid_dir: Path | None = None,
-) -> Path:
-    """Regenerate ``out_dir`` from a fresh fake run plus the vendored measurements."""
+def export_site(out_dir: Path, groot_dir: Path | None = None) -> Path:
+    """Regenerate ``out_dir`` from the vendored GR00T measurements, keeping the live playground."""
     out = Path(out_dir)
-    vjepa = Path(vjepa_dir) if vjepa_dir else REPO / "demo-data" / "vjepa-slim"
-    picker = Path(picker_dir) if picker_dir else REPO / "demo-data" / "picker"
     groot = Path(groot_dir) if groot_dir else REPO / "demo-data" / "groot"
-    randinit = Path(randinit_dir) if randinit_dir else REPO / "demo-data" / "vjepa-randinit"
-    atp = Path(atp_dir) if atp_dir else REPO / "demo-data" / "vjepa-atp"
-    # The real-run page is an ``ii export`` that lives in the site itself (it is tens of MB,
-    # so it is not vendored twice). Without ``droid_dir`` the copy already there is kept.
-    kept = None
-    droid = Path(droid_dir) if droid_dir else out / "droid"
-    if (droid / EXPORT_MARKER).is_file():
-        kept = Path(tempfile.mkdtemp(prefix="ii-droid-")) / "droid"
-        shutil.copytree(droid, kept)
-    # The live playground (``ii export-live`` packs plus its page) and the host config are
-    # hand-kept parts of the site, so a regeneration keeps them as they are.
+    summary = _load_groot_summary(groot)
+    checks = _groot_checks(groot)
     keep_dir = Path(tempfile.mkdtemp(prefix="ii-site-keep-"))
-    kept_live = [name for name in LIVE_KEEP if (out / name).exists()]
-    for name in kept_live:
+    kept = [name for name in LIVE_KEEP if (out / name).exists()]
+    for name in kept:
         source = out / name
         (shutil.copytree if source.is_dir() else shutil.copy2)(source, keep_dir / name)
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    for name in kept_live:
+    for name in kept:
         source = keep_dir / name
         (shutil.copytree if source.is_dir() else shutil.copy2)(source, out / name)
     shutil.rmtree(keep_dir, ignore_errors=True)
     _copy_static(out / "static")
     (out / "favicon.ico").write_bytes(_favicon_png())
-    work = Path(work_dir) if work_dir else out / ".work"
-    work.mkdir(parents=True, exist_ok=True)
-    clips = work / "clips"
-    run = work / "run"
-    generate_clips(clips, n=30, seed=0)
-    execute_pipeline(
-        adapter_name="fake",
-        clips_dir=clips,
-        out_dir=run,
-        layer=16,
-        seed=0,
-        heldout_frac=0.2,
-        score=True,
-        serve=False,
-        open_browser=False,
-        log=lambda _message: None,
-    )
-    model = load_run(run, clips)
-    _export_viewer(model, out / "fake", _fake_sentence(run / "scoreboard.json"))
-    groot_summary = _load_groot_summary(groot)
-    groot_status = _groot_status(groot_summary)
-    checks = _groot_checks(groot)
-    random_control = _random_control(randinit)
-    atp_result = _atp(atp)
-    live = (out / "live" / "index.html").is_file()
-    droid_run = _write_droid(out / "droid", kept, live=live)
-    if kept is not None:
-        shutil.rmtree(kept.parent, ignore_errors=True)
-    _write_product(out / "index.html", groot_summary, groot_status, droid_run, live=live)
-    _write_results(
-        out / "results" / "index.html", groot_summary, groot_status, checks, random_control, atp_result, droid_run
-    )
-    _write_picker(out / "picker", picker)
-    _write_vjepa(out / "vjepa", vjepa, random_control, atp_result)
-    _write_groot(out / "groot", groot / "groot-1028-ablate-summary.json", groot_summary, groot_status, checks)
+    _write_home(out / "index.html", summary)
     _write_start(out / "start" / "index.html")
-    _write_demos(out / "demos" / "index.html")
-    # /explore/ was its own page; it is now the top of the GR00T study.
-    _redirect(out / "explore" / "index.html", "/groot/")
-    shutil.rmtree(work, ignore_errors=True)
+    _write_blog_index(out / "blog" / "index.html", summary)
+    _write_post(out / "blog" / POST_SLUG, groot / "groot-1028-ablate-summary.json", summary, checks)
+    for old, target in REDIRECTS.items():
+        _redirect(out / old / "index.html", target)
     return out
 
 
 def _copy_static(dest: Path) -> None:
     dest.mkdir(parents=True)
-    for name in ("guide.js", "app.js", "style.css", "demo.css"):
-        source = STATIC / name
-        if source.is_file():
-            shutil.copy2(source, dest / name)
+    shutil.copy2(STATIC / "site.css", dest / "site.css")
     fonts = STATIC / "fonts"
     if fonts.is_dir():
         shutil.copytree(fonts, dest / "fonts")
 
 
-def _export_viewer(model, dest: Path, sentence: str) -> None:
-    write_viewer_data(model, dest / "data", indent=1)
-    (dest / "index.html").write_text(_viewer_page(sentence), encoding="utf-8")
-
-
-def _fake_sentence(scoreboard_path: Path) -> str:
-    scoreboard = json.loads(scoreboard_path.read_text(encoding="utf-8"))
-    rows = scoreboard["features"]
-    real = [row["label"] for row in rows if row.get("real") is True]
-    if set(real) == set(CAUSAL):
-        real = [name for name in CAUSAL if name in real]
-    decoys = [name for name in DECOYS if any(row.get("label") == name and row.get("real") is not True for row in rows)]
-    real_text = ", ".join(real) if real else "none"
-    decoy_text = ", ".join(decoys) if decoys else "none"
-    return f"Scoreboard: {real_text} are real. {decoy_text} are not."
-
-
-def _viewer_page(sentence: str) -> str:
-    """The viewer's own index.html, rooted at /fake/data, with the demo bar above it."""
-    html = (STATIC / "index.html").read_text(encoding="utf-8")
-    html = html.replace('<html lang="en">', '<html lang="en" data-ii-root="/fake/data">', 1)
-    html = html.replace(
-        "<title>interpretableintelligence</title>",
-        "<title>Pipeline demo (synthetic) · interpretableintelligence</title>",
-        1,
-    )
-    html = html.replace(
-        '<link rel="stylesheet" href="/static/style.css">',
-        '<link rel="stylesheet" href="/static/style.css">\n'
-        '  <link rel="stylesheet" href="/static/demo.css">\n'
-        '  <link rel="icon" href="/favicon.ico">',
-        1,
-    )
-    html = html.replace("<body>\n", f"<body>\n{_demo_bar('fake')}\n", 1)
-    score = (
-        '  <p class="score-line" data-testid="synthetic-banner"><span class="badge badge-unverified">Synthetic</span> '
-        "Pipeline demo on 30 generated clips with planted features. It shows the pipeline end to end; "
-        "it is not a result on a real model.</p>\n"
-        f'  <p class="score-line" data-testid="score-line">{escape(sentence)}</p>\n'
-    )
-    return html.replace("  </header>\n", "  </header>\n" + score, 1)
-
-
-def _write_droid(dest: Path, source: Path | None, live: bool = False) -> dict | None:
-    """Put an ``ii export`` of a real run at ``dest``, under the demo bar.
-
-    The export's data (clips, features, precomputed playground) is copied as it is; nothing
-    is recomputed and the counts shown come from its ``run.json``. Its page shell and static
-    files are written again from this checkout, so the viewer there never drifts.
-    """
-    if source is None:
-        return None
-    shutil.copytree(source, dest)
-    run = json.loads((dest / "data" / "run.json").read_text(encoding="utf-8"))
-    shutil.rmtree(dest / "static", ignore_errors=True)
-    export_run._copy_static(dest / "static")
-    html = export_run._shell(DROID_TITLE, SimpleNamespace(run_payload=run))
-    html = html.replace(
-        '<link rel="stylesheet" href="static/style.css">',
-        '<link rel="stylesheet" href="static/style.css">\n'
-        '  <link rel="stylesheet" href="/static/demo.css">\n'
-        '  <link rel="icon" href="/favicon.ico">',
-        1,
-    )
-    html = html.replace("<body>\n", f"<body>\n{_demo_bar('droid')}\n", 1)
-    commands = escape("\n".join(DROID_COMMANDS))
-    line = (
-        '  <section class="score-line droid-banner">\n'
-        f'    <p data-testid="droid-banner">{escape(_droid_sentence(run))}</p>\n'
-        f"{_droid_guide(run)}"
-        f'    <details><summary>Run it yourself</summary><pre class="quickstart"><code>{commands}</code></pre></details>\n'
-        + (
-            '    <p data-testid="droid-live"><a href="/live/">Try the same model live on your own picture</a>: '
-            "switch a feature off and watch its view change.</p>\n"
-            if live
-            else ""
-        )
-        + "  </section>\n"
-    )
-    html = html.replace("  </header>\n", "  </header>\n" + line, 1)
-    (dest / "index.html").write_text(html, encoding="utf-8")
-    return run
-
-
-def _droid_guide(run: dict) -> str:
-    """A collapsed, plain-English "what am I looking at" for newcomers: five lines, no jargon."""
-    lines = (
-        ("The model", f"DINOv2 is a vision model that robots use as their eyes. We showed it {_droid_clips(run)} short videos of robot arms at work (DROID)."),
-        ("Features", "A small tool splits the model's numbers into features. Each one is something the model notices, such as the arm, the ceiling or the edges of the picture."),
-        ("Labels", "An AI names each feature by looking at the moments it lights up most."),
-        ("Verified", "Each name is tested on videos the tool never saw, against random features, and by switching the feature off to see whether the model's view changes. Only features that pass every check get the badge."),
-        ("Play", "Pick a feature, turn it up, down or off, and watch how the model's view changes."),
-    )
-    rows = "".join(f"<dt>{escape(term)}</dt><dd>{escape(text)}</dd>" for term, text in lines)
+def site_header(current: str = "", extra: str = "") -> str:
+    """The one header every page uses, the playground included."""
     return (
-        '    <details class="droid-guide" data-testid="try-guide"><summary>What am I looking at?</summary>'
-        f"<dl>{rows}</dl></details>\n"
+        '<header class="bar">\n'
+        f'    <a class="mark" href="/" aria-label="interpretable intelligence home">{MARK_SVG}<span>interpretable intelligence</span></a>\n'
+        f'    <nav class="site-nav" aria-label="Site sections">{_nav(current)}</nav>\n'
+        f"{extra}"
+        "  </header>"
     )
-
-
-def _droid_verified(run: dict) -> list[str]:
-    return [str(feature.get("label")) for feature in run["features"] if feature.get("badge") == "real"]
-
-
-def _droid_sentence(run: dict) -> str:
-    model = (run.get("model") or {}).get("name") or "the model"
-    verified = _droid_verified(run)
-    return (
-        f"A real run: {model} on {_droid_clips(run)} DROID robot clips, on a 4-core CPU. "
-        f"{len(verified)} of {len(run['features'])} features passed every check ({', '.join(verified)}). "
-        "The playground here is precomputed; it is for exploring, not evidence. A real badge means a feature "
-        "passed the offline checks on held-out clips; it says nothing about what happens in a robot rollout."
-    )
-
-
-def _droid_result(run: dict | None) -> str:
-    if run is None:
-        return ""
-    model = (run.get("model") or {}).get("name") or "a real model"
-    count = len(_droid_verified(run))
-    text = (
-        f"{model} on {_droid_clips(run)} real robot clips: {count} feature{'s' if count != 1 else ''} passed every "
-        "offline check. Try it in the browser with nothing to install; the playground is precomputed."
-    )
-    return (
-        '      <li><a href="/droid/"><span class="section-name">DINOv2 on DROID</span>'
-        f'<span class="section-text" data-testid="droid-summary">{escape(text)}</span></a></li>\n'
-    )
-
-
-def _droid_clips(run: dict) -> int:
-    """Clips the run was scored on, which is more than a size-limited export shows."""
-    export = run.get("export") or {}
-    return int(export.get("clips_total") or len(run["clips"]))
-
-
-def _live_cta() -> str:
-    return (
-        '    <p data-testid="live-cta"><a href="/live/">Or try it live on your own picture:</a> '
-        "see what a real vision model notices, switch a feature off and watch its view change. "
-        "Nothing to install.</p>\n"
-    )
-
-
-def _demo_bar(current: str) -> str:
-    return (
-        '  <nav class="demo-bar" aria-label="Site sections">'
-        f'<a class="demo-home" href="/">Home</a>{_nav(current)}</nav>'
-    )
-
-
-def _wordmark() -> str:
-    """The viewer's logo and wordmark, pointed at the demo home."""
-    html = (STATIC / "index.html").read_text(encoding="utf-8")
-    match = re.search(r'<a class="wordmark".*?</a>', html, re.S)
-    if not match:
-        return '<a class="wordmark" href="/">interpretable intelligence</a>'
-    return match.group(0).replace('href="#/"', 'href="/"', 1)
-
-
-# The site has four sections. Every page belongs to one, and the nav marks that section.
-SECTIONS = (
-    ("try", "/droid/", "Try it"),
-    ("research", "/results/", "Research"),
-    ("start", "/start/", "Run it yourself"),
-    ("demos", "/demos/", "Demos"),
-)
-SECTION_OF = {
-    "droid": "try",
-    "live": "try",
-    "results": "research",
-    "groot": "research",
-    "vjepa": "research",
-    "start": "start",
-    "demos": "demos",
-    "picker": "demos",
-    "fake": "demos",
-}
-# Pages inside a section get a small link back to it above their title.
-PARENT = {"groot": "research", "vjepa": "research", "picker": "demos"}
 
 
 def _nav(current: str) -> str:
@@ -319,40 +109,33 @@ def _nav(current: str) -> str:
         if key == section:
             attrs += ' aria-current="page"'
         parts.append(f"<a{attrs}>{label}</a>")
+    parts.append(f'<a href="{GITHUB_URL}">GitHub</a>')
     return "".join(parts)
 
 
-def _page(title: str, current: str, body: str) -> str:
-    parent = PARENT.get(current)
-    if parent:
-        href, label = next((href, label) for key, href, label in SECTIONS if key == parent)
-        body = f'\n    <p class="crumb"><a href="{href}">{label}</a></p>' + body
+def _page(title: str, current: str, body: str, description: str = "") -> str:
+    meta = f'\n  <meta name="description" content="{escape(description)}">' if description else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
-  <title>{escape(title)} · interpretableintelligence</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/demo.css">
+  <title>{escape(title)}</title>{meta}
+  <link rel="stylesheet" href="/static/site.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
-  <header class="top demo-top">
-    <div class="brand-row">
-      {_wordmark()}
-      <nav class="nav">{_nav(current)}</nav>
-    </div>
-  </header>
+  {site_header(current)}
   <main class="prose">{body}</main>
+  <footer class="foot"><p>ii is free, local and open on <a href="{GITHUB_URL}">GitHub</a>.</p></footer>
 </body>
 </html>
 """
 
 
 def _redirect(path: Path, target: str) -> None:
-    """An old address that now lives elsewhere: a static page that forwards to it."""
+    """An old address whose page was cut: a static page that forwards to where it went."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"""<!DOCTYPE html>
@@ -361,7 +144,7 @@ def _redirect(path: Path, target: str) -> None:
   <meta charset="utf-8">
   <meta http-equiv="refresh" content="0; url={target}">
   <link rel="canonical" href="{target}">
-  <title>Moved · interpretableintelligence</title>
+  <title>Moved · interpretable intelligence</title>
 </head>
 <body><p>This page moved to <a href="{target}">{target}</a>.</p></body>
 </html>
@@ -370,37 +153,45 @@ def _redirect(path: Path, target: str) -> None:
     )
 
 
-def _write_product(path: Path, summary: dict, status: str, droid_run: dict | None = None, live: bool = False) -> None:
-    """The front door: what ii is, three ways in, the latest result and what is coming."""
-    headline = escape(_control_headline(summary))
-    episodes = _episode_total(summary)
-    try_text = (
-        "Watch a real vision model on robot video, see which features fire where, "
-        "and switch them off or turn them up."
-    )
+def _write_home(path: Path, summary: dict) -> None:
+    """The front door: one promise, one way in, your own model next, and the blog."""
     body = f"""
-    <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
-    <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
-    <p class="actions"><a class="button" href="/start/" data-testid="cta">Run ii on your model</a><a class="button button-quiet" href="/droid/">Try a real model</a></p>
-    <ul class="doors" data-testid="doors">
-      <li><a href="/droid/"><span class="section-name">Try it</span><span class="section-text">{try_text}</span></a></li>
-      <li><a href="/results/"><span class="section-name">Research</span><span class="section-text">What we measured on real robot models, and the controls that decide what counts.</span></a></li>
-      <li><a href="/start/"><span class="section-name">Run it yourself</span><span class="section-text">Install ii, try it on a practice model, then point it at yours. Free and local.</span></a></li>
-    </ul>
-{_live_cta() if live else ""}    <h2>Latest result</h2>
-    <p data-testid="control-headline">{headline}</p>
-    <p data-testid="proof">GR00T N1.7 on LIBERO-plus, {episodes} rollouts, run with the repo's ablation runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>). <span class="badge badge-unverified">{escape(status)}</span> <a href="/groot/" data-testid="proof-link">Read the study</a></p>
-    <h2>What's coming</h2>
-    <ul class="coming" data-testid="coming">
-{"" if live else "      <li>A live playground: any picture, every feature, edits that rerun the model.</li>\n"}      <li>Closed-loop rollouts at scale.</li>
-      <li>Your own model's dictionary, trained and checked on a GPU.</li>
-    </ul>
+    <section class="hero">
+      <h1>Look inside a vision model, on your own pictures.</h1>
+      <p class="lede">Drop in a photo or a video frame. See the features a real model picks out and where each one fires. Then switch one off and watch the model's view of the scene change. It runs in your browser, with nothing to install.</p>
+      <p class="actions"><a class="button" href="/live/" data-testid="cta">Open the playground</a><a class="button button-quiet" href="/start/">Run it on your model</a></p>
+    </section>
+    <ol class="steps" data-testid="steps">
+      <li><h3>Bring a picture</h3><p>Upload one, use your camera or start from a robot frame. Pictures never leave your device.</p></li>
+      <li><h3>See what it notices</h3><p>A dictionary splits the model's view into features, like the edge of a table or a white ceiling, and shows where each fires.</p></li>
+      <li><h3>Change its mind</h3><p>Switch a feature off or turn it up, and the rest of the model runs again on the edit.</p></li>
+    </ol>
+    <section class="split">
+      <div>
+        <h2>Then point it at your model</h2>
+        <p>The same loop runs on your laptop, on any Hugging Face vision model and your own clips. A feature gets a tick only when it passes checks against random look-alikes and an untrained copy of the model.</p>
+        <p><a href="/start/">Run it on your model</a></p>
+      </div>
+      <pre class="code"><code>uv run ii run hf \\
+  --model &lt;your-model&gt; \\
+  --clips &lt;your-clips&gt; --steer</code></pre>
+    </section>
+    <section>
+      <h2>From the blog</h2>
+      <a class="card" href="/blog/{POST_SLUG}/" data-testid="post-link">
+        <span class="card-title">{escape(POST_TITLE)}</span>
+        <span class="card-text">{escape(_post_teaser(summary))}</span>
+      </a>
+    </section>
     """
-    path.write_text(_page("ii", "", body), encoding="utf-8")
+    path.write_text(
+        _page("interpretable intelligence", "", body, "Look inside a vision model on your own pictures, then change its mind."),
+        encoding="utf-8",
+    )
 
 
 def _write_start(path: Path) -> None:
-    """How to run ii: install, the practice run, your own model, and the commands."""
+    """Your model: install, the practice run, your model and clips, and the commands."""
     path.parent.mkdir(parents=True, exist_ok=True)
     commands = dict(_ii_commands())
     known = set(commands)
@@ -408,351 +199,131 @@ def _write_start(path: Path) -> None:
     command_items = "".join(
         f"<li>{_cmd(name, known)}<span>{escape(commands[name])}</span></li>" for name in useful
     )
-    own = escape("\n".join(line for line in DROID_COMMANDS[:3] if not line.startswith("#")))
     body = f"""
-    <h1>Run it yourself</h1>
-    <p class="lede"><code>ii</code> is free and local. Try it on a practice model in a few minutes, then point it at yours.</p>
-    <h2 id="quickstart">Quickstart</h2>
-    <pre class="quickstart"><code>uv sync
-uv run ii try</code></pre>
-    <p>{_cmd("try", known)} writes practice clips, finds features in a small practice model and opens the playground on the strongest verified one.</p>
-    <h2>On a real model</h2>
-    <p>Any Hugging Face vision model works. This is how the DINOv2 run in Try it was made, on short DROID robot clips:</p>
-    <pre class="quickstart"><code>{own}</code></pre>
-    <h2>What you get today</h2>
-    <p>{_cmd("run", known)} captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); {_cmd("view", known)} opens the run; {_cmd("validate", known)} checks it. {_cmd("rollouts", known)} compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. {_cmd("import", known)} brings rollout logs you already have into a run folder that validate accepts.</p>
+    <h1>Run it on your own model</h1>
+    <p class="lede"><code>ii</code> is free and runs on your laptop. Give it a Hugging Face vision model and a folder of short videos, and you get the same playground, with a check on every feature.</p>
+    <ol class="steps steps-wide" data-testid="start-steps">
+      <li>
+        <h3>Install</h3>
+        <p>You need git and <a href="https://docs.astral.sh/uv/">uv</a>. No GPU, no account.</p>
+        <pre class="code"><code>git clone {GITHUB_URL}.git
+cd interpretableintelligence
+uv sync</code></pre>
+      </li>
+      <li>
+        <h3>Try the practice model</h3>
+        <p>{_cmd("try", known)} finds features in a small model with three planted on purpose, so you can check what the tool finds against the truth. About 15 seconds.</p>
+        <pre class="code"><code>uv run ii try</code></pre>
+      </li>
+      <li>
+        <h3>Your model, your clips</h3>
+        <p>Any Hugging Face vision model works: ViT-style and video encoders, CNNs, the vision tower of CLIP, SigLIP and VLMs. No clips of your own? <code>uv run ii get-clips --out clips/droid</code> downloads 100 short robot clips.</p>
+        <pre class="code"><code>uv run ii run hf --model facebook/dinov2-small \\
+  --clips clips/droid --out runs/mine --no-score --steer</code></pre>
+      </li>
+      <li>
+        <h3>Check what you found</h3>
+        <p>Run it again without <code>--no-score</code>. A feature gets a tick only when it fires across many clips, its name holds on clips held back, switching it off beats random look-alike edits, and an untrained copy of the model does not have it.</p>
+      </li>
+    </ol>
+    <h2>Robot policies</h2>
+    <p>{_cmd("rollouts", known)} switches features off inside a policy and compares task success against matched random-feature controls and an untrained dictionary, so a drop that any edit would cause is not mistaken for a finding. <a href="/blog/{POST_SLUG}/">How we used it on GR00T.</a></p>
     <h2>Commands</h2>
     <ul class="commands" data-testid="commands">{command_items}</ul>
-    <p><a href="{README_URL}">The rest of the commands are in the README.</a></p>
+    <p><a href="{README_URL}">Every command is in the README.</a></p>
     """
-    path.write_text(_page("Run it yourself", "start", body), encoding="utf-8")
+    path.write_text(_page("Your model · interpretable intelligence", "start", body), encoding="utf-8")
 
 
-def _write_demos(path: Path) -> None:
-    """The synthetic demos, kept apart from the research so neither is mistaken for the other."""
+def _write_blog_index(path: Path, summary: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = """
-    <h1>Demos</h1>
-    <p class="lede"><b>Synthetic examples with a known answer.</b> They show how ii works end to end. They are not results on a real model.</p>
-    <ul class="section-list" data-testid="synthetic-sections">
-      <li><a href="/fake/"><span class="section-name">Pipeline demo</span><span class="section-text">30 generated clips with planted features, in the same viewer a real run uses.</span></a></li>
-      <li><a href="/picker/"><span class="section-name">Candidate picker</span><span class="section-text">The picker run on generated rollouts, to check it finds a planted feature and nothing in pure noise.</span></a></li>
+    body = f"""
+    <h1>Blog</h1>
+    <p class="lede">What we found when we pointed <code>ii</code> at real models.</p>
+    <ul class="posts" data-testid="posts">
+      <li><a class="card" href="/blog/{POST_SLUG}/"><span class="meta">{POST_DATE}</span><span class="card-title">{escape(POST_TITLE)}</span><span class="card-text">{escape(_post_teaser(summary))}</span></a></li>
     </ul>
     """
-    path.write_text(_page("Demos", "demos", body), encoding="utf-8")
+    path.write_text(_page("Blog · interpretable intelligence", "blog", body), encoding="utf-8")
 
 
-def _write_results(
-    path: Path,
-    summary: dict,
-    groot_status: str,
-    checks: dict,
-    control: dict,
-    atp: dict,
-    droid_run: dict | None = None,
-) -> None:
-    """The research hub: one card per study on a real model."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    headline = escape(_control_headline(summary))
-    body = f"""
-    <h1>Research</h1>
-    <p class="lede"><b>What we measured on real robot models, and the controls that decide what counts.</b> Every number on these pages is read from a result file in the repo. A feature is called real only when it passes the scoreboard rule.</p>
-    <ul class="section-list section-list-wide" data-testid="real-sections">
-      <li><a href="/groot/"><span class="section-name">GR00T task 1028</span><span class="section-text">{headline} <span class="badge badge-unverified">{escape(groot_status)}</span></span></a></li>
-      <li><a href="/vjepa/"><span class="section-name">V-JEPA 2 on DROID</span><span class="section-text">{escape(_control_summary(control))} {escape(_atp_summary(atp))}</span></a></li>
-{_droid_result(droid_run)}    </ul>
-    """
-    path.write_text(_page("Research", "results", body), encoding="utf-8")
-
-
-def _write_picker(dest: Path, picker: Path) -> None:
-    dest.mkdir(parents=True)
-    results = json.loads((picker / "synth_results.json").read_text(encoding="utf-8"))
-    extra = json.loads((picker / "synth_results_extra.json").read_text(encoding="utf-8"))
-    shutil.copy2(picker / "synth_results.json", dest / "synth_results.json")
-    shutil.copy2(picker / "synth_results_extra.json", dest / "synth_results_extra.json")
-    null = results["null"]
-    rows = []
-    labels = (
-        ("time+detrend", "time + detrend"),
-        ("time,no-detrend", "time, no detrend"),
-        ("phase+detrend", "phase + detrend"),
+def _post_teaser(summary: dict) -> str:
+    baseline = _one_row(summary, lambda cond: cond == "baseline")
+    single = _single_feature_candidate(summary)
+    return (
+        f"Switching off feature {_latent_name(str(single['cond']))} in NVIDIA's GR00T dropped success "
+        f"from {_fraction(baseline)} to {_fraction(single)}. Random features did that too. "
+        "How ii kept us from calling it a finding."
     )
-    for key, label in labels:
-        block = null[key]
-        rows.append(
-            f"<tr><td>{escape(label)}</td><td>{int(block['runs_with_final_candidate'])}/{int(block['n'])}</td></tr>"
-        )
-    strong = extra["power_50ep_plant0.15"]["recovered_as_candidate"]
-    weak = extra["power_50ep_plant0.05"]["recovered_as_candidate"]
-    final_bits = []
-    for key, label in labels:
-        block = null[key]
-        final_bits.append(f"{int(block['runs_with_final_candidate'])}/{int(block['n'])} ({label})")
-    body = f"""
-    <h1>Candidate picker on synthetic rollouts</h1>
-    <p class="lede">A test of the picker itself on generated rollouts where the answer is known. It is not a result on a real model.</p>
-    <p>Null runs with a final candidate, from <code>picker/synth_test.py --null-seeds 30</code>.</p>
-    <table class="score-table" data-testid="null-counts">
-      <thead><tr><th>Match</th><th>Final candidate</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table>
-    <p>Planted feature recovered as a candidate, from <code>picker/synth_test_extra.py</code>, 50 episodes per run, 5 seeds. <code>plant</code> is the fraction of tokens that fire in the window before failure.</p>
-    <table class="score-table" data-testid="plant-counts">
-      <thead><tr><th>Plant fraction</th><th>Recovered</th></tr></thead>
-      <tbody>
-        <tr><td>0.15</td><td>{escape(str(strong))}</td></tr>
-        <tr><td>0.05</td><td>{escape(str(weak))}</td></tr>
-      </tbody>
-    </table>
-    <p>Rerun of those two scripts. Final candidates: {escape('; '.join(final_bits))}. Recovered: {escape(str(strong))} at plant 0.15 and {escape(str(weak))} at plant 0.05.</p>
-    """
-    (dest / "index.html").write_text(_page("Candidate picker", "picker", body), encoding="utf-8")
 
 
-def _write_vjepa(dest: Path, vjepa: Path, control: dict, atp: dict) -> None:
-    dest.mkdir(parents=True)
-    scoreboard = json.loads((vjepa / "scoreboard.json").read_text(encoding="utf-8"))
-    split = json.loads((vjepa / "split.json").read_text(encoding="utf-8"))
-    heldout = json.loads((vjepa / "heldout_loss.json").read_text(encoding="utf-8"))
-    random_meta = json.loads((vjepa / "random_init" / "meta.json").read_text(encoding="utf-8"))
-    random_cands = json.loads((vjepa / "random_init" / "candidates.json").read_text(encoding="utf-8"))
-    features = scoreboard["features"]
-    feature = next(row for row in features if int(row["id"]) == 270)
-    status = feature["status"]
-    window = next(
-        row
-        for row in heldout["windows"]
-        if row.get("clip_name") == "droid_ep068.mp4" and int(row.get("window")) == 0
-    )
-    media = dest / "media"
-    viz = dest / "viz"
-    media.mkdir()
-    viz.mkdir()
-    for name in ("droid_ep067.mp4", "droid_ep068.mp4"):
-        shutil.copy2(vjepa / name, media / name)
-    picture = vjepa / "features" / "viz" / "feature_00270.png"
-    shutil.copy2(picture, viz / "feature_00270.png")
-    for path in sorted((vjepa / "features" / "viz").glob("feature_*.png")):
-        if path.name != "feature_00270.png":
-            shutil.copy2(path, viz / path.name)
-    width, height = _video_size(media / "droid_ep068.mp4")
-    run = scoreboard["run"]
-    sae = scoreboard["sae"]
-    split_map = split.get("clips") if isinstance(split.get("clips"), dict) else split
-    ep068_split = split_map["droid_ep068.mp4"]
-    ep067_split = split_map["droid_ep067.mp4"]
-    above = [row for row in features if _num(row.get("random_percentile")) is not None and float(row["random_percentile"]) >= 95]
-    above_text = ", ".join(f"{int(row['id'])} at {row['random_percentile']}" for row in above) or "none"
-    real_ids = [int(row["id"]) for row in features if row.get("real") is True]
-    n_random_cands = len(random_cands["candidates"])
-    firing = int(random_meta["features_firing_random"])
-    rows = []
-    for row in features:
-        rows.append(
-            "<tr>"
-            f"<td>{int(row['id'])}</td>"
-            f"<td>{escape(str(row.get('status')))}</td>"
-            f"<td>{escape(_fmt_num(row.get('random_percentile')))}</td>"
-            f"<td>{escape(str(row.get('real')))}</td>"
-            "</tr>"
-        )
-    body = f"""
-    <h1>V-JEPA 2 on DROID</h1>
-    <p class="meta-line">{escape(str(run['model']))} · layer {int(run['layer'])} · run {escape(str(run['run_id']))} · SAE usable {escape(str(sae.get('usable')))} · loss_recovered {escape(_fmt_num(sae.get('loss_recovered')))}</p>
-{_control_html(control)}
-{_atp_html(atp)}
-    <h2>The run on display</h2>
-    <p>Opened on held-out <code>droid_ep068.mp4</code> window 0. <code>split.json</code> marks that file <code>{escape(str(ep068_split))}</code> and <code>droid_ep067.mp4</code> <code>{escape(str(ep067_split))}</code>.</p>
-    <div class="clip-row">
-      <figure>
-        <div class="stage" style="aspect-ratio: {width} / {height}">
-          <video src="media/droid_ep068.mp4" controls playsinline data-testid="ep068"></video>
-        </div>
-        <figcaption>droid_ep068.mp4 · window {int(window['window'])} · source frames {int(window['frame_start'])}–{int(window['frame_end'])} · {escape(str(window.get('task_text') or ''))}</figcaption>
-      </figure>
-      <article class="demo-card" data-testid="feature-270" data-status="{escape(str(status))}">
-        <p class="kicker">Feature 270</p>
-        <div class="demo-title"><h2>{escape(str(feature.get('label') or 'feature 270'))}</h2> <span class="badge badge-status" data-testid="status-270">{escape(str(status))}</span></div>
-        <img class="viz" alt="Feature 270 activations" src="viz/feature_00270.png">
-        <dl class="demo-score">
-          <div><dt>random_percentile</dt><dd>{escape(_fmt_num(feature.get('random_percentile')))}</dd></div>
-          <div><dt>n_random</dt><dd>{escape(str(feature.get('n_random')))}</dd></div>
-          <div><dt>ablation_effect</dt><dd>{escape(_fmt_num(feature.get('ablation_effect')))}</dd></div>
-          <div><dt>real</dt><dd>{escape(str(feature.get('real')))}</dd></div>
-        </dl>
-      </article>
-    </div>
-    <p>The other clip in this bundle, <code>droid_ep067.mp4</code>, is the train split above.</p>
-    <div class="stage" style="aspect-ratio: {width} / {height}">
-      <video src="media/droid_ep067.mp4" controls playsinline data-testid="ep067"></video>
-    </div>
-    <h2>Ten candidates</h2>
-    <p>Scoreboard threshold for the random-control gate is <code>{escape(str(scoreboard['thresholds']['random_percentile']))}</code>. Candidates at or above 95: {escape(above_text)}. <code>real</code> is true for {escape(str(real_ids) if real_ids else 'no feature')}.</p>
-    <table class="score-table" data-testid="candidates">
-      <thead><tr><th>Feature</th><th>Status</th><th>random_percentile</th><th>real</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table>
-    <p>The random-init SAE still fires {firing} features, and <code>random_init/candidates.json</code> still lists {n_random_cands} candidates. Nothing here is claimed real.</p>
-    """
-    (dest / "index.html").write_text(_page("V-JEPA 2", "vjepa", body), encoding="utf-8")
-
-
-def _write_groot(dest: Path, summary_path: Path, summary: dict, status: str, checks: dict) -> None:
-    """GR00T task 1028 in one place: the answer, the arms to explore, the stop rule, every condition, the checks."""
+def _write_post(dest: Path, summary_path: Path, summary: dict, checks: dict) -> None:
+    """How we used ii on GR00T task 1028. Every number is read from the vendored result files."""
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(summary_path, dest / summary_path.name)
-    baseline = _one_row(summary, lambda cond: cond == "baseline")
-    candidates = [row for row in summary["table"] if "-cand-" in str(row["cond"])]
-    candidate_html = "\n".join(
-        f'    <p data-testid="groot-candidate">{escape(_candidate_text(row))}</p>' for row in candidates
-    )
-    spec = _sprt_spec()
+    _require_no_effect(summary)
     identity = _groot_identity()
+    spec = _sprt_spec()
+    baseline = _one_row(summary, lambda cond: cond == "baseline")
+    single = _single_feature_candidate(summary)
+    pair = _one_row(summary, lambda cond: "-cand-" in cond and "+" in cond)
+    single_name = _latent_name(str(single["cond"]))
+    pair_name = _latent_name(str(pair["cond"]))
+    matched = _matched_controls(summary, str(single["cond"]))
+    matched_fell = sum(1 for row in matched if row.get("verdict") == "fall")
+    controls = _control_rows(summary)
+    fell = sum(1 for row in controls if row.get("verdict") == "fall")
     episodes = _episode_total(summary)
-    order = ("baseline", "A-cand-720", "B-cand-7081+5852")
-    buttons = []
-    panels = []
-    for cond in order:
-        row = _one_row(summary, lambda name, cond=cond: name == cond)
-        selected = cond == "A-cand-720"
-        buttons.append(
-            f'<button type="button" data-arm-button="{escape(cond)}" aria-pressed="{"true" if selected else "false"}">'
-            f"{escape(_arm_button(row))}</button>"
-        )
-        panels.append(_arm_panel(summary, row, selected))
+    real = "true" if summary["real"] is True else "false"
     body = f"""
-    <h1>GR00T task {escape(identity["task"])}</h1>
-    <p class="lede"><b>Does switching off one learned feature in NVIDIA's GR00T change whether it completes a task?</b> {escape(identity["name"])}, checkpoint <code>{escape(identity["checkpoint"])}</code>, on LIBERO-plus task {escape(identity["task"])}.</p>
-    <section data-testid="explore">
-    <p><span class="badge badge-unverified" data-testid="explore-verdict">{escape(status)}</span></p>
-    <p data-testid="explore-headline">{escape(_explore_headline(summary))}</p>
-    <p data-testid="explore-real">Every feature on this run is real=false.</p>
-    <p data-testid="explore-model">The edit is on transformer block {escape(spec["layer"])} at the final denoise step.</p>
-    <h2>Arms</h2>
-    <div class="arm-switch" role="group" aria-label="Arms" data-testid="arm-switch">{''.join(buttons)}</div>
-    <p data-testid="interval-note">Intervals are unadjusted for early stopping; read them as descriptive.</p>
-    {''.join(panels)}
-    <h2>Stop rule</h2>
-    <p data-testid="stop-rule" data-stop-rule="{escape(spec["stop_rule"])}">{escape(_stop_rule_text(spec))}</p>
-    <p data-testid="explore-runner">{episodes} rollouts. This ablation ran through <a href="{RUNNER_URL}"><code>{escape(RUNNER_PATH)}</code></a>, not through <code>ii rollouts</code>. <code>ii rollouts --policy groot-1028 --pick</code> now runs GR00T rollouts with the random-weights SAE control (research rule 4); this ablation predates it, so it cannot count as a finding.</p>
-    </section>
-    <h2>In detail</h2>
-    <p data-testid="ablation-runner">{_runner_html(summary)}</p>
-    <p data-testid="groot-result">{escape(_groot_result_sentence(summary))}</p>
-    <p data-testid="groot-baseline">{escape(_baseline_line(baseline))}</p>
-{candidate_html}
-    <p data-testid="groot-controls">{escape(_controls_line(summary))}</p>
+    <article class="post">
+    <p class="meta"><a href="/blog/">Blog</a> · {POST_DATE}</p>
+    <h1>{escape(POST_TITLE)}</h1>
+    <p class="lede">We build <code>ii</code> so that anyone can look inside a vision or robot model. To test it on something real, we pointed it at {escape(identity["name"])}, NVIDIA's robot policy, on LIBERO-plus task {escape(identity["task"])}: a kitchen task it completes about half the time. We wanted to know whether one learned feature inside the policy makes it fail.</p>
+
+    <h2>What we did</h2>
+    <ol>
+      <li>Recorded {escape(spec["capture_n"])} episodes ({escape(spec["capture_successes"])} successes) and captured transformer block {escape(spec["layer"])} of the action model on its final denoise step.</li>
+      <li>Trained a sparse dictionary on it: 8,192 features, 32 active at a time, held-out explained variance {checks["ev_heldout"]:.3f}.</li>
+      <li>Picked the features that fire more in the moments before a failure. Two stood out: feature {escape(single_name)} and the pair {escape(pair_name)}.</li>
+      <li>Ran the policy again with each candidate switched off, on shared seeds, with a stop rule that ends an arm as soon as the answer is clear.</li>
+    </ol>
+    <p>Before any of that, a sanity check: putting the dictionary's reconstruction in place of the real activations, with nothing switched off, left the actions identical to the baseline in {checks["recon_identical"]} of {checks["recon_compared"]} episodes. So the hook itself does not move the policy.</p>
+
+    <h2>It looked like the answer</h2>
+    <p data-testid="post-headline">Switching feature {escape(single_name)} off dropped success from {_fraction(baseline)} to {_fraction(single)}. The stop rule called it a fall after {int(single["n"])} episodes. That is the kind of number that ends up on a slide.</p>
+
+    <h2>Then the control</h2>
+    <p data-testid="post-controls">Next to every candidate we switched off random features matched to it. For feature {escape(single_name)}, {matched_fell} of {len(matched)} matched random features also made the policy fail. Across both candidates, {fell} of {len(controls)} random controls fell.</p>
+    <p>Breaking a policy is easy. Many edits make it worse, so a drop when you remove a feature only says the policy uses that part of its activations. If feature {escape(single_name)} caused failures, switching it off should have raised success. That was the test, and neither candidate passed it. Both stay <code>real={real}</code>.</p>
+    <p class="verdict" data-testid="post-verdict">{escape(_groot_status(summary))}</p>
+
+    <h2>What we changed in ii</h2>
+    <p>The result shaped the tool. A feature now counts as a finding on a robot policy only when all of these hold on shared seeds:</p>
+    <ul>
+      <li>The stop rule calls a rise in success, not a fall.</li>
+      <li>The rise over baseline is significant (McNemar p &lt; 0.05).</li>
+      <li>It beats every matched random-feature control.</li>
+      <li>It beats an untrained dictionary run through the same picker, so the feature has to do better than what random weights would produce.</li>
+    </ul>
+    <p>{_cmd("rollouts", set(dict(_ii_commands())))} with <code>--pick</code> runs all four. The ablation in this post ran on the repo's earlier runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), before the untrained-dictionary control shipped.</p>
+
+    <h2>Try the same loop</h2>
+    <p>Finding features, switching them off and comparing against random look-alikes is what the <a href="/live/">playground</a> does on a vision model in your browser, and what <a href="/start/"><code>ii run hf</code></a> does on your own model.</p>
+
+    <details class="appendix" data-testid="appendix">
+      <summary>Every number behind this post</summary>
+      <p>{episodes} rollouts in total. {escape(_baseline_line(baseline))} {escape(_candidate_text(single))} {escape(_candidate_text(pair))}</p>
+      <p data-testid="stop-rule" data-stop-rule="{escape(spec["stop_rule"])}">{escape(_stop_rule_text(spec))}</p>
 {_conditions_html(summary)}
-{_checks_html(checks)}
-    <script>
-    (function () {{
-      var root = document.querySelector("[data-testid=arm-switch]");
-      if (!root) return;
-      var buttons = root.querySelectorAll("[data-arm-button]");
-      var panels = document.querySelectorAll("[data-arm-panel]");
-      function show(id) {{
-        panels.forEach(function (panel) {{
-          panel.hidden = panel.getAttribute("data-arm-panel") !== id;
-        }});
-        buttons.forEach(function (button) {{
-          button.setAttribute("aria-pressed", button.getAttribute("data-arm-button") === id ? "true" : "false");
-        }});
-      }}
-      buttons.forEach(function (button) {{
-        button.addEventListener("click", function () {{
-          show(button.getAttribute("data-arm-button"));
-        }});
-      }});
-    }})();
-    </script>
+      <p>SAE: BatchTopK, k=32, 8192 latents, trained on block {escape(spec["layer"])} of the {checks["episodes"]}-episode capture. Held-out explained variance {checks["ev_heldout"]:.3f} on {checks["ev_episodes"]} episodes ({checks["ev_tokens"]} tokens). loss_recovered: {"not measured" if checks["loss_recovered"] is None else _fmt_num(checks["loss_recovered"])}. Failure labels: the first labeller marked pot 1's normal placement as a drop in {checks["mislabel"]} of {checks["mislabel_of"]} cases, so failure onset was re-derived from pot 0 before candidates were picked.</p>
+      <p>Sources: <a href="{summary_path.name}"><code>{summary_path.name}</code></a>, <code>demo-data/groot/recon-only-summary.json</code>, <code>demo-data/groot/sae-heldout-eval.json</code>.</p>
+    </details>
+    </article>
     """
-    (dest / "index.html").write_text(_page(f"GR00T task {identity['task']}", "groot", body), encoding="utf-8")
-
-
-def _arm_button(row: dict) -> str:
-    cond = str(row["cond"])
-    fraction = _fraction(row)
-    if cond == "baseline":
-        return f"Baseline {fraction}"
-    return f"{_latent_name(cond)} off {fraction}"
-
-
-def _arm_panel(summary: dict, row: dict, selected: bool) -> str:
-    cond = str(row["cond"])
-    hidden = "" if selected else " hidden"
-    if cond == "baseline":
-        context = ""
-        controls = ""
-    else:
-        matched = _matched_controls(summary, cond)
-        context = f'<p data-testid="arm-context">{escape(_arm_line(row, matched))}</p>'
-        controls = _control_table(matched)
-    return (
-        f'<section class="arm-panel" data-arm-panel="{escape(cond)}" data-testid="arm-panel-{escape(cond)}"{hidden}>'
-        f'<div class="compare">{_arm_compare(summary, row)}</div>'
-        f"{context}"
-        f'<p data-testid="arm-detail">{escape(_arm_detail(row))}</p>'
-        f"{controls}"
-        "</section>"
+    (dest / "index.html").write_text(
+        _page(f"{POST_TITLE} · interpretable intelligence", "post", body, _post_teaser(summary)), encoding="utf-8"
     )
-
-
-def _arm_compare(summary: dict, row: dict) -> str:
-    baseline = _one_row(summary, lambda name: name == "baseline")
-    if str(row["cond"]) == "baseline":
-        return _compare_card(row)
-    return _compare_card(row) + _compare_card(baseline)
-
-
-def _compare_card(row: dict) -> str:
-    name = "Baseline" if str(row["cond"]) == "baseline" else f"{_latent_name(str(row['cond']))} off"
-    verdict = row.get("verdict")
-    verdict_html = f"<dt>Stop-rule verdict</dt><dd>{escape(str(verdict))}</dd>" if verdict else ""
-    return (
-        "<dl>"
-        f"<dt>{escape(name)}</dt>"
-        f"<dd>{_fraction(row)}</dd>"
-        f"{verdict_html}"
-        "</dl>"
-    )
-
-
-def _control_table(rows: list) -> str:
-    body = []
-    for row in rows:
-        low, high = row["wilson95"]
-        delta = row.get("delta_paired")
-        delta_text = "" if delta is None else f"{float(delta):+.3f}"
-        body.append(
-            "<tr>"
-            f"<td>{escape(_latent_name(str(row['cond'])))} off</td>"
-            f"<td>{_fraction(row)}</td>"
-            f"<td>[{_bound(low)}, {_bound(high)}]</td>"
-            f"<td>{escape(delta_text)}</td>"
-            f"<td>{escape(str(row.get('verdict') or ''))}</td>"
-            "</tr>"
-        )
-    return (
-        '<table class="score-table" data-testid="arm-controls">'
-        "<thead><tr><th>Control</th><th>Success</th><th>Wilson 95%</th><th>Paired change</th><th>Stop-rule verdict</th></tr></thead>"
-        f"<tbody>{''.join(body)}</tbody></table>"
-    )
-
-
-def _arm_detail(row: dict) -> str:
-    low, high = row["wilson95"]
-    parts = [f"{_fraction(row)}. Wilson 95% [{_bound(low)}, {_bound(high)}]."]
-    delta = row.get("delta_paired")
-    shared = row.get("n_shared")
-    if delta is not None and shared is not None:
-        parts.append(f"Paired change {float(delta):+.3f} on {int(shared)} shared seeds.")
-    verdict = row.get("verdict")
-    if verdict:
-        parts.append(f"Stop-rule verdict: {verdict}.")
-    else:
-        parts.append("The stop rule does not run on baseline.")
-    return " ".join(parts)
 
 
 def _latent_name(cond: str) -> str:
@@ -763,32 +334,10 @@ def _fraction(row: dict) -> str:
     return f"{int(row['successes'])}/{int(row['n'])}"
 
 
-def _explore_headline(summary: dict) -> str:
-    """720's result sits in the same sentence as the controls that also fell."""
-    baseline = _one_row(summary, lambda cond: cond == "baseline")
-    single = _single_feature_candidate(summary)
-    controls = _control_rows(summary)
-    fell = sum(1 for row in controls if row.get("verdict") == "fall")
-    return (
-        f"{_latent_name(str(single['cond']))} off: {_fraction(single)}. "
-        f"{fell} of {len(controls)} random controls also fell. "
-        f"Baseline: {_fraction(baseline)}."
-    )
-
-
 def _matched_controls(summary: dict, cond: str) -> list:
     """Controls paired with this candidate. A-cand matches A-ctrl; B-cand matches B-ctrl."""
     prefix = str(cond).split("-", 1)[0] + "-ctrl"
     return [row for row in _control_rows(summary) if str(row["cond"]).startswith(prefix)]
-
-
-def _arm_line(row: dict, controls: list) -> str:
-    """This arm against its own matched controls. Counts come from the summary rows."""
-    fell = sum(1 for item in controls if item.get("verdict") == "fall")
-    return (
-        f"{_latent_name(str(row['cond']))} off: {_fraction(row)}. "
-        f"{fell} of {len(controls)} matched controls also fell."
-    )
 
 
 def _sprt_spec() -> dict:
@@ -853,15 +402,6 @@ def _groot_status(summary: dict) -> str:
     return "Tested: no causal effect found"
 
 
-def _groot_result_sentence(summary: dict) -> str:
-    _require_no_effect(summary)
-    real = "true" if summary["real"] is True else "false"
-    return (
-        "The test was whether switching a feature off raises success. "
-        f"Neither candidate did, so both are real={real}."
-    )
-
-
 def _require_no_effect(summary: dict) -> None:
     candidates = [row for row in summary["table"] if "-cand-" in str(row["cond"])]
     if len(candidates) != 2:
@@ -917,40 +457,8 @@ def _single_feature_candidate(summary: dict) -> dict:
     return rows[0]
 
 
-def _control_headline(summary: dict) -> str:
-    """The GR00T worked example. Every count is read from the ablation summary."""
-    baseline = _one_row(summary, lambda cond: cond == "baseline")
-    single = _single_feature_candidate(summary)
-    feature = str(single["cond"]).split("-")[-1]
-    controls = _control_rows(summary)
-    fell = sum(1 for row in controls if row.get("verdict") == "fall")
-    return (
-        f"Feature {feature} tracked failures, and turning it off dropped success "
-        f"from {int(baseline['successes'])}/{int(baseline['n'])} "
-        f"to {int(single['successes'])}/{int(single['n'])}. "
-        f"Turning off random features caused falls too in {fell} of {len(controls)} runs. "
-        "ii makes you run that control before calling a feature real."
-    )
-
-
-RUNNER_PATH = "src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"
-RUNNER_URL = "https://github.com/jerrydjin/interpretableintelligence/blob/main/" + RUNNER_PATH
-README_URL = "https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md"
-
-
-def _runner_html(summary: dict) -> str:
-    episodes = _episode_total(summary)
-    return (
-        f"{episodes} rollouts. The matched random-feature controls that caught this result "
-        "live in the repo's ablation runner, "
-        f'<a href="{RUNNER_URL}"><code>{escape(RUNNER_PATH)}</code></a>, '
-        "not through an <code>ii</code> command. "
-        "That is the check <code>ii</code> is built around, until GR00T ablation is wired into <code>ii</code>."
-    )
-
-
 def _ii_commands() -> list[tuple[str, str]]:
-    """Subcommands `ii --help` actually registers, with a number-free first line."""
+    """Subcommands `ii --help` actually registers, with the first line of their help."""
     from typer.main import get_command
 
     from interpretableintelligence.cli import app
@@ -962,10 +470,7 @@ def _ii_commands() -> list[tuple[str, str]]:
             # The docstring's first line cites exit code 0. Keep result numbers out of this list.
             blurb = "Validate a run folder against the schema."
         if name == "rollouts":
-            # The command only ships the fake reacher. Don't let the list read as a GR00T run.
-            blurb = "Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written."
-        if any(character.isdigit() for character in blurb):
-            raise ValueError(f"ii {name} blurb contains a digit: {blurb}")
+            blurb = "Switch features off inside a policy and compare task success against matched random controls."
         lines.append((name, blurb))
     if not lines:
         raise ValueError("ii has no commands")
@@ -976,21 +481,6 @@ def _cmd(name: str, known: set[str]) -> str:
     if name not in known:
         raise ValueError(f"ii {name} is not a command on main")
     return f'<code data-cmd="{escape(name)}">ii {escape(name)}</code>'
-
-
-def _coming_cmd(name: str, known: set[str]) -> str:
-    if name in known:
-        raise ValueError(f"ii {name} is already a command; do not mark it coming")
-    return f'<code data-cmd="{escape(name)}">ii {escape(name)}</code>'
-
-
-def _controls_line(summary: dict) -> str:
-    controls = _control_rows(summary)
-    fell = sum(1 for row in controls if row.get("verdict") == "fall")
-    return (
-        f"{fell} of the {len(controls)} random controls also fell, "
-        "so a fall is not specific to these features."
-    )
 
 
 def _control_rows(summary: dict) -> list:
@@ -1008,9 +498,6 @@ def _percent(successes: int, n: int) -> int:
 
 def _bound(value: float) -> str:
     return f"{float(value):.4f}"
-
-
-V9_NOTES = REPO / "src" / "interpretableintelligence" / "adapters" / "groot" / "v9" / "V9_NOTES.md"
 
 
 def _groot_checks(groot: Path) -> dict:
@@ -1039,22 +526,6 @@ def _groot_checks(groot: Path) -> dict:
         "mislabel": int(match.group(1)),
         "mislabel_of": int(match.group(2)),
     }
-
-
-def _checks_summary(checks: dict) -> str:
-    return (
-        f"Reconstruction-only rollouts identical to baseline in {checks['recon_identical']} of {checks['recon_compared']}. "
-        f"SAE held-out explained variance {checks['ev_heldout']:.3f}. Failure onset re-derived from pot 0."
-    )
-
-
-def _checks_html(checks: dict) -> str:
-    loss = "not measured" if checks["loss_recovered"] is None else _fmt_num(checks["loss_recovered"])
-    return f"""    <h2 id="checks">Method checks</h2>
-    <p data-testid="check-recon">Reconstruction only: the hook replaced block 5 with the SAE reconstruction and edited no latent. Actions were identical to baseline in {checks['recon_identical']} of {checks['recon_compared']} shared-seed episodes, success matched in {checks['recon_same_success']} of {checks['recon_compared']}, and the largest change at the hook was {checks['recon_max_change']:g}. So the hook itself does not move the policy.</p>
-    <p data-testid="check-ev">SAE: BatchTopK, k=32, 8192 latents, trained on block 5 of the {checks['episodes']}-episode capture ({checks['successes']} successes). Held-out explained variance {checks['ev_heldout']:.3f} on {checks['ev_episodes']} held-out episodes ({checks['ev_tokens']} tokens). loss_recovered: {escape(loss)}.</p>
-    <p data-testid="check-pot0">Failure labels: the first labeller judged a drop on whichever object was nearest the gripper, and marked pot 1's normal placement on the stove as a drop in {checks['mislabel']} of {checks['mislabel_of']} cases. Failure onset was re-derived from pot 0 (rule <code>pot0-v1</code>) before the picker chose candidates.</p>
-    <p>Sources: <code>demo-data/groot/recon-only-summary.json</code>, <code>demo-data/groot/sae-heldout-eval.json</code>, <code>adapters/groot/v9/V9_NOTES.md</code>.</p>"""
 
 
 def _conditions_html(summary: dict) -> str:
@@ -1115,95 +586,12 @@ def _arms_html(summary: dict) -> str:
     return "\n".join(lines)
 
 
-def _random_control(randinit: Path) -> dict:
-    trained = json.loads((randinit / "score-trained.json").read_text(encoding="utf-8"))
-    random = json.loads((randinit / "score-randinit.json").read_text(encoding="utf-8"))
-    return {"trained": trained, "random": random}
-
-
-def _control_summary(control: dict) -> str:
-    trained, random = control["trained"], control["random"]
-    return (
-        f"An SAE on a random-weights V-JEPA 2 scored higher on the loss-based checks than the trained model "
-        f"(loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}). "
-        "Those scores cannot tell trained from random. The random-weights SAE control has since shipped in ii rollouts --pick."
-    )
-
-
-def _control_html(control: dict) -> str:
-    trained, random = control["trained"], control["random"]
-    rows = [
-        ("Held-out explained variance", f"{trained['ev_heldout']:.3f}", f"{random['ev_heldout']:.3f}"),
-        ("loss_recovered", f"{trained['loss_recovered']:.4f}", f"{random['loss_recovered']:.4f}"),
-        ("L0 (held-out)", f"{trained['l0_heldout']:.1f}", f"{random['l0_heldout']:.1f}"),
-        ("Beats the context-mean floor", str(trained["beats_floor"]), str(random["beats_floor"])),
-        ("Held-out windows scored", str(int(trained["n_windows"])), str(int(random["n_windows"]))),
-    ]
-    body = "".join(f"<tr><td>{escape(a)}</td><td>{escape(b)}</td><td>{escape(c)}</td></tr>" for a, b, c in rows)
-    return f"""    <h2 id="random-control">Random-weights control</h2>
-    <p data-testid="random-control">The same SAE recipe, trained on a randomly initialised V-JEPA 2 (same DROID clips, layer 16), reconstructs its activations better than the trained model's SAE does: explained variance {random['ev_heldout']:.3f} vs {trained['ev_heldout']:.3f}, loss_recovered {random['loss_recovered']:.4f} vs {trained['loss_recovered']:.4f}. On the random model, zeroing layer 16 lowers the loss (L_zero {random['L_zero']:.3f} vs L_clean {random['L_clean']:.3f}), so its loss_recovered measures nothing, yet it still reads near 1. Only the context-mean floor check told the two apart. Explained variance and loss_recovered cannot separate a trained dictionary from a random one, so we closed this track. The random-weights SAE control has since shipped in ii rollouts --pick.</p>
-    <table class="score-table" data-testid="random-control-table">
-      <thead><tr><th></th><th>Trained V-JEPA 2</th><th>Random weights</th></tr></thead>
-      <tbody>{body}</tbody>
-    </table>
-    <p>Sources: <code>demo-data/vjepa-randinit/score-trained.json</code> (run droid100-L16-posmean) and <code>score-randinit.json</code> (run droid100-L16-randinit).</p>"""
-
-
-def _atp(atp: Path) -> dict:
-    summary = json.loads((atp / "summary.json").read_text(encoding="utf-8"))
-    corr = summary["correlations"]["|dL1| vs |AtP_dL1|"]["per_feature_mean"]
-    base = summary["baseline_edit_size"]
-    timing = summary["timing"]
-    recall = summary["topk_recall"]["by |dL1| (mean over windows of |dL1|) vs mean |AtP|"]
-    return {
-        "n_features": int(summary["n_features"]),
-        "spearman": float(corr["spearman"]),
-        "n": int(corr["n"]),
-        "edit_size": float(base["spearman_feat_absdL1_vs_act_sum"]),
-        "speedup_all": float(timing["speedup_if_ranking_all_8192"]),
-        "speedup_tested": float(timing["speedup_tested_features_only"]),
-        "top10": int(recall["in_atp_top10"]),
-        "windows": int(summary["n_feature_windows"]),
-    }
-
-
-def _atp_summary(atp: dict) -> str:
-    return (
-        f"On {atp['n_features']} V-JEPA 2 features, attribution ranks features the way measured ablation does "
-        f"(Spearman {atp['spearman']:.3f}) at about {_round_speedup(atp['speedup_all'])}x less compute across all 8192 latents. "
-        f"Edit size alone gets {atp['edit_size']:.2f}."
-    )
-
-
-def _atp_html(atp: dict) -> str:
-    return f"""    <h2 id="atp">Attribution vs ablation</h2>
-    <p data-testid="atp">Attribution patching (one forward and backward pass per window, covering all 8192 latents) against measured ablation of {atp['n_features']} features ({atp['windows']} feature-windows). Spearman between |attribution| and |ablation effect|, per feature: <b>{atp['spearman']:.3f}</b>. {atp['top10']} of ablation's top 10 are in attribution's top 10.</p>
-    <p data-testid="atp-speed">Ranking all 8192 latents this way takes about {_round_speedup(atp['speedup_all'])}x less compute than ablating each one (projected from measured per-window times). On only the {atp['n_features']} features tested the saving is {atp['speedup_tested']:.1f}x.</p>
-    <p data-testid="atp-caveat">Caveat: ranking by edit size alone (summed activation) already gives Spearman {atp['edit_size']:.2f}. Attribution is a prefilter for what to ablate; it does not replace ablation. Source: <code>demo-data/vjepa-atp/summary.json</code> (run droid100-L16).</p>"""
-
-
-def _round_speedup(value: float) -> str:
-    return f"{int(round(value, -2)):,}"
-
-
 def _favicon_png() -> bytes:
     import base64
 
     return base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
     )
-
-
-def _video_size(path: Path) -> tuple[int, int]:
-    import av
-
-    with av.open(str(path)) as container:
-        stream = container.streams.video[0]
-        return int(stream.width), int(stream.height)
-
-
-def _write_json(path: Path, payload) -> None:
-    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
 
 
 def _num(value):

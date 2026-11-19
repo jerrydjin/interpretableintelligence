@@ -4,37 +4,48 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
-  <title>Run it yourself · interpretableintelligence</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/demo.css">
+  <title>Your model · interpretable intelligence</title>
+  <link rel="stylesheet" href="/static/site.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
-  <header class="top demo-top">
-    <div class="brand-row">
-      <a class="wordmark" href="/" aria-label="interpretable intelligence">
-        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
-        <span class="wordmark-text">interpretable intelligence</span>
-      </a>
-      <nav class="nav"><a href="/droid/">Try it</a><a href="/results/">Research</a><a href="/start/" aria-current="page">Run it yourself</a><a href="/demos/">Demos</a></nav>
-    </div>
+  <header class="bar">
+    <a class="mark" href="/" aria-label="interpretable intelligence home"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg><span>interpretable intelligence</span></a>
+    <nav class="site-nav" aria-label="Site sections"><a href="/live/">Playground</a><a href="/start/" aria-current="page">Your model</a><a href="/blog/">Blog</a><a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a></nav>
   </header>
   <main class="prose">
-    <h1>Run it yourself</h1>
-    <p class="lede"><code>ii</code> is free and local. Try it on a practice model in a few minutes, then point it at yours.</p>
-    <h2 id="quickstart">Quickstart</h2>
-    <pre class="quickstart"><code>uv sync
-uv run ii try</code></pre>
-    <p><code data-cmd="try">ii try</code> writes practice clips, finds features in a small practice model and opens the playground on the strongest verified one.</p>
-    <h2>On a real model</h2>
-    <p>Any Hugging Face vision model works. This is how the DINOv2 run in Try it was made, on short DROID robot clips:</p>
-    <pre class="quickstart"><code>uv run ii get-clips --out clips/droid
-uv run ii run hf --model facebook/dinov2-small --clips clips/droid --out runs/droid</code></pre>
-    <h2>What you get today</h2>
-    <p><code data-cmd="run">ii run</code> captures a layer, trains an SAE and scores features on the adapters that ship (fake, vjepa2, hf, groot); <code data-cmd="view">ii view</code> opens the run; <code data-cmd="validate">ii validate</code> checks it. <code data-cmd="rollouts">ii rollouts</code> compares baseline and intervened task success with matched random-feature controls and early stopping, on the bundled fake policy. <code data-cmd="import">ii import</code> brings rollout logs you already have into a run folder that validate accepts.</p>
+    <h1>Run it on your own model</h1>
+    <p class="lede"><code>ii</code> is free and runs on your laptop. Give it a Hugging Face vision model and a folder of short videos, and you get the same playground, with a check on every feature.</p>
+    <ol class="steps steps-wide" data-testid="start-steps">
+      <li>
+        <h3>Install</h3>
+        <p>You need git and <a href="https://docs.astral.sh/uv/">uv</a>. No GPU, no account.</p>
+        <pre class="code"><code>git clone https://github.com/jerrydjin/interpretableintelligence.git
+cd interpretableintelligence
+uv sync</code></pre>
+      </li>
+      <li>
+        <h3>Try the practice model</h3>
+        <p><code data-cmd="try">ii try</code> finds features in a small model with three planted on purpose, so you can check what the tool finds against the truth. About 15 seconds.</p>
+        <pre class="code"><code>uv run ii try</code></pre>
+      </li>
+      <li>
+        <h3>Your model, your clips</h3>
+        <p>Any Hugging Face vision model works: ViT-style and video encoders, CNNs, the vision tower of CLIP, SigLIP and VLMs. No clips of your own? <code>uv run ii get-clips --out clips/droid</code> downloads 100 short robot clips.</p>
+        <pre class="code"><code>uv run ii run hf --model facebook/dinov2-small \
+  --clips clips/droid --out runs/mine --no-score --steer</code></pre>
+      </li>
+      <li>
+        <h3>Check what you found</h3>
+        <p>Run it again without <code>--no-score</code>. A feature gets a tick only when it fires across many clips, its name holds on clips held back, switching it off beats random look-alike edits, and an untrained copy of the model does not have it.</p>
+      </li>
+    </ol>
+    <h2>Robot policies</h2>
+    <p><code data-cmd="rollouts">ii rollouts</code> switches features off inside a policy and compares task success against matched random-feature controls and an untrained dictionary, so a drop that any edit would cause is not mistaken for a finding. <a href="/blog/groot-1028/">How we used it on GR00T.</a></p>
     <h2>Commands</h2>
-    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code><span>New here? Start with this. Finds features in a small practice model and opens the playground.</span></li><li><code data-cmd="run">ii run</code><span>Capture, train, extract features, score what is missing, then serve the viewer.</span></li><li><code data-cmd="view">ii view</code><span>Start a local viewer for a run folder and open it in a browser.</span></li><li><code data-cmd="rollouts">ii rollouts</code><span>Compare baseline and intervened task success on the synthetic reacher. Resume skips episodes already written.</span></li><li><code data-cmd="validate">ii validate</code><span>Validate a run folder against the schema.</span></li></ul>
-    <p><a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md">The rest of the commands are in the README.</a></p>
+    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code><span>New here? Start with this. Finds features in a small practice model and opens the playground.</span></li><li><code data-cmd="run">ii run</code><span>Capture, train, extract features, score what is missing, then serve the viewer.</span></li><li><code data-cmd="view">ii view</code><span>Start a local viewer for a run folder and open it in a browser.</span></li><li><code data-cmd="rollouts">ii rollouts</code><span>Switch features off inside a policy and compare task success against matched random controls.</span></li><li><code data-cmd="validate">ii validate</code><span>Validate a run folder against the schema.</span></li></ul>
+    <p><a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md">Every command is in the README.</a></p>
     </main>
+  <footer class="foot"><p>ii is free, local and open on <a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a>.</p></footer>
 </body>
 </html>

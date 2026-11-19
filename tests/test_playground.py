@@ -223,7 +223,7 @@ def test_page_runs_on_the_backend(served, tmp_path):
     site = tmp_path / "site"
     shutil.copytree(LIVE, site / "live", ignore=shutil.ignore_patterns("packs"))
     shutil.copytree(served["pack"], site / "live" / "packs" / "tiny")
-    shutil.copytree(REPO / "demo-site" / "static" / "fonts", site / "static" / "fonts")
+    shutil.copytree(REPO / "demo-site" / "static", site / "static")
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Quiet, directory=str(site)))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     model = PackModel(served["pack"], device=torch.device("cpu"), cache_images=2)
