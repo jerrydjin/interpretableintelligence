@@ -1,6 +1,8 @@
 // ii live engine: runs a pack (model split at the SAE's layer + the SAE) in the browser.
 //
-// A pack is what `ii export-live` writes (pack.json says which files). The engine:
+// A pack is what `ii export-live` writes (pack.json says which files). The model's first
+// half and the SAE load first, so a picture can be read; the second half follows in the
+// background and is only needed for an edit. The engine:
 //   encode(image)   pixels -> hidden at the SAE's layer -> every feature on every patch,
 //                   plus the model's clean final tokens (the playground's readout).
 //   edit(ids, ...)  the playground edit, x' = x + sum_i (f'_i - f_i) W_dec[:, i], on the
@@ -131,7 +133,9 @@ export class Engine {
     const sha = (pack.model.sha || "").slice(0, 12);
     const digests = pack.digests || {};
     for (const old of OLD_CACHES) globalThis.caches?.delete(old)?.catch(() => {});
-    const want = ["front", "back", "sae", "decoder"];
+    // The rest of the network ("back") is only needed to make an edit, so it downloads and
+    // starts after the first picture is read: the first answer arrives on about half the bytes.
+    const want = ["front", "sae", "decoder"];
     const sizes = {};
     const loaded = {};
     let cachedAll = true;
@@ -140,6 +144,10 @@ export class Engine {
       const total = Object.values(sizes).reduce((a, b) => a + b, 0);
       onProgress({ phase: "download", loaded: got, total, cached: cachedAll });
     };
+    let backSeen = 0;
+    const backKey = `${this.base}${files.back}?v=${digests.back || sha}`;
+    this._backBytes = fetchBytes(this.base + files.back, backKey, (seen) => (backSeen = seen));
+    this._backBytes.catch(() => {}); // surfaced by the first edit, not here
     const [bytes, features] = await Promise.all([
       Promise.all(
         want.map((name) =>
@@ -156,7 +164,8 @@ export class Engine {
     this.timings.download = now() - t0;
     onProgress({ phase: "compile" });
     const t1 = now();
-    this.decoder = halfToFloat(new Uint16Array(bytes[3].buffer, bytes[3].byteOffset, bytes[3].byteLength / 2)); // [n_features, d]
+    this.decoder = halfToFloat(new Uint16Array(bytes[2].buffer, bytes[2].byteOffset, bytes[2].byteLength / 2)); // [n_features, d]
+    this._bytes = { front: bytes[0], sae: bytes[1] };
     this.features = features;
     this.nFeatures = pack.sae.n_features;
     this.d = pack.model.d_model;
@@ -166,47 +175,75 @@ export class Engine {
     this.prefix = pack.model.prefix_tokens;
     this.size = pack.model.image_size;
     try {
-      await this.startSessions(bytes, backend);
+      await this.startSessions(backend);
     } catch (err) {
       if (backend !== "webgpu") throw err;
       // Some GPUs and browsers cannot run a graph on WebGPU; the CPU path always can.
       console.warn("WebGPU could not run the model, using the CPU instead:", err);
       this.gpuError = String(err && err.message ? err.message : err);
-      await this.startSessions(bytes, "wasm");
+      await this.startSessions("wasm");
     }
     this.timings.compile = now() - t1;
     const t2 = now();
     try {
-      await this.encode(this.blankCanvas());
+      await this.encode(this.blankCanvas(), { readout: false });
     } catch (err) {
       if (this.backend !== "webgpu") throw err;
       console.warn("WebGPU failed on the first pass, using the CPU instead:", err);
       this.gpuError = String(err && err.message ? err.message : err);
-      await this.startSessions(bytes, "wasm");
-      await this.encode(this.blankCanvas());
+      await this.startSessions("wasm");
+      await this.encode(this.blankCanvas(), { readout: false });
     }
     this.timings.warmup = now() - t2;
     this.timings.ready = now() - t0;
+    // Queued now, so it runs before any edit asks for it.
+    this.backReady = this._serial(() => this._startBack());
+    this.backReady.catch(() => {});
+    this.backProgress = () => backSeen;
     onProgress({ phase: "ready" });
     return this;
   }
 
-  // One session at a time: ONNX Runtime's WebGPU backend refuses to create two at once.
-  async startSessions(bytes, backend) {
-    const options = {
+  _options(backend) {
+    return {
       executionProviders: backend === "webgpu" ? ["webgpu", "wasm"] : ["wasm"],
       graphOptimizationLevel: "all",
     };
-    for (const s of [this.front, this.back, this.sae]) {
+  }
+
+  async _startBack() {
+    const t0 = now();
+    const bytes = await this._backBytes;
+    try {
+      await this.back?.release();
+    } catch {
+      /* already gone */
+    }
+    try {
+      this.back = await this.ort.InferenceSession.create(bytes, this._options(this.backend));
+    } catch (err) {
+      if (this.backend !== "webgpu") throw err;
+      console.warn("WebGPU could not run the rest of the model, using the CPU instead:", err);
+      this.gpuError = String(err && err.message ? err.message : err);
+      await this.startSessions("wasm");
+      this.back = await this.ort.InferenceSession.create(bytes, this._options("wasm"));
+    }
+    this.timings.back = now() - t0;
+  }
+
+  // One session at a time: ONNX Runtime's WebGPU backend refuses to create two at once.
+  // The back half starts on its own (_startBack), after the first picture.
+  async startSessions(backend) {
+    const options = this._options(backend);
+    for (const s of [this.front, this.sae]) {
       try {
         await s?.release();
       } catch {
         /* already gone */
       }
     }
-    this.front = await this.ort.InferenceSession.create(bytes[0], options);
-    this.back = await this.ort.InferenceSession.create(bytes[1], options);
-    this.sae = await this.ort.InferenceSession.create(bytes[2], options);
+    this.front = await this.ort.InferenceSession.create(this._bytes.front, options);
+    this.sae = await this.ort.InferenceSession.create(this._bytes.sae, options);
     this.backend = backend;
   }
 
@@ -324,8 +361,10 @@ export class Engine {
     return state;
   }
 
+  // Always called inside _serial, after load queued _startBack, so the session is there.
   async runBack(hidden) {
     const ort = this.ort;
+    if (!this.back) await this.backReady;
     const tokens = this.prefix + this.nTok;
     const { final } = await this.back.run({ hidden: new ort.Tensor("float32", hidden, [1, tokens, this.d]) });
     const data = final.data instanceof Float32Array ? final.data : await final.getData();

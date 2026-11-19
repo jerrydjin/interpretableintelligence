@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import http.server
 import json
+import re
 import shutil
 import threading
 import urllib.request
@@ -173,25 +174,23 @@ def test_badges_from_an_export_need_the_same_dictionary(tiny_run, tmp_path):
 
 def test_demo_site_links_the_live_playground_and_keeps_it():
     home = (REPO / "demo-site" / "index.html").read_text(encoding="utf-8")
-    assert 'href="/live/"' in home and 'data-testid="live-cta"' in home
+    assert 'href="/live/" data-testid="cta"' in home
     pack = json.loads((LIVE / "packs" / "dinov2-small-droid" / "pack.json").read_text(encoding="utf-8"))
     assert pack["model"]["name"] == "facebook/dinov2-small" and pack["model"]["layer"] == 6
     assert pack["meta_source"] == "export" and pack["n_real"] == 5
     features = json.loads((LIVE / "packs" / "dinov2-small-droid" / "features.json").read_text(encoding="utf-8"))
-    assert sorted(f["id"] for f in features if f.get("real")) == sorted(
-        f["id"] for f in json.loads((REPO / "demo-site" / "droid" / "data" / "run.json").read_text(encoding="utf-8"))["features"] if f.get("badge") == "real"
-    )
+    assert sum(1 for f in features if f.get("real")) == pack["n_real"]
     headers = json.loads((REPO / "demo-site" / "vercel.json").read_text(encoding="utf-8"))["headers"]
     assert any(h["source"] == "/live/(.*)" for h in headers)
-    from interpretableintelligence.export_site import LIVE_KEEP, SECTION_OF
+    from interpretableintelligence.export_site import LIVE_KEEP, SECTION_OF, site_header
 
     assert "live" in LIVE_KEEP and "vercel.json" in LIVE_KEEP
-    # The live page sits in the Try it section, and the section's real-run page links to it.
-    assert SECTION_OF["live"] == "try"
-    droid = (REPO / "demo-site" / "droid" / "index.html").read_text(encoding="utf-8")
-    assert 'data-testid="droid-live"' in droid and 'href="/live/"' in droid
+    assert SECTION_OF["live"] == "play"
     page = (LIVE / "index.html").read_text(encoding="utf-8")
-    assert 'href="/droid/" aria-current="page">Try it' in page
+    # The playground carries the same header as every generated page, on the shared stylesheet.
+    nav = re.search(r'<nav class="site-nav".*?</nav>', site_header("live"), re.S).group(0)
+    assert nav in page
+    assert '<link rel="stylesheet" href="../static/site.css">' in page
 
 
 def _cdn_reachable() -> bool:
@@ -222,7 +221,7 @@ def test_browser_engine_matches_torch(tiny_run, tmp_path):
     site = tmp_path / "site"
     shutil.copytree(LIVE, site / "live", ignore=shutil.ignore_patterns("packs"))
     shutil.copytree(tiny_run["pack"], site / "live" / "packs" / "tiny")
-    shutil.copytree(REPO / "demo-site" / "static" / "fonts", site / "static" / "fonts")
+    shutil.copytree(REPO / "demo-site" / "static", site / "static")
 
     adapter = get_adapter(make_spec(str(tiny_run["model"])))(layer=1, device=torch.device("cpu"))
     adapter.load()
@@ -270,6 +269,20 @@ def test_browser_engine_matches_torch(tiny_run, tmp_path):
             page.wait_for_selector("[data-kind=ablate]")
             page.click("[data-kind=ablate]")
             page.wait_for_function("() => window.__ii.ui.result !== null")
+            # The back half loads after the first picture; the edit above needed it.
+            assert page.evaluate("() => window.__ii.engine.timings.back") is not None
+            # Your own set: several pictures at once are all read, and the panel sums them up.
+            mine = sorted(str(p) for p in (tiny_run["pack"] / "samples").glob("*.jpg"))
+            assert len(mine) >= 2
+            page.set_input_files("#file", mine)
+            page.wait_for_function(
+                f"() => window.__ii.ui.mine.length === {len(mine)} && window.__ii.ui.mine.every((m) => m.state)"
+            )
+            page.evaluate("() => { window.__ii.ui.view = 'overview'; }")
+            page.click(f".thumb[data-key='mine-1']")
+            page.wait_for_selector("[data-testid=across-mine]")
+            assert f"Across your {len(mine)} pictures" in page.inner_text("[data-testid=across-mine]")
+            assert errors == []
             browser.close()
     finally:
         httpd.shutdown()

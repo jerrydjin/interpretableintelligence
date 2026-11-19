@@ -4,39 +4,45 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
-  <title>ii · interpretableintelligence</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/demo.css">
+  <title>interpretable intelligence</title>
+  <meta name="description" content="Look inside a vision model on your own pictures, then change its mind.">
+  <link rel="stylesheet" href="/static/site.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
-  <header class="top demo-top">
-    <div class="brand-row">
-      <a class="wordmark" href="/" aria-label="interpretable intelligence">
-        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
-        <span class="wordmark-text">interpretable intelligence</span>
-      </a>
-      <nav class="nav"><a href="/droid/">Try it</a><a href="/results/">Research</a><a href="/start/">Run it yourself</a><a href="/demos/">Demos</a></nav>
-    </div>
+  <header class="bar">
+    <a class="mark" href="/" aria-label="interpretable intelligence home"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg><span>interpretable intelligence</span></a>
+    <nav class="site-nav" aria-label="Site sections"><a href="/live/">Playground</a><a href="/start/">Your model</a><a href="/blog/">Blog</a><a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a></nav>
   </header>
   <main class="prose">
-    <h1>Find out why your robot policy failed, and whether you're fooling yourself.</h1>
-    <p class="lede">For teams training robot policies and world models who need to know why a rollout went wrong, not just that it did.</p>
-    <p class="actions"><a class="button" href="/start/" data-testid="cta">Run ii on your model</a><a class="button button-quiet" href="/droid/">Try a real model</a></p>
-    <ul class="doors" data-testid="doors">
-      <li><a href="/droid/"><span class="section-name">Try it</span><span class="section-text">Watch a real vision model on robot video, see which features fire where, and switch them off or turn them up.</span></a></li>
-      <li><a href="/results/"><span class="section-name">Research</span><span class="section-text">What we measured on real robot models, and the controls that decide what counts.</span></a></li>
-      <li><a href="/start/"><span class="section-name">Run it yourself</span><span class="section-text">Install ii, try it on a practice model, then point it at yours. Free and local.</span></a></li>
-    </ul>
-    <p data-testid="live-cta"><a href="/live/">Or try it live on your own picture:</a> see what a real vision model notices, switch a feature off and watch its view change. Nothing to install.</p>
-    <h2>Latest result</h2>
-    <p data-testid="control-headline">Feature 720 tracked failures, and turning it off dropped success from 39/75 to 1/9. Turning off random features caused falls too in 5 of 20 runs. ii makes you run that control before calling a feature real.</p>
-    <p data-testid="proof">GR00T N1.7 on LIBERO-plus, 641 rollouts, run with the repo's ablation runner (<a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>ablate_v9.py</code></a>). <span class="badge badge-unverified">Tested: no causal effect found</span> <a href="/groot/" data-testid="proof-link">Read the study</a></p>
-    <h2>What's coming</h2>
-    <ul class="coming" data-testid="coming">
-      <li>Closed-loop rollouts at scale.</li>
-      <li>Your own model's dictionary, trained and checked on a GPU.</li>
-    </ul>
+    <section class="hero">
+      <h1>Look inside a vision model, on your own pictures.</h1>
+      <p class="lede">Drop in a photo or a video frame. See the features a real model picks out and where each one fires. Then switch one off and watch the model's view of the scene change. It runs in your browser, with nothing to install.</p>
+      <p class="actions"><a class="button" href="/live/" data-testid="cta">Open the playground</a><a class="button button-quiet" href="/start/">Run it on your model</a></p>
+    </section>
+    <ol class="steps" data-testid="steps">
+      <li><h3>Bring a picture</h3><p>Upload one, use your camera or start from a robot frame. Pictures never leave your device.</p></li>
+      <li><h3>See what it notices</h3><p>A dictionary splits the model's view into features, like the edge of a table or a white ceiling, and shows where each fires.</p></li>
+      <li><h3>Change its mind</h3><p>Switch a feature off or turn it up, and the rest of the model runs again on the edit.</p></li>
+    </ol>
+    <section class="split">
+      <div>
+        <h2>Then point it at your model</h2>
+        <p>The same loop runs on your laptop, on any Hugging Face vision model and your own clips. A feature gets a tick only when it passes checks against random look-alikes and an untrained copy of the model.</p>
+        <p><a href="/start/">Run it on your model</a></p>
+      </div>
+      <pre class="code"><code>uv run ii run hf \
+  --model &lt;your-model&gt; \
+  --clips &lt;your-clips&gt; --steer</code></pre>
+    </section>
+    <section>
+      <h2>From the blog</h2>
+      <a class="card" href="/blog/groot-1028/" data-testid="post-link">
+        <span class="card-title">A feature tracked our robot&#x27;s failures. The control said it wasn&#x27;t the cause.</span>
+        <span class="card-text">Switching off feature 720 in NVIDIA&#x27;s GR00T dropped success from 39/75 to 1/9. Random features did that too. How ii kept us from calling it a finding.</span>
+      </a>
+    </section>
     </main>
+  <footer class="foot"><p>ii is free, local and open on <a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a>.</p></footer>
 </body>
 </html>

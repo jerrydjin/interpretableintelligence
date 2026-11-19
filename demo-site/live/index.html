@@ -8,29 +8,30 @@
   <meta name="description" content="Look inside a real vision model. Drop in any picture, see what it notices, switch a feature off and watch its view change.">
   <link rel="preload" href="../static/fonts/geist-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="../static/fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../static/site.css">
   <link rel="stylesheet" href="live.css">
   <link rel="icon" href="../favicon.ico">
 </head>
 <body>
   <header class="bar">
-    <a class="mark" href="../" aria-label="interpretable intelligence home">
+    <a class="mark" href="/" aria-label="interpretable intelligence home">
       <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
       <span>interpretable intelligence</span>
     </a>
-    <nav class="site-nav" aria-label="Site sections"><a href="/droid/" aria-current="page">Try it</a><a href="/results/">Research</a><a href="/start/">Run it yourself</a><a href="/demos/">Demos</a></nav>
+    <nav class="site-nav" aria-label="Site sections"><a href="/live/" aria-current="page">Playground</a><a href="/start/">Your model</a><a href="/blog/">Blog</a><a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a></nav>
     <span class="model-pill" id="model-pill">Loading the model</span>
   </header>
 
   <main>
     <section class="intro">
       <h1>Look inside a vision model. Then change its mind.</h1>
-      <p class="lede">This is <span id="model-name">DINOv2-small</span>, the kind of vision model robots use to see. <span id="where-runs">It runs right here in your browser.</span> Give it any picture and see the things it has learnt to notice, then switch one off and watch how its view of the scene changes.</p>
+      <p class="lede">This is <span id="model-name">DINOv2-small</span>, the kind of vision model robots use to see. <span id="where-runs">It runs right here in your browser.</span> Give it your own pictures or a short video, see the things it has learnt to notice across all of them, then switch one off and watch how its view of the scene changes.</p>
       <div id="byom"></div>
     </section>
 
     <section class="loader" id="loader" aria-live="polite">
       <div class="loader-track"><div class="loader-fill" id="loader-fill"></div></div>
-      <p id="loader-text">Getting the model ready. It is about 50 MB the first time and instant after that.</p>
+      <p id="loader-text">Getting the model ready. It is about 28 MB the first time and instant after that.</p>
     </section>
 
     <section class="work" id="work" hidden>
@@ -40,16 +41,17 @@
           <video id="cam" playsinline muted hidden></video>
           <canvas id="heat" aria-hidden="true"></canvas>
           <canvas id="grid" aria-hidden="true"></canvas>
-          <div class="drop-hint" id="drop-hint">Drop a picture anywhere</div>
+          <div class="drop-hint" id="drop-hint">Drop pictures or a video anywhere</div>
         </div>
         <div class="stage-key" id="stage-key"></div>
         <div class="tray">
           <div class="thumbs" id="thumbs" aria-label="Example pictures"></div>
           <div class="tray-actions">
-            <label class="pill-btn" for="file">Upload your own</label>
-            <input type="file" id="file" accept="image/*" hidden>
+            <label class="pill-btn" for="file">Add your pictures or a video</label>
+            <input type="file" id="file" accept="image/*,video/*" multiple hidden>
             <button class="pill-btn" id="cam-btn" type="button">Use your camera</button>
-            <span class="tray-note">or paste or drop any picture</span>
+            <button class="pill-btn" id="examples-btn" type="button" hidden>Back to the examples</button>
+            <span class="tray-note">or drop a folder's worth of pictures anywhere</span>
           </div>
         </div>
       </div>

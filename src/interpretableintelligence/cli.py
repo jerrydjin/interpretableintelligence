@@ -1131,31 +1131,16 @@ def deploy_live_cmd(
 @app.command("export-site")
 def export_site_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the static site into.")] = Path("demo-site"),
-    vjepa: Annotated[
-        Path,
-        typer.Option("--vjepa", help="V-JEPA slim bundle: scoreboard, clips, viz, random-init."),
-    ] = Path("demo-data/vjepa-slim"),
-    picker: Annotated[
-        Path,
-        typer.Option("--picker", help="Directory with synth_results.json and synth_results_extra.json."),
-    ] = Path("demo-data/picker"),
     groot: Annotated[
         Path,
-        typer.Option("--groot", help="Directory with groot-1028-ablate-summary.json."),
+        typer.Option("--groot", help="Directory with groot-1028-ablate-summary.json and its method checks."),
     ] = Path("demo-data/groot"),
-    droid: Annotated[
-        Path | None,
-        typer.Option(
-            "--droid",
-            help="An `ii export` of a real run to publish at /droid/. Default: keep the copy already in the site.",
-        ),
-    ] = None,
 ) -> None:
-    """Regenerate the static demo site from a fresh fake run and the vendored measurements."""
+    """Regenerate the static site (home, your-model page, blog), keeping the live playground."""
     from interpretableintelligence.export_site import export_site
 
     try:
-        dest = export_site(out, vjepa_dir=vjepa, picker_dir=picker, groot_dir=groot, droid_dir=droid)
+        dest = export_site(out, groot_dir=groot)
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

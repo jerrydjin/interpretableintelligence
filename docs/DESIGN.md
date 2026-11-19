@@ -75,7 +75,7 @@ The feature page's "The numbers" section (the score tiles and the full top-clip 
 
 ## The demo site
 
-`ii export-site` builds `demo-site/`. Its fake viewer page is the viewer's own `index.html` with a slim demo bar above it, so the viewer and the demo never drift apart. `static/demo.css` styles only the demo prose pages (`.prose`, `.demo-bar`, `.score-line`) on the same tokens, and must never restyle viewer classes. Regenerate the site with `make demo-site` whenever `static/` changes.
+`ii export-site` builds `demo-site/`. The public site (home, your-model page, blog) and the live playground share one stylesheet, `static/site.css`: the same tokens, one header, one button, one card and one code block. The playground's own `live.css` holds only its components. The site does not load the viewer's `style.css`. Regenerate the site with `make demo-site` whenever `static/site.css` changes.
 
 The site has four sections, and every page belongs to one; the nav underlines that section.
 
