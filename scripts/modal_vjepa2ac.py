@@ -179,3 +179,70 @@ def fetch() -> None:
         _save_local(name, item["json"], item["png"])
         m = item["json"]["moving"]
         print(name, m["verdict"], m["n_transitions"], "transitions", m["n_episodes"], "episodes")
+
+
+# ----------------------------------------------------------------------------- H5: ii plan-probe
+
+PP_STRIDE = os.environ.get("II_H5_STRIDE", "16")
+PP_SAMPLES = os.environ.get("II_H5_SAMPLES", "100")
+PP_STEPS = os.environ.get("II_H5_STEPS", "6")
+
+
+def _plan_probe(dest: str, *extra: str) -> dict:
+    if not Path(dest, "plan_probe.json").exists():
+        base = ["--stride", PP_STRIDE] if "--stride" not in extra else []
+        _sh(["ii", "plan-probe", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT,
+             *base, "--samples", PP_SAMPLES, "--steps", PP_STEPS, *extra])
+        volume.commit()
+    return json.loads(Path(dest, "plan_probe.json").read_text())
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def h5_smoke_job() -> dict:
+    import time
+
+    t0 = time.time()
+    import shutil
+
+    shutil.rmtree(f"{RESULTS}/h5-smoke", ignore_errors=True)
+    out = _plan_probe(f"{RESULTS}/h5-smoke", "--max-clips", "4", "--stride", "8", "--bootstrap", "200")
+    out["wall_s"] = time.time() - t0
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def h5_full_job() -> dict:
+    return {
+        "trained": _plan_probe(f"{RESULTS}/h5-trained"),
+        "random-predictor": _plan_probe(f"{RESULTS}/h5-random-predictor", "--random-predictor"),
+    }
+
+
+@app.local_entrypoint()
+def h5_smoke() -> None:
+    out = h5_smoke_job.remote()
+    _save_local("h5-smoke", out, None)
+    print("h5 smoke", out["verdict"], out["n_transitions"], "transitions in", round(out["wall_s"]), "s")
+
+
+@app.local_entrypoint()
+def h5_run() -> None:
+    h5_full_job.spawn()
+    print("spawned H5; fetch with ::h5_fetch")
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def h5_read() -> dict:
+    out = {}
+    for name in ("h5-trained", "h5-random-predictor"):
+        f = Path(RESULTS, name, "plan_probe.json")
+        if f.exists():
+            out[name] = json.loads(f.read_text())
+    return out
+
+
+@app.local_entrypoint()
+def h5_fetch() -> None:
+    for name, payload in h5_read.remote().items():
+        _save_local(name, payload, None)
+        print(name, payload["verdict"], payload["n_transitions"], "transitions")

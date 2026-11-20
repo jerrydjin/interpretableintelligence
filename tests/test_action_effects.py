@@ -164,7 +164,7 @@ def _clips_with_states(tmp_path, n: int = 4, frames_per_clip: int = 30):
     for i in range(n):
         frames = np.stack([_scene(t // 4 + i, wide=True)[0] for t in range(frames_per_clip)])
         states = np.zeros((frames_per_clip, 7), dtype=np.float32)
-        states[:, 0] = 0.4 + 0.002 * np.arange(frames_per_clip)
+        states[:, 0] = 0.4 + 0.004 * np.arange(frames_per_clip)
         states[:, 6] = (np.arange(frames_per_clip) > frames_per_clip // 2).astype(np.float32)
         _write_clip(out / f"droid-{i:03d}.mp4", frames)
         np.save(out / f"droid-{i:03d}.states.npy", states)
@@ -243,3 +243,65 @@ def test_get_clips_with_states(monkeypatch, tmp_path):
         assert np.all(np.diff(states[:, 0]) == 1)
     assert sample_clips.clips_ready(out, 2, with_states=True)
     assert "states" in json.loads((out / "clips.json").read_text())
+
+
+# ----------------------------------------------------------------------------- plan-probe (H5)
+
+
+def test_cem_finds_the_cost_minimum_on_a_known_landscape():
+    import torch
+
+    from interpretableintelligence.worldmodel import plan_probe as pp
+
+    class Bowl:
+        """Cost is the distance of the action's xyz from a target: CEM must land near it."""
+
+        def __init__(self, target):
+            self.target = torch.tensor(target)
+
+        def energy(self, z, state, goal, actions, per_token=False):
+            return (actions[:, :3] - self.target).abs().sum(-1)
+
+    near = pp.cem(Bowl([0.03, -0.02, 0.01]), None, None, None, maxnorm=0.075, grip_max=0.75, samples=200, steps=10,
+                  generator=torch.Generator().manual_seed(0))
+    np.testing.assert_allclose(near.action[:3], [0.03, -0.02, 0.01], atol=0.01)
+    assert np.all(near.action[3:6] == 0)
+    # A target outside the range: the in-range search stops at the edge, the wide one reaches it.
+    far = [0.3, 0.0, 0.0]
+    clipped = pp.cem(Bowl(far), None, None, None, maxnorm=0.075, grip_max=0.75, generator=torch.Generator().manual_seed(0))
+    wide = pp.cem(Bowl(far), None, None, None, maxnorm=0.5, grip_max=3.0, steps=12, generator=torch.Generator().manual_seed(0))
+    assert clipped.action[0] <= 0.075 + 1e-6 and abs(wide.action[0] - 0.3) < 0.03
+    assert wide.cost < clipped.cost
+
+
+def test_plan_probe_verdicts():
+    from interpretableintelligence.worldmodel import plan_probe as pp
+
+    def recs(fooled_rate, n_ep=20, per=10, seed=0):
+        rng = np.random.default_rng(seed)
+        out = []
+        for ep in range(n_ep):
+            for t in range(per):
+                f = rng.random() < fooled_rate
+                out.append({"episode": ep, "fooled": f, "e_wide": 1.0 if f else 2.0, "e_in": 1.5, "e_real": 1.6, "e_zero": 2.0,
+                            "wide_in_range": not f, "wide_impossible": f, "ray_costs": [1.0, 1.1, 1.2, 1.3], "in_cos_real": 0.5, "wide_step_m": 0.2, "real_step_m": 0.02,
+                            "offmanifold_wide": 1.0, "offmanifold_in": 0.5, "gain_changed_tokens": 1.0, "gain_other_tokens": 3.0})
+        return out
+
+    assert pp.summarize(recs(0.4), n_boot=200)["verdict"] == "exploitable"
+    assert pp.summarize(recs(0.0), n_boot=200)["verdict"] == "robust"
+    s = pp.summarize(recs(0.4), n_boot=50)["stats"]
+    assert abs(s["gain_share_on_changed_tokens"]["value"] - 0.25) < 1e-9
+
+
+def test_cli_plan_probe_tiny(tmp_path):
+    clips = _clips_with_states(tmp_path, n=3)
+    out = tmp_path / "pp"
+    args = ["plan-probe", "--clips", str(clips), "--out", str(out), "--tiny", "--stride", "2",
+            "--samples", "20", "--steps", "2", "--bootstrap", "20"]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "plan_probe.json").read_text())
+    assert data["schema"] == "plan-probe/v1" and data["n_transitions"] > 0
+    assert data["verdict"] in {"exploitable", "robust", "mixed", "insufficient_data"}
+    assert (out / "transitions.parquet").is_file()

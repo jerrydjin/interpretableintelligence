@@ -161,6 +161,36 @@ class ACWorldModel:
             out.append(y.cpu())
         return torch.cat(out)
 
+    @torch.inference_mode()
+    def energy(
+        self,
+        z: torch.Tensor,
+        state: torch.Tensor,
+        goal: torch.Tensor,
+        actions: torch.Tensor,
+        *,
+        per_token: bool = False,
+    ) -> torch.Tensor:
+        """The planner's cost for each of ``actions [N, 7]`` from one frame: mean L1 to ``goal``.
+
+        ``z`` and ``goal`` are ``[P, D]``, ``state`` is ``[7]``. Returns ``[N]`` on the CPU, or
+        ``[N, P]`` per-token costs with ``per_token``. Everything stays on the device until the end.
+        """
+        p = self.tokens_per_frame
+        zd = z.to(self.device).unsqueeze(0)
+        gd = goal.to(self.device).float().unsqueeze(0)
+        sd = state.to(self.device, torch.float32).view(1, 1, -1)
+        out = []
+        for i in range(0, len(actions), self.predict_batch):
+            ab = actions[i : i + self.predict_batch].to(self.device, torch.float32).unsqueeze(1)
+            n = len(ab)
+            with self._autocast():
+                y = self.predictor(zd.expand(n, -1, -1), ab, sd.expand(n, -1, -1))[:, -p:]
+            y = F.layer_norm(y.float(), (y.shape[-1],))
+            cost = (y - gd).abs().mean(dim=-1)
+            out.append((cost if per_token else cost.mean(dim=-1)).cpu())
+        return torch.cat(out)
+
 
 def load_vjepa2ac(
     device: torch.device | str,

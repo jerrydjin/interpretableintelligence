@@ -1024,6 +1024,64 @@ def action_effects_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("plan-probe")
+def plan_probe_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for plan_probe.json and transitions.parquet.")],
+    code_dir: Annotated[
+        Path | None,
+        typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2 (Meta's model code). Not needed with --tiny."),
+    ] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    stride: Annotated[int, typer.Option("--stride", min=1, help="Probe every Nth transition of each clip.")] = 4,
+    samples: Annotated[int, typer.Option("--samples", min=10, help="CEM samples per iteration.")] = 200,
+    steps: Annotated[int, typer.Option("--steps", min=1, help="CEM iterations.")] = 8,
+    wide_xyz: Annotated[float, typer.Option("--wide-xyz", min=0.08, help="Arm step limit (m) of the wide search.")] = 0.5,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the searches, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Can V-JEPA 2-AC's planner be fooled by impossible actions? (Offline, recorded DROID video.)
+
+    For each transition, plans toward the next real frame with CEM inside Meta's action range and with
+    a much wider range, and counts how often the wide search returns an out-of-range action that scores
+    better than both the real action and the best in-range one. The verdict rule is fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.plan_probe import run_plan_probe
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            model.predict_batch = 64
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        typer.echo(f"     {len(trajectories)} clips, model {model.name}")
+        result = run_plan_probe(
+            model, trajectories, out, stride=stride, samples=samples, steps=steps, wide_xyz=wide_xyz,
+            seed=seed, n_boot=bootstrap, say=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"verdict: {result['verdict']} on {result['n_transitions']} transitions ({result['n_episodes']} episodes)")
+    for key, v in result["stats"].items():
+        typer.echo(f"  {key:30s} {v['value']:+.4f}  [{v['lo']:+.4f}, {v['hi']:+.4f}]")
+    typer.echo(f"wrote {out}")
+
+
 @app.command("export")
 def export_cmd(
     run_dir: Annotated[Path, typer.Argument(help="Run folder to export.")],
