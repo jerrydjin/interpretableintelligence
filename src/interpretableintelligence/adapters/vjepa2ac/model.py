@@ -268,21 +268,52 @@ class _TinyEncoder(nn.Module):
         return self.proj(x[:, :, 0]).flatten(2).transpose(1, 2)
 
 
+class _TinyMix(nn.Module):
+    """Adds an action-driven change to the frame tokens in ``gate``; the action and state tokens pass through."""
+
+    def __init__(self, act: nn.Linear, gate: torch.Tensor) -> None:
+        super().__init__()
+        self.act = act
+        self.gate = gate
+
+    def forward(self, x: torch.Tensor, **_) -> torch.Tensor:
+        cond = torch.cat([x[:, 0, :STATE_DIM], x[:, 1, :STATE_DIM]], dim=-1)
+        drive = torch.tanh(self.act(cond) * 20.0)
+        frame = x[:, 2:] + 2.0 * self.gate * drive.unsqueeze(1)
+        return torch.cat([x[:, :2], frame], dim=1)
+
+
+class _TinyPass(nn.Module):
+    def forward(self, x: torch.Tensor, **_) -> torch.Tensor:
+        return x * 1.0
+
+
 class _TinyPredictor(nn.Module):
     """Copies the frame and adds an action-driven change on the tokens in ``action_mask`` only.
 
     A deliberately "arm-only" world model, so tests know the answer ``ii action-effects`` must give.
+    Same token layout as Meta's predictor with one frame (action, state, then the frame tokens) and a
+    ``predictor_blocks`` list, so the per-layer trace in ``ii gripper-trace`` runs on it.
     """
+
+    N_BLOCKS = 4
 
     def __init__(self, dim: int, action_mask: torch.Tensor) -> None:
         super().__init__()
         self.act = nn.Linear(2 * STATE_DIM, dim)
         self.register_buffer("gate", action_mask.float().view(1, -1, 1))
+        self.dim = dim
+        self.predictor_blocks = nn.ModuleList([_TinyPass(), _TinyMix(self.act, self.gate)] + [_TinyPass() for _ in range(self.N_BLOCKS - 2)])
 
     def forward(self, z: torch.Tensor, actions: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
         p = self.gate.shape[1]
-        drive = torch.tanh(self.act(torch.cat([actions[:, -1], states[:, -1]], dim=-1) * 20.0))
-        return z[:, -p:] + 2.0 * self.gate * drive.unsqueeze(1)
+        pad = self.dim - STATE_DIM
+        a = F.pad(actions[:, -1:], (0, pad))
+        s = F.pad(states[:, -1:], (0, pad))
+        x = torch.cat([a, s, z[:, -p:]], dim=1)
+        for blk in self.predictor_blocks:
+            x = blk(x)
+        return x[:, 2:]
 
 
 def tiny_world_model(*, seed: int = 0, crop: int = 128, patch: int = 16, dim: int = 16, action_tokens=None) -> ACWorldModel:

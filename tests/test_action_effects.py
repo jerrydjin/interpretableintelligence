@@ -331,3 +331,72 @@ def test_cli_gripper_probe_tiny(tmp_path):
     assert data["schema"] == "gripper-probe/v1"
     assert data["n_events"] == 3  # each test clip closes its gripper once, mid-clip
     assert data["verdict"] in {"reads_gripper", "gripper_blind", "mixed", "insufficient_data"}
+
+
+# ----------------------------------------------------------------------------- gripper-trace
+
+
+def test_trace_event_finds_where_the_tiny_model_mixes_the_command():
+    import torch
+
+    from interpretableintelligence.worldmodel.gripper_trace import trace_event
+
+    model = tiny_world_model(seed=0)
+    z = model.encode_frames(np.stack([_scene(0)[0]]))[0]
+    t = trace_event(model, z, np.zeros(7, dtype=np.float32), np.zeros(3, dtype=np.float32), 1.0)
+    # The tiny predictor reads the action token in block 1 (layer 2 = its output). Before that the
+    # command lives only on the action token: patching it recovers the whole gap, patching the frame
+    # nothing. After it, the reverse.
+    rec_a, rec_f = t["recovered_action"], t["recovered_frame"]
+    assert len(rec_a) == len(model.predictor.predictor_blocks) + 1
+    np.testing.assert_allclose(rec_a[:2], 1.0, atol=1e-5)
+    np.testing.assert_allclose(rec_f[:2], 0.0, atol=1e-5)
+    np.testing.assert_allclose(rec_a[2:], 0.0, atol=1e-5)
+    np.testing.assert_allclose(rec_f[2:], 1.0, atol=1e-5)
+    d = t["drift"]
+    assert d["grip_frame"][0] == 0 and d["grip_frame"][1] == 0 and d["grip_frame"][2] > 0
+    assert d["grip_action"][0] > 0
+    assert torch.is_tensor(t["pred_right"])
+
+
+def test_encoder_readout_reads_a_visible_gripper(tmp_path):
+    from interpretableintelligence.worldmodel import gripper_trace as gt
+
+    model = tiny_world_model(seed=0)
+    trs = []
+    rng = np.random.default_rng(0)
+    for ep in range(8):
+        closed = (np.arange(20) % 7) > 3
+        frames = np.stack([_scene(t, wide=True)[0] for t in range(20)])
+        frames[closed, :16, :16] = 255  # the "gripper" shows in one corner when closed
+        frames = np.clip(frames.astype(int) + rng.integers(-5, 6, frames.shape), 0, 255).astype(np.uint8)
+        states = np.zeros((20, 7), dtype=np.float32)
+        states[:, 6] = closed
+        trs.append(ae.Trajectory(clip_id=f"c{ep}", episode=ep, task="", frames=frames, states=states))
+    latents = [model.encode_frames(tr.frames) for tr in trs]
+    out, probes = gt.encoder_readout(latents, trs, seed=0, n_boot=50)
+    assert out["encoder"]["value"] > 0.9 and out["pixels"]["value"] > 0.9
+    assert probes[0] is not None and probes[1] is not None
+
+
+def test_gripper_trace_verdicts():
+    from interpretableintelligence.worldmodel.gripper_trace import verdicts
+
+    enc = {"encoder": {"value": 0.95, "lo": 0.9, "hi": 0.97}}
+    assert verdicts(enc, {"value": 0.05, "lo": -0.1, "hi": 0.2}) == {"encoder": "encodes_gripper", "command": "dropped"}
+    assert verdicts(enc, {"value": 0.8, "lo": 0.6, "hi": 1.0})["command"] == "carried"
+    assert verdicts(enc, {"value": 0.4, "lo": 0.2, "hi": 0.6})["command"] == "partial"
+    weak = {"encoder": {"value": 0.7, "lo": 0.6, "hi": 0.8}}
+    assert verdicts(weak, {"value": float("nan"), "lo": float("nan"), "hi": float("nan")}) == {"encoder": "weak", "command": "insufficient_data"}
+
+
+def test_cli_gripper_trace_tiny(tmp_path):
+    clips = _clips_with_states(tmp_path, n=4)
+    out = tmp_path / "gt"
+    result = CliRunner().invoke(app, ["gripper-trace", "--clips", str(clips), "--out", str(out), "--tiny", "--bootstrap", "20"])
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "gripper_trace.json").read_text())
+    assert data["schema"] == "gripper-trace/v1"
+    assert data["n_events"] == 4
+    assert len(data["layers"]["recovered_action"]) == 5
+    assert data["verdict"]["command"] in {"dropped", "carried", "partial", "insufficient_data"}

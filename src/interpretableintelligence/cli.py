@@ -1130,6 +1130,56 @@ def gripper_probe_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("gripper-trace")
+def gripper_trace_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for gripper_trace.json.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the episode folds, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Where does V-JEPA 2-AC lose the gripper command? (Offline, recorded DROID video.)
+
+    Reads gripper state from the encoder's latents, traces the right and wrong gripper command through
+    every predictor block with activation patching, and reads the predicted latent with the same probe.
+    The verdict rules are fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.gripper_trace import run_gripper_trace
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_gripper_trace(model, trajectories, out, seed=seed, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    v = result["verdict"]
+    typer.echo(f"verdict: encoder {v['encoder']}, command {v['command']} on {result['n_events']} gripper events ({result['n_episodes']} episodes)")
+    for name in ("encoder", "pixels"):
+        r = result["readout"][name]
+        typer.echo(f"  {name + ' AUROC':20s} {r['value']:.4f}  [{r['lo']:.4f}, {r['hi']:.4f}]")
+    for key, r in result["stats"].items():
+        typer.echo(f"  {key:20s} {r['value']:+.4f}  [{r['lo']:+.4f}, {r['hi']:+.4f}]")
+    typer.echo(f"wrote {out}")
+
+
 @app.command("export")
 def export_cmd(
     run_dir: Annotated[Path, typer.Argument(help="Run folder to export.")],
