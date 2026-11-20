@@ -1172,7 +1172,7 @@ def gripper_trace_cmd(
         raise typer.Exit(code=1) from exc
     v = result["verdict"]
     typer.echo(f"verdict: encoder {v['encoder']}, command {v['command']} on {result['n_events']} gripper events ({result['n_episodes']} episodes)")
-    for name in ("encoder", "pixels"):
+    for name in ("encoder", "pooled", "pixels"):
         r = result["readout"][name]
         typer.echo(f"  {name + ' AUROC':20s} {r['value']:.4f}  [{r['lo']:.4f}, {r['hi']:.4f}]")
     for key, r in result["stats"].items():

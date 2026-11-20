@@ -4,10 +4,12 @@
 for the reason, in three steps on the same gripper events (moments where the gripper opens or closes
 while the arm stays still):
 
-1. **Encoder readout.** A logistic probe on the frozen encoder's pooled latents (mean and max over
-   tokens) reads gripper open or closed on every frame. Two folds split by episode: each fold's
-   probe is scored only on the other fold's frames. A probe on 16x16 pixel thumbnails is the
-   baseline. If the encoder carries the gripper, the information is there for the predictor to use.
+1. **Encoder readout.** The gripper covers a few patches whose place moves with the arm, so the
+   probe scores every token with one shared linear map and takes a soft maximum over tokens
+   (``TokenProbe``). It reads gripper open or closed on every frame. Two folds split by episode:
+   each fold's probe is scored only on the other fold's frames. Logistic probes on the pooled latents
+   (mean and max over tokens) and on 16x16 pixel thumbnails are the baselines. If the encoder carries
+   the gripper, the information is there for the predictor to use.
 2. **Predictor trace.** For each event the predictor runs under the right and the wrong gripper
    command (arm step fixed at the real one) and under two arm steps 6 cm apart (gripper at 0). At the
    input and after each block it records how far the two runs drift apart on the action token and on
@@ -47,6 +49,7 @@ SCHEMA = "gripper-trace/v1"
 CLOSED = 0.5  # gripper state above this counts as closed
 L2 = 10.0
 THUMB = 16
+PROBE_STEPS = 400
 ARM_STEP = 0.03  # the arm contrast: +3 cm vs -3 cm along x
 COND = 2  # action and state tokens ahead of each frame's tokens
 ENCODER_AUROC = 0.8
@@ -71,6 +74,46 @@ def thumbnails(frames: np.ndarray, size: int = THUMB) -> np.ndarray:
 
 def fold_of(episode: int, seed: int) -> int:
     return hashlib.sha256(f"gripper-trace:{seed}:{episode}".encode()).digest()[0] % 2
+
+
+class TokenProbe:
+    """Logistic probe with a shared linear score per token and a soft maximum (logsumexp) over tokens."""
+
+    def __init__(self, latents: list[torch.Tensor], y: np.ndarray, *, device: torch.device | str = "cpu", seed: int = 0,
+                 steps: int = PROBE_STEPS, batch: int = 64, lr: float = 1e-2, l2: float = 1e-3) -> None:
+        z = torch.cat(latents) if isinstance(latents, list) else latents  # [N, P, D]
+        self.device = torch.device(device)
+        sample = z[:: max(1, len(z) // 256)].reshape(-1, z.shape[-1]).float()
+        self.mean = sample.mean(0).to(self.device)
+        self.std = (sample.std(0) + 1e-6).to(self.device)
+        gen = torch.Generator().manual_seed(seed)
+        self.w = torch.zeros(z.shape[-1], device=self.device, requires_grad=True)
+        self.b = torch.zeros((), device=self.device, requires_grad=True)
+        opt = torch.optim.Adam([self.w, self.b], lr=lr)
+        target = torch.as_tensor(y, dtype=torch.float32)
+        pos = float(target.mean())
+        weight = torch.where(target > 0.5, 0.5 / max(pos, 1e-6), 0.5 / max(1 - pos, 1e-6))  # balance the classes
+        with torch.enable_grad():
+            for _ in range(steps):
+                idx = torch.randint(0, len(z), (min(batch, len(z)),), generator=gen)
+                out = self._logit(z[idx].to(self.device))
+                loss = F.binary_cross_entropy_with_logits(out, target[idx].to(self.device), weight=weight[idx].to(self.device))
+                loss = loss + l2 * (self.w**2).sum()
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+        self.w = self.w.detach()
+        self.b = self.b.detach()
+
+    def _logit(self, z: torch.Tensor) -> torch.Tensor:
+        s = ((z.float() - self.mean) / self.std) @ self.w + self.b  # [N, P]
+        return torch.logsumexp(s, dim=1) - float(np.log(s.shape[1]))
+
+    @torch.no_grad()
+    def logit(self, z: torch.Tensor) -> np.ndarray:
+        if z.dim() == 2:
+            z = z.unsqueeze(0)
+        return torch.cat([self._logit(z[i : i + 256].to(self.device)).cpu() for i in range(0, len(z), 256)]).numpy().astype(np.float64)
 
 
 class Readout:
@@ -104,31 +147,40 @@ def _auroc_boot(scores: np.ndarray, labels: np.ndarray, episodes: np.ndarray, *,
     return {"value": float(value), "lo": float(lo), "hi": float(hi)}
 
 
-def encoder_readout(latents: list[torch.Tensor], trajectories: list[Trajectory], *, seed: int, n_boot: int):
-    """Two-fold probes on pooled encoder latents and on pixel thumbnails. Returns the summary and the
-    latent probe per fold (fold ``k``'s probe was trained on the other fold)."""
-    x_enc = np.concatenate([pool(z) for z in latents])
-    x_pix = np.concatenate([thumbnails(tr.frames) for tr in trajectories])
+def encoder_readout(latents: list[torch.Tensor], trajectories: list[Trajectory], *, seed: int, n_boot: int, device="cpu"):
+    """Two-fold token probes on the encoder latents, with pooled-latent and pixel-thumbnail baselines.
+    Returns the summary and the token probe per fold (fold ``k``'s probe was trained on the other fold)."""
     y = np.concatenate([(tr.states[:, 6] > CLOSED).astype(np.float64) for tr in trajectories])
     ep = np.concatenate([np.full(len(tr.states), tr.episode) for tr in trajectories])
     folds = np.array([fold_of(int(e), seed) for e in ep])
+    clip_fold = [fold_of(tr.episode, seed) for tr in trajectories]
     out = {"n_frames": int(len(y)), "closed_share": float(y.mean()) if len(y) else float("nan")}
-    probes: dict[int, Readout | None] = {0: None, 1: None}
-    for name, x in (("encoder", x_enc), ("pixels", x_pix)):
+    probes: dict[int, TokenProbe | None] = {0: None, 1: None}
+
+    def score(name, fit):
         scores = np.full(len(y), np.nan)
         for k in (0, 1):
             train, test = folds != k, folds == k
             if not test.any() or y[train].min() == y[train].max():
                 continue
-            r = Readout(x[train], y[train])
-            scores[test] = r.logit(x[test])
-            if name == "encoder":
-                probes[k] = r
+            scores[test] = fit(k, train, test)
         ok = np.isfinite(scores)
         if ok.sum() and y[ok].min() != y[ok].max():
             out[name] = _auroc_boot(scores[ok], y[ok], ep[ok], n_boot=n_boot, seed=seed)
         else:
             out[name] = {"value": float("nan"), "lo": float("nan"), "hi": float("nan")}
+
+    def token(k, train, test):
+        probe = TokenProbe([z for z, f in zip(latents, clip_fold) if f != k], y[train], device=device, seed=seed + k)
+        probes[k] = probe
+        return probe.logit(torch.cat([z for z, f in zip(latents, clip_fold) if f == k]))
+
+    def logistic(x):
+        return lambda k, train, test: Readout(x[train], y[train]).logit(x[test])
+
+    score("encoder", token)
+    score("pooled", logistic(np.concatenate([pool(z) for z in latents])))
+    score("pixels", logistic(np.concatenate([thumbnails(tr.frames) for tr in trajectories])))
     return out, probes
 
 
@@ -220,8 +272,8 @@ def probe(model: ACWorldModel, trajectories: list[Trajectory], *, seed: int = 0,
     for i, tr in enumerate(trajectories):
         latents.append(model.encode_frames(tr.frames))
         say(f"     encoded {i + 1}/{len(trajectories)} {tr.clip_id}")
-    readout, probes = encoder_readout(latents, trajectories, seed=seed, n_boot=n_boot)
-    say(f"     encoder readout AUROC {readout['encoder']['value']:.3f}, pixels {readout['pixels']['value']:.3f}")
+    readout, probes = encoder_readout(latents, trajectories, seed=seed, n_boot=n_boot, device=model.device)
+    say(f"     readout AUROC: token probe {readout['encoder']['value']:.3f}, pooled {readout['pooled']['value']:.3f}, pixels {readout['pixels']['value']:.3f}")
 
     events = []
     for tr, z in zip(trajectories, latents):
@@ -234,8 +286,8 @@ def probe(model: ACWorldModel, trajectories: list[Trajectory], *, seed: int = 0,
                    **{k: v for k, v in t.items() if not k.startswith("pred_")}}
             r = probes[fold_of(tr.episode, seed)]
             if r is not None:
-                lz = r.logit(pool(z[[before, after]]))
-                lp = r.logit(pool(torch.stack([t["pred_right"], t["pred_wrong"]])))
+                lz = r.logit(z[[before, after]])
+                lp = r.logit(torch.stack([t["pred_right"], t["pred_wrong"]]))
                 rec["true_shift"] = float(sign * (lz[1] - lz[0]))
                 rec["pred_shift"] = float(sign * (lp[0] - lp[1]))
             events.append(rec)
@@ -307,7 +359,7 @@ def run_gripper_trace(model: ACWorldModel, trajectories: list[Trajectory], out_d
         "model_info": model.info,
         "seed": seed,
         "n_boot": n_boot,
-        "rules": {"closed": CLOSED, "l2": L2, "thumb": THUMB, "arm_step": ARM_STEP, "encoder_auroc": ENCODER_AUROC,
+        "rules": {"closed": CLOSED, "l2": L2, "probe_steps": PROBE_STEPS, "thumb": THUMB, "arm_step": ARM_STEP, "encoder_auroc": ENCODER_AUROC,
                   "dropped": DROPPED, "carried": CARRIED},
         **summarize(raw, n_boot=n_boot, seed=seed),
         "events": raw["events"],
