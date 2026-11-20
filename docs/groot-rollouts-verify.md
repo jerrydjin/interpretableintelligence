@@ -23,8 +23,8 @@ export GROOT_ABLATE_PLAN=/content/interpretableintelligence/src/interpretableint
 export GROOT_ABLATE_SAE=/content/sae_subset.safetensors
 ```
 
-Run the v9 hotfix cell once so `physint_inproc_v8` / `physint_inproc_v9` and the policy are live
-(same as `groot_colab_nodrive_v9.ipynb`).
+`ii rollouts --policy groot-1028` imports the runner as a package (`interpretableintelligence.adapters.groot.v9`), builds
+the v8 context and loads the policy itself (`run_live_v9`).
 
 ## Verification slice (8 episodes per arm)
 
@@ -44,7 +44,6 @@ Conditions (seeds **40000**–**40007**, init states **0**–**7** mod 50):
 cd /content/interpretableintelligence
 uv sync
 export GROOT_ABLATE_ONLY=baseline,recon-only,A-cand-720,A-ctrl01-7774,A-ctrl02-2343
-# In the hotfix / ablate cell, set only= that list and cap via shrunk plan or env stop-after.
 # Or call run_ablation with only=[...] from a short Python cell after v8 setup.
 RUN=/content/runs/groot-1028-cli-verify
 mkdir -p "$RUN"
@@ -105,8 +104,8 @@ v9 `episodes.jsonl` rows; action **sha256** is checked when `sim/ep-*.npz` files
   multi-latent arm extension.
 - **Control SPRT** in `summary.json` uses the fake-lane discordant SPRT for schema compatibility; v9 rise/fall
   SPRT lives in the imported `v9-ablate/*/summary.json` files.
-- **`ii rollouts` live path** (`run_live_v9`) expects the Colab `physint_inproc_v8/v9` modules on
-  `sys.path`; this repo does not install LIBERO or LeRobot GPU deps in the default `uv sync` environment.
+- **`ii rollouts` live path** (`run_live_v9`) needs LIBERO-plus and `lerobot[groot]` on a GPU machine; the default
+  `uv sync` environment does not install them.
 ## Random-weights SAE control (`--pick`, research rule 4)
 
 `--pick N` replaces the bundled plan with one built from a capture run. The picker (`picker/pick_candidates.py`) runs on
@@ -130,5 +129,4 @@ candidate is `finding: true` only when it is `causal`, above every random-SAE ar
 The design needs at least 7 straight successes to call a rise, so use `--episodes` well above that. The GR00T plan's single-feature design on task 1028 was a null
 (AGENTS.md, "Current state"), so agree a new design in the research thread before running this on 1028.
 
-The Colab notebook and `v9_hotfix_cell.py` embed an older `ablate_v9.py` without random-SAE dictionaries. Run this
-through `ii rollouts` (which imports the package copy), not the notebook's ablation cell.
+Run this through `ii rollouts`, which imports the package's `ablate_v9.py` (the only copy).

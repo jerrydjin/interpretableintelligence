@@ -4,7 +4,7 @@ import importlib.util, sys, types
 from pathlib import Path
 import torch
 
-SRC = Path(__file__).resolve().parents[1] / "v9" / "physint_inproc_v9.py"
+SRC = Path(__file__).resolve().parents[1] / "v9" / "inproc_v9.py"
 
 
 def _fake_lerobot():

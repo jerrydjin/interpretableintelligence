@@ -1,6 +1,6 @@
 """Where the GR00T box scripts look for the checkpoint, the Colab checkout and run folders.
 
-The box scripts in this directory (``check_*.py``, ``mock_*.py``, ``v9_standin.py``) need a GPU
+The box scripts in this directory (``check_*.py``) need a GPU
 box's trees. None of them exist on a fresh clone, and each script skips itself when its inputs are
 missing. Nothing here hardcodes a user's home: the checkpoint is found through the Hugging Face
 cache (``HF_HOME`` / ``HF_HUB_CACHE`` are honoured), and the two box trees can be moved with

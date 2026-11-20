@@ -1,7 +1,6 @@
 # groot-1028-v9-ablate: SAE feature-ablation rise test, task 1028 (unvalidated, real=false)
 
-Plan: `ablate_plan.json` (written by `groot-colab/v9/make_ablate_plan.py`, embedded in `groot_colab_nodrive_v9.ipynb` and
-`v9_hotfix_cell.py`). Runner: `groot-colab/v9/ablate_v9.py`. SAE: `sae_subset.safetensors` = the 30 latents used here, exact
+Plan: `ablate_plan.json` (written by `v9/make_ablate_plan.py`). Runner: `groot-colab/v9/ablate_v9.py`. SAE: `sae_subset.safetensors` = the 30 latents used here, exact
 columns/rows of `groot-1028-v9-n100/sae/weights.safetensors` (norm_mu / norm_scale checked against `sae/norm_stats.safetensors`).
 Inputs read only: `groot-1028-v9-n100/candidates_final.json` (matched controls), `picker_onset_pot0/result.json` (picker 146ee8a).
 

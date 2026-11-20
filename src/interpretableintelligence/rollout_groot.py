@@ -677,9 +677,13 @@ def run_live_v9(
     dictionaries: dict[str, Path] | None = None,
 ) -> Path:
     try:
-        import interpretableintelligence.adapters.groot.v9.ablate_v9 as ablate_v9
-        import interpretableintelligence.adapters.groot.v9.physint_inproc_v9 as v9
-        import interpretableintelligence.adapters.groot.v9.physint_inproc_v8 as v8
+        import sys
+
+        # Importing the package registers the runner's bare module names (physint_inproc_v8, physint_inproc_v9).
+        from interpretableintelligence.adapters.groot.v9 import ablate_v9
+        from interpretableintelligence.adapters.groot.v9 import inproc_v9 as v9
+
+        v8 = sys.modules["physint_inproc_v8"]
     except ImportError as exc:
         raise NotImplementedError(
             "groot-1028 live rollouts need the Colab v9 stack (lerobot, LIBERO-plus, GPU). "
