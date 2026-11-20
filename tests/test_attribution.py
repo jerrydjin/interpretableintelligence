@@ -129,7 +129,11 @@ def test_causal_features_outrank_active_decoys(demo):
         f"random_controls={seconds['random_controls']:.4f}s"
     )
     assert seconds["attribution"] > 0
-    assert seconds["attribution"] * 10 < seconds["random_controls"]
+    # Cost is counted in model calls, not wall-clock seconds, so a slow or busy runner cannot flip it.
+    # An attribution pass is a forward and a backward (counted as 3 forwards); the controls are forwards only.
+    print(f"passes {demo.passes}")
+    assert demo.passes["attribution"] > 0
+    assert demo.passes["attribution"] * 3 * 10 < demo.passes["random_controls"]
     completed = subprocess.run(
         [sys.executable, str(SCRIPT), str(demo.run), "--k", "3"],
         check=False,
