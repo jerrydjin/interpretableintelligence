@@ -68,7 +68,20 @@ window.__ii = { engine, ui }; // for tests and the curious; engine is set in boo
 // ------------------------------------------------------------------ helpers
 
 const featureById = (id) => engine.features[id];
-const featureName = (f) => (f.label ? capitalise(f.label) : `Unnamed feature ${f.id}`);
+const featureName = (f) => (f.label ? capitalise(f.label) : `Feature ${f.id}`);
+// Edges of the frame fire on every picture; they say where the picture ends, not what is in it.
+const isFraming = (f) => /\b(edge|corner|border) of the frame\b/i.test(f.label || "");
+// Many features share a name ("a wall"): keep the strongest of each name, in order.
+function oneOfEach(ids) {
+  const seen = new Set();
+  return ids.filter((i) => {
+    const label = featureById(i).label;
+    if (!label) return true;
+    if (seen.has(label)) return false;
+    seen.add(label);
+    return true;
+  });
+}
 function capitalise(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -122,9 +135,8 @@ async function boot() {
   const pack = engine.pack;
   $("model-pill").textContent = `${pack.model.name.split("/").pop()} · ${WHERE[engine.backend]}`;
   if (engine.backend === "remote") {
-    $("where-runs").textContent = "It runs on a small server in the cloud, which reads your picture and keeps nothing.";
-    $("where-fine").textContent =
-      "The model runs on a small server in the cloud. It reads each picture to answer you and keeps nothing; a shared link carries its own picture.";
+    $("where-runs").textContent = "running on a small server that keeps nothing";
+    $("where-fine").textContent = "Runs on a small server that reads each picture and keeps nothing.";
   }
   $("n-real").textContent = String(pack.n_real);
   if (pack.built) {
@@ -328,7 +340,7 @@ function acrossMine() {
     "div",
     { class: "view across", "data-testid": "across-mine" },
     head,
-    el("p", { class: "muted" }, `The features that fire most across everything you added${done.length < n ? ` (read ${done.length} of ${n} so far)` : ""}. Click one to see where it fires on each picture, then change it.`),
+    done.length < n ? el("p", { class: "muted" }, `Read ${done.length} of ${n} so far.`) : null,
     el("div", { class: "flist" }, order.map((i) => featureRow(featureById(i), score[i], top, `${count[i]} of ${done.length}`))),
   );
 }
@@ -528,8 +540,7 @@ function paintMap(canvas, values, peak, rgb, floor = 0) {
   tmp.width = W;
   tmp.height = H;
   tmp.getContext("2d").putImageData(small, 0, 0);
-  g.imageSmoothingEnabled = true;
-  g.imageSmoothingQuality = "high";
+  g.imageSmoothingEnabled = false; // one crisp cell per patch, so you can see which patches fire
   g.drawImage(tmp, 0, 0, canvas.width, canvas.height);
 }
 
@@ -547,24 +558,26 @@ function drawHeat() {
     const sorted = Float32Array.from(ui.result.shift).sort();
     const peak = Math.max(sorted[Math.floor(sorted.length * 0.97)], 0.01);
     paintMap(canvas, ui.result.shift, peak, COBALT, 0.08);
-    key.replaceChildren(el("span", { class: "swatch cobalt" }), "Where the model's view changed. Brighter means a bigger change.");
+    key.replaceChildren(el("span", { class: "swatch cobalt" }), "Where the model's view changed");
     return;
   }
   if (id != null) {
     const f = featureById(id);
     paintMap(canvas, engine.featureMap(ui.state, id), f.max || 1, EMBER);
-    key.replaceChildren(el("span", { class: "swatch ember" }), `Where "${featureName(f)}" fires. Brighter means stronger.`);
+    key.replaceChildren(el("span", { class: "swatch ember" }), featureName(f));
     return;
   }
   stage.classList.remove("mapping");
   paintMap(canvas, null);
-  key.replaceChildren("Hover a feature to see where it fires, or click a patch of the picture.");
+  key.replaceChildren("Click a patch to see what the model notices there");
 }
 
 function spotlight() {
   const totals = ui.state.totals;
   let best = null;
-  for (let i = 0; i < totals.length; i++) if (totals[i] > 0 && (best == null || totals[i] > totals[best])) best = i;
+  for (let i = 0; i < totals.length; i++) {
+    if (totals[i] > 0 && !isFraming(featureById(i)) && (best == null || totals[i] > totals[best])) best = i;
+  }
   return best;
 }
 
@@ -641,10 +654,10 @@ function featureRow(f, strength, peak, note = null) {
 
 function overview() {
   const totals = ui.state.totals;
-  const order = [...totals.keys()].filter((i) => totals[i] > 0).sort((a, b) => totals[b] - totals[a]);
-  const top = order.slice(0, TOP_N);
-  const named = order.filter((i) => featureById(i).label && !top.includes(i)).slice(0, 4);
-  const verified = engine.features.filter((f) => f.real);
+  const order = oneOfEach([...totals.keys()].filter((i) => totals[i] > 0).sort((a, b) => totals[b] - totals[a]));
+  const top = order.filter((i) => !isFraming(featureById(i))).slice(0, TOP_N);
+  const framing = order.filter((i) => isFraming(featureById(i)));
+  const verified = engine.features.filter((f) => f.real && !isFraming(f) && !top.includes(f.id));
   const peak = totals[top[0]] || 1;
   return el(
     "div",
@@ -652,14 +665,12 @@ function overview() {
     ui.mine.length > 1 ? acrossMine() : null,
     el("h2", {}, "What it notices here"),
     firstStep(top),
-    el("p", { class: "muted" }, `${order.length.toLocaleString("en-GB")} of ${engine.nFeatures.toLocaleString("en-GB")} features fire on this picture. The strongest are below: hover one to see where, click it to change it.`),
     el("div", { class: "flist" }, top.map((i) => featureRow(featureById(i), totals[i], peak))),
-    named.length ? el("h3", {}, "Also here, with names") : null,
-    named.length ? el("div", { class: "flist" }, named.map((i) => featureRow(featureById(i), totals[i], peak))) : null,
-    el("h3", {}, "Features with a green tick"),
-    el("p", { class: "muted" }, "These passed every check. Open one, even if it is quiet on this picture."),
-    el("div", { class: "flist" }, verified.map((f) => featureRow(f, totals[f.id] || 0, peak))),
-    el("p", { class: "hint" }, "Tip: click any patch of the picture to see everything the model notices there."),
+    verified.length ? el("h3", {}, "Verified") : null,
+    verified.length ? el("div", { class: "flist" }, verified.map((f) => featureRow(f, totals[f.id] || 0, peak))) : null,
+    framing.length
+      ? el("details", { class: "fold" }, el("summary", {}, `Edges of the frame (${framing.length})`), el("div", { class: "flist" }, framing.map((i) => featureRow(featureById(i), totals[i], peak))))
+      : null,
   );
 }
 
@@ -674,7 +685,7 @@ function patchView() {
     { class: "view" },
     backLink(),
     el("h2", {}, "What it notices in this patch"),
-    el("p", { class: "muted" }, `Row ${r}, column ${c}. The dictionary describes this patch with ${order.length} features. Click one to play with it.`),
+    el("p", { class: "muted" }, `Row ${r}, column ${c}.`),
     el("div", { class: "flist" }, order.map((j) => featureRow(featureById(row.idx[j]), row.val[j], peak))),
   );
 }
@@ -739,9 +750,8 @@ function featureView() {
     if (v > 0) fired++;
     if (v > best) best = v;
   }
-  const status = f.real
-    ? el("p", { class: "status real" }, tick(), " Verified: it passed all four checks.")
-    : el("p", { class: "status" }, f.label ? "Not verified. The name is a guess that has not passed every check." : "Not verified and not named yet. Look at where it fires and guess what it is.");
+  // A verified feature says so once; any other shows which checks it has and has not passed.
+  const status = f.real ? el("p", { class: "status real" }, tick(), " Verified") : checksList(f);
   const kinds = el(
     "div",
     { class: "seg", role: "tablist" },
@@ -781,10 +791,9 @@ function featureView() {
     "div",
     { class: "view" },
     backLink(),
-    el("p", { class: "fid" }, `Feature ${f.id}`),
+    f.label ? el("p", { class: "fid" }, `#${f.id}`) : null,
     el("h2", { class: "ftitle" }, featureName(f)),
     status,
-    checksList(f),
     el("h3", {}, "On this picture"),
     el("p", { class: "muted", id: "fires-text" }, fired ? `It fires on ${fired} of ${engine.nTok} patches. Its strongest here is ${pct(best / (f.max || 1))} of the most it ever reached on the training videos.` : "It is silent on this picture. Try Force on to see what it would do, or pick one of the pictures below where it fires."),
     el("h3", {}, "Change it and watch"),
@@ -938,7 +947,7 @@ function firstStep(top) {
   if (recalled(TRIED_KEY)) return null;
   const state = ui.state;
   if (ui.firstPick?.state !== state) {
-    const candidates = top.map(featureById).filter((f) => f.real).slice(0, 4);
+    const candidates = top.map(featureById).filter((f) => f.real && !isFraming(f)).slice(0, 4);
     const fallback = candidates[0] || top.map(featureById).find((f) => f.label);
     if (!fallback) return null;
     // With several candidates the hint waits for the measurement, so it never changes its mind on screen.
@@ -959,9 +968,8 @@ function firstStep(top) {
         runEdit();
       },
     },
-    "Try this first: switch off ",
-    el("b", {}, `"${featureName(pick)}"`),
-    " and see where the model's view of the picture changes.",
+    "Try switching off ",
+    el("b", {}, featureName(pick)),
   );
 }
 
