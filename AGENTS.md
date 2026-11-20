@@ -22,7 +22,7 @@ uv run pytest
 
 `interpretableintelligence` is the long command name; **`ii` is the same CLI**. PyTorch is pinned to CPU wheels in `pyproject.toml` for CI and local dev; GR00T/LIBERO jobs use separate GPU environments (Colab), not this default install.
 
-On a fresh clone of `main` with `cargo`, Chrome and `node` on the machine (as in CI, on Ubuntu and macOS), expect **456 passed, 11 skipped, 4 deselected** (the `slow` tests, excluded by default). Without `cargo` the 3 Rust parity tests in `tests/test_contract.py` also skip (**453 passed, 14 skipped**). Without Chrome or Chromium the 10 browser tests skip, and without `node` 4 guide tests skip. Every skip prints its reason with `pytest -rs`. Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
+On a fresh clone of `main` with `cargo`, Chrome and `node` on the machine (as in CI, on Ubuntu and macOS), expect **455 passed, 11 skipped, 4 deselected** (the `slow` tests, excluded by default). Without `cargo` the 3 Rust read-API tests in `tests/test_contract.py` also skip (**452 passed, 14 skipped**). Without Chrome or Chromium the 10 browser tests skip, and without `node` 4 guide tests skip. Every skip prints its reason with `pytest -rs`. Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
 
 ## `ii` CLI (public surface)
 
@@ -37,7 +37,7 @@ All experiments that belong in this repo should be reachable through these comma
 | `run` | Capture activations, train SAE, label features, score, optionally serve the viewer (`fake`, `vjepa2`, `hf --model <id>`). `--remote` runs it on a Modal GPU billed to the invoking user's account and streams results back (`docs/REMOTE.md`). `--sae-from` copies a frozen SAE in (ii run folder or GR00T v9 capture) instead of training one, so its feature ids keep their meaning; such a run is never scored (`SCHEMA.md`, "Reused SAEs"). |
 | `rank` | Attribution prefilter shortlist; does not replace ablation. |
 | `explain` | Explain a new clip; cites only scoreboard-`real` ablation effects. |
-| `serve` | Python read API + `POST /explain` (Rust server in `server/` is preferred for production reads). |
+| `serve` | `POST /explain` only, for the Rust read API in `server/` to proxy (`--explain-url`). All reads are Rust. |
 | `rollouts` | Paired policy rollouts + matched random-feature controls → `rollouts/` (schema v1). |
 | `steer-scorecard` | Remove and boost the top verified features on held-out clips against matched random-direction controls (or, with `--controls-from features`, other live SAE features matched on firing rate, activation and decoder norm); effect sizes with episode-bootstrap intervals → `steering/`, shown in `ii view`. Offline; never changes the scoreboard and is not a rollout finding. |
 | `probe` | Held-out failure probe on a run's SAE latents, trained on `split.json`'s train clips only, against a seeded random-weights SAE (same architecture, width, `k`) and raw activations → `probe/`. `sae_gate` passes only if the trained SAE beats both on AUROC (paired episode bootstrap p < 0.05) at a lead of ≥ 1 s; `not_run` when skipped. Offline; never changes the scoreboard, never sets `real`, not a rollout finding. |

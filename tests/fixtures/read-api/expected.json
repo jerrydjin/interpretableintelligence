@@ -1,0 +1,338 @@
+{
+ "/clips/clip-000/frame/0?run_id=mini": {
+  "body": {
+   "clip_id": "clip-000",
+   "features": [
+    {
+     "activation": 1.25,
+     "badge": "real",
+     "effects": [
+      {
+       "effect": 0.20000000298023224,
+       "effect_kind": "ablation"
+      },
+      {
+       "effect": -0.009999999776482582,
+       "effect_kind": "estimate"
+      }
+     ],
+     "heatmap": [
+      [
+       0.0,
+       1.25
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ],
+     "id": 0,
+     "label": "stripe"
+    }
+   ],
+   "frame": 0,
+   "layer": 3,
+   "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "run_id": "mini",
+   "t": 0,
+   "window": 0
+  },
+  "status": 200
+ },
+ "/clips/clip-000/frame/1?run_id=mini": {
+  "body": {
+   "clip_id": "clip-000",
+   "features": [
+    {
+     "activation": 0.75,
+     "badge": "unverified",
+     "effects": [
+      {
+       "effect": 0.05000000074505806,
+       "effect_kind": "estimate"
+      }
+     ],
+     "heatmap": [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       0.75,
+       0.0
+      ]
+     ],
+     "id": 1,
+     "label": "flicker"
+    }
+   ],
+   "frame": 1,
+   "layer": 3,
+   "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "run_id": "mini",
+   "t": 1,
+   "window": 0
+  },
+  "status": 200
+ },
+ "/clips/clip-000/frame/2?run_id=mini": {
+  "body": {
+   "detail": {
+    "error": "run mini clip clip-000 has no frame 2",
+    "layer": 3,
+    "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "run_id": "mini"
+   }
+  },
+  "status": 404
+ },
+ "/clips/missing/file?run_id=mini": {
+  "body": {
+   "detail": {
+    "error": "run mini has no clip missing",
+    "layer": 3,
+    "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "run_id": "mini"
+   }
+  },
+  "status": 404
+ },
+ "/clips/missing/frame/0?run_id=mini": {
+  "body": {
+   "detail": {
+    "error": "run mini has no clip missing",
+    "layer": 3,
+    "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "run_id": "mini"
+   }
+  },
+  "status": 404
+ },
+ "/features/0/top_clips?run_id=mini": {
+  "body": {
+   "badge": "real",
+   "feature_id": 0,
+   "label": "stripe",
+   "layer": 3,
+   "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "run_id": "mini",
+   "top_clips": [
+    {
+     "clip_id": "clip-000",
+     "frame": 0,
+     "h": 0,
+     "split": "train",
+     "t": 0,
+     "value": 1.25,
+     "w": 1,
+     "window": 0
+    }
+   ]
+  },
+  "status": 200
+ },
+ "/features/0?run_id=../demo": {
+  "body": {
+   "detail": {
+    "error": "run_id must be a single folder name, got '../demo'",
+    "layer": null,
+    "model_sha": null,
+    "run_id": null
+   }
+  },
+  "status": 400
+ },
+ "/features/0?run_id=mini": {
+  "body": {
+   "feature": {
+    "ablation_effect": 0.2,
+    "ablation_effect_kind": "ablation",
+    "absent_in_random_init": true,
+    "distinct_clips_top20": 1,
+    "id": 0,
+    "label": "stripe",
+    "label_holds_heldout": true,
+    "label_model": "fake-cue-v1",
+    "n_random": 100,
+    "random_percentile": 100.0,
+    "real": true,
+    "top": []
+   },
+   "layer": 3,
+   "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "run_id": "mini"
+  },
+  "status": 200
+ },
+ "/features/1/top_clips?run_id=mini": {
+  "body": {
+   "badge": "unverified",
+   "feature_id": 1,
+   "label": "flicker",
+   "layer": 3,
+   "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "run_id": "mini",
+   "top_clips": [
+    {
+     "clip_id": "clip-000",
+     "frame": 1,
+     "h": 1,
+     "split": "train",
+     "t": 1,
+     "value": 0.75,
+     "w": 0,
+     "window": 0
+    }
+   ]
+  },
+  "status": 200
+ },
+ "/features/1?run_id=mini": {
+  "body": {
+   "feature": {
+    "ablation_effect": 0.01,
+    "ablation_effect_kind": "ablation",
+    "absent_in_random_init": true,
+    "distinct_clips_top20": 1,
+    "id": 1,
+    "label": "flicker",
+    "label_holds_heldout": false,
+    "label_model": "fake-cue-v1",
+    "n_random": 100,
+    "random_percentile": 10.0,
+    "real": false,
+    "top": []
+   },
+   "layer": 3,
+   "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "run_id": "mini"
+  },
+  "status": 200
+ },
+ "/features/999?run_id=mini": {
+  "body": {
+   "detail": {
+    "error": "run mini has no feature 999",
+    "layer": 3,
+    "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "run_id": "mini"
+   }
+  },
+  "status": 404
+ },
+ "/runs": {
+  "body": {
+   "runs": [
+    {
+     "adapter": "fake",
+     "layer": 3,
+     "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "run_id": "mini",
+     "usable": true
+    }
+   ]
+  },
+  "status": 200
+ },
+ "/runs/mini": {
+  "body": {
+   "clips": [
+    {
+     "clip_id": "clip-000",
+     "fps": 8.0,
+     "n_frames": 2,
+     "pixels": "ok",
+     "split": "train"
+    }
+   ],
+   "features": [
+    {
+     "ablation_effect": 0.2,
+     "absent_in_random_init": true,
+     "badge": "real",
+     "distinct_clips_top20": 1,
+     "id": 0,
+     "label": "stripe",
+     "label_holds_heldout": true,
+     "label_model": "fake-cue-v1",
+     "n_random": 100,
+     "random_percentile": 100.0,
+     "real": true,
+     "top_clips": [
+      {
+       "clip_id": "clip-000",
+       "frame": 0,
+       "h": 0,
+       "split": "train",
+       "t": 0,
+       "value": 1.25,
+       "w": 1,
+       "window": 0
+      }
+     ]
+    },
+    {
+     "ablation_effect": 0.01,
+     "absent_in_random_init": true,
+     "badge": "unverified",
+     "distinct_clips_top20": 1,
+     "id": 1,
+     "label": "flicker",
+     "label_holds_heldout": false,
+     "label_model": "fake-cue-v1",
+     "n_random": 100,
+     "random_percentile": 10.0,
+     "real": false,
+     "top_clips": [
+      {
+       "clip_id": "clip-000",
+       "frame": 1,
+       "h": 1,
+       "split": "train",
+       "t": 1,
+       "value": 0.75,
+       "w": 0,
+       "window": 0
+      }
+     ]
+    }
+   ],
+   "grid": {
+    "h": 2,
+    "patch_px": 1,
+    "t": 2,
+    "tubelet": 1,
+    "w": 2
+   },
+   "layer": 3,
+   "model": {
+    "adapter": "fake",
+    "name": "fake",
+    "sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   },
+   "model_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "run_id": "mini",
+   "sae": {
+    "ev_heldout": 0.91,
+    "loss_recovered": 0.8,
+    "usable": true
+   },
+   "split": {
+    "n_heldout": 1,
+    "n_train": 1
+   }
+  },
+  "status": 200
+ },
+ "/runs/missing-run": {
+  "body": {
+   "detail": {
+    "error": "run not found: missing-run",
+    "layer": null,
+    "model_sha": null,
+    "run_id": "missing-run"
+   }
+  },
+  "status": 404
+ }
+}

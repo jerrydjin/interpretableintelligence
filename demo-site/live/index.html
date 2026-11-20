@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
   <title>Live playground · ii</title>
-  <meta name="description" content="Look inside a real vision model. Drop in any picture, see what it notices, switch a feature off and watch its view change.">
+  <meta name="description" content="A vision model in your browser. Drop in your own pictures or a video, see what it notices, then switch a feature off.">
   <link rel="preload" href="../static/fonts/geist-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="../static/fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="../static/site.css">
@@ -24,8 +24,8 @@
 
   <main>
     <section class="intro">
-      <h1>Look inside a vision model. Then change its mind.</h1>
-      <p class="lede">This is <span id="model-name">DINOv2-small</span>, the kind of vision model robots use to see. <span id="where-runs">It runs right here in your browser.</span> Give it your own pictures or a short video, see the things it has learnt to notice across all of them, then switch one off and watch how its view of the scene changes.</p>
+      <h1>Playground</h1>
+      <p class="lede"><span id="model-name">DINOv2-small</span>, a vision model, <span id="where-runs">running in your browser</span>. Drop in your own pictures or a video, see what it notices, then switch a feature off.</p>
       <div id="byom"></div>
     </section>
 
@@ -65,23 +65,7 @@
     </section>
 
     <section class="how" id="how">
-      <h2>How this works</h2>
-      <ol class="steps">
-        <li><h3>The model looks</h3><p>It cuts the picture into a 16 by 16 grid of patches and describes every patch with a list of 384 numbers. We read those numbers halfway through the model.</p></li>
-        <li><h3>A dictionary splits them into features</h3><p>A dictionary trained on 80 robot videos breaks each description into a few features out of 3,072, each one a thing the model notices, such as a white ceiling or the edge of the frame. An AI named some of them from where they fire.</p></li>
-        <li><h3>Tests decide the tick</h3><p>A name is a guess until it passes four checks. Only features that pass every one get a green tick: <span id="n-real">5</span> of 3,072 so far.</p>
-          <details><summary>What are the checks?</summary>
-            <ul>
-              <li>It fires across many different videos, not just one.</li>
-              <li>Its name still fits videos that were held back while it was found.</li>
-              <li>Switching it off changes the model more than at least 95 of 100 random look-alike edits do.</li>
-              <li>It is missing from a copy of the model with random, untrained weights, so it was learnt.</li>
-            </ul>
-          </details>
-        </li>
-        <li><h3>You play</h3><p>Switch a feature off, turn it up or force it on, and the rest of the model runs again on the edited patches. Blue shows where the model's final view of each patch moved. Playing is exploring: it never changes which features carry a tick.</p></li>
-      </ol>
-      <p class="fine"><span id="where-fine">Everything runs on your device with <a href="https://onnxruntime.ai/">ONNX Runtime Web</a>. Your pictures and camera never leave it.</span> Model: <a href="https://huggingface.co/facebook/dinov2-small">facebook/dinov2-small</a> (Apache 2.0), cut at block 6 of 12. Want to do this on your own model? <a href="https://github.com/jerrydjin/interpretableintelligence">Run <code>ii</code></a> and pack it with <code>ii export-live</code>.</p>
+      <p class="fine"><span id="where-fine">Runs on your device with <a href="https://onnxruntime.ai/">ONNX Runtime Web</a>; your pictures never leave it.</span> Model <a href="https://huggingface.co/facebook/dinov2-small">facebook/dinov2-small</a> (Apache 2.0), cut at block 6 of 12. A tick means the feature passed <a href="/explore/">four checks</a>: <span id="n-real">5</span> of 3,072 so far. Playing never changes a tick.</p>
       <p class="fine perf" id="perf"></p>
     </section>
   </main>
