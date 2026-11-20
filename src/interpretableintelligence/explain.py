@@ -20,7 +20,7 @@ import torch
 
 from interpretableintelligence.adapters import get_adapter
 from interpretableintelligence.adapters.base import Clip
-from interpretableintelligence.artifacts import read_json, read_jsonl
+from interpretableintelligence.artifacts import read_json
 from interpretableintelligence.clips import file_sha256
 from interpretableintelligence.device import pick_device
 from interpretableintelligence.sae import load_sae
@@ -203,80 +203,6 @@ def resolve_run_dir(runs_dir: Path, run_id: str) -> Path:
     if not path.is_dir():
         raise RunNotFound(f"run not found: {run_id}", run_id=run_id)
     return path
-
-
-def list_runs(runs_dir: Path) -> dict:
-    """Summaries of run folders under ``runs_dir``. Each entry carries the trace fields."""
-    root = Path(runs_dir)
-    if not root.is_dir():
-        raise ExplainError(f"runs directory not found: {runs_dir}")
-    runs = []
-    for path in sorted(child for child in root.iterdir() if child.is_dir()):
-        if not (path / "manifest.json").is_file() or not (path / "scoreboard.json").is_file():
-            continue
-        ctx = load_run(path)
-        sae = ctx.scoreboard.get("sae")
-        usable = isinstance(sae, dict) and sae.get("usable") is True
-        runs.append(
-            {
-                "run_id": ctx.run_id,
-                "model_sha": ctx.model_sha,
-                "layer": ctx.layer,
-                "usable": usable,
-                "adapter": ctx.adapter_name,
-            }
-        )
-    return {"runs": runs}
-
-
-def get_feature(run_dir: Path, feature_id: int) -> dict:
-    """One feature record, reconciled with the scoreboard, plus the trace fields."""
-    if isinstance(feature_id, bool) or not isinstance(feature_id, int):
-        raise FeatureNotFound(f"feature id must be an integer, got {feature_id!r}")
-    ctx = load_run(run_dir)
-    record = ctx.features_by_id.get(feature_id)
-    if record is None:
-        raise FeatureNotFound(
-            f"run {ctx.run_id} has no feature {feature_id}",
-            run_id=ctx.run_id,
-            model_sha=ctx.model_sha,
-            layer=ctx.layer,
-        )
-    path = ctx.run_dir / "features" / "features.jsonl"
-    if not path.is_file():
-        raise ExplainError(
-            f"run {ctx.run_id} is missing features/features.jsonl",
-            run_id=ctx.run_id,
-            model_sha=ctx.model_sha,
-            layer=ctx.layer,
-        )
-    rows = [row for row in read_jsonl(path) if row.get("id") == feature_id]
-    if len(rows) != 1:
-        raise ExplainError(
-            f"run {ctx.run_id} features.jsonl does not contain exactly one record for feature {feature_id}",
-            run_id=ctx.run_id,
-            model_sha=ctx.model_sha,
-            layer=ctx.layer,
-        )
-    feature = dict(rows[0])
-    for key in (
-        "label",
-        "distinct_clips_top20",
-        "label_holds_heldout",
-        "ablation_effect",
-        "random_percentile",
-        "n_random",
-        "absent_in_random_init",
-        "real",
-    ):
-        feature[key] = record[key]
-    feature["ablation_effect_kind"] = EFFECT_ABLATION
-    return {
-        "run_id": ctx.run_id,
-        "model_sha": ctx.model_sha,
-        "layer": ctx.layer,
-        "feature": feature,
-    }
 
 
 def load_clip_file(path: Path, clip_id: str | None = None, fps: float = 8.0) -> Clip:
