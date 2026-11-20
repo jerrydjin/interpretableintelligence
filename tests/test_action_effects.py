@@ -400,3 +400,36 @@ def test_cli_gripper_trace_tiny(tmp_path):
     assert data["n_events"] == 4
     assert len(data["layers"]["recovered_action"]) == 5
     assert data["verdict"]["command"] in {"dropped", "carried", "partial", "insufficient_data"}
+
+
+def test_cli_gripper_sae_tiny(tmp_path):
+    clips = _clips_with_states(tmp_path, n=6)
+    out = tmp_path / "gs"
+    args = ["gripper-sae", "--clips", str(clips), "--out", str(out), "--tiny", "--layer", "2", "--latents", "32",
+            "--k", "4", "--steps", "50", "--stride", "1", "--random-saes", "2", "--bootstrap", "20"]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "gripper_sae.json").read_text())
+    assert data["schema"] == "gripper-sae/v1" and data["layer"] == 2
+    assert set(data["arms"]) == {"trained", "random:1000", "random:1001", "trained-random-latents"}
+    assert data["verdict"] in {"gripper_feature", "none", "insufficient_data"}
+    assert (out / "sae" / "weights.safetensors").is_file()
+
+
+def test_gripper_sae_patching_all_latents_recovers_the_gap():
+    import torch
+
+    from interpretableintelligence.worldmodel import gripper_sae as gs
+
+    model = tiny_world_model(seed=0)
+    z = model.encode_frames(np.stack([_scene(0)[0]]))[0]
+    tr = ae.Trajectory("c", 0, "", np.zeros((2, 8, 8, 3), np.uint8), np.array([[0.4, 0, 0, 0, 0, 0, 0], [0.4, 0, 0, 0, 0, 0, 1]], np.float32))
+    acts, states = gs.event_inputs(tr, 0, 1)
+    d = 16
+    eye = {"W_enc": torch.eye(d).repeat(1, 2) * torch.tensor([1.0] * d + [-1.0] * d), "b_enc": torch.zeros(2 * d),
+           "W_dec": torch.cat([torch.eye(d), -torch.eye(d)]), "b_dec": torch.zeros(d), "norm_mu": torch.zeros(d),
+           "norm_scale": torch.ones(1), "threshold": torch.tensor(0.0)}
+    # A lossless +/- dictionary: patching every latent at the layer after the command is mixed in closes the whole gap,
+    # patching none closes nothing.
+    rec = gs.patch_recovery(model, z, acts, states, 2, [(eye, list(range(2 * d))), (eye, [])])
+    assert abs(rec[0] - 1.0) < 1e-4 and abs(rec[1]) < 1e-6
