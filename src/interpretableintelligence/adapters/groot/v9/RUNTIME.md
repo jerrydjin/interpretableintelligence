@@ -1,6 +1,6 @@
-# GR00T v9 on Colab
+# GR00T v9 runtime
 
-On Colab, the v9 hotfix cell needs the current `physint_inproc_v8.py` sitting next to it (`/content/physint_inproc_v8.py`), because it imports `verify_rotary_inv_freq` from it and the env workers import v8 helpers from disk.
+The env workers import v8 helpers by the bare name `physint_inproc_v8`. Importing `interpretableintelligence.adapters.groot.v9` registers that name (and `physint_inproc_v9`, `pot_events`, `ablate_v9`) before anything else runs.
 
 The run stops after the probe.
 

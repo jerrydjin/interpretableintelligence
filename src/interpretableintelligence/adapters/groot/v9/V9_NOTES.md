@@ -10,10 +10,10 @@
 - Probe: 20 episodes per task (`GROOT_PROBE_N`), seeds 10000+k with init k (same as v8). It resumes by episode index. It picks the task nearest 0.5 (ties go to 614), and reports Wilson 95% CI and `in_30_70`. Capture is the same as v8 (seed 20000+i, init i % n_init; n_init comes from a worker), and `manifest.runner` holds the pool stats.
 
 ## Box tests (CPU, stand-in policy = real processors + real LIBERO-plus env id 614)
-Command: `python tests/run_v9_parallel.py all`. Results are in `v9/box_test_results.json`. The other scripts are `tests/mock_v9_hotfix.py` and `tests/mock_v9_nbcells.py`.
+These were checked with CPU box scripts that drove the generated Colab notebook and hotfix cell (`tests/run_v9_parallel.py`, `tests/mock_v9_*.py`, results in `v9/box_test_results.json`). They were removed with the notebook builders in November 2026 and are in git history.
 
 ## Per-pot failure detector (2026-11-10, rule `pot0-v1`)
-- `v9/pot_events.py` (numpy only) is the single implementation, used by `physint_inproc_v9.label_episode` in capture and by the offline relabel `/workspace/runs/groot-1028-v9-n100/tools/derive_pot0_fail.py`. The build embeds it as `/content/pot_events.py` in both the notebook and the hotfix, and the hotfix reloads it.
+- `v9/pot_events.py` (numpy only) is the single implementation, used by `physint_inproc_v9.label_episode` in capture and by the offline relabel `/workspace/runs/groot-1028-v9-n100/tools/derive_pot0_fail.py`.
 - Why: `v8.derive_failure` judges a drop on the object nearest the EEF. On task 1028 it labelled pot 1's normal placement on the stove as a `drop` in 37 of 40 cases.
 - What it does: computes per-pot lift / release / placement events from obj_pos, gripper_width and eef distance. Lift is more than 2 cm above the start. Release is gripper reopening or a confirmed separation. Off-stove is judged where the pot comes to rest, and the stove region is an xy box (`STOVE_REGIONS["KITCHEN_SCENE8"]`). It then labels the episode on pot 0 (moka_pot_1): `lifted_not_placed` / `never_grasped` / `pot0_placed_other_failure` / `empty_grasp`, with `fail_pot`, `fail_subkind`, `fail_rule`, the `pot0_*` anchors and `pot1_events`.
 - Kept: `fail_kind_active` / `fail_t_active` (v8's label) and `failure_details` (v8's details).
@@ -21,7 +21,7 @@ Command: `python tests/run_v9_parallel.py all`. Results are in `v9/box_test_resu
 - Regression: `tests/test_pot_events.py` replays the 100 recorded traces and requires the relabel in `episodes.jsonl` exactly. It also requires the v8 active label to be reproduced, and no `lifted_not_placed` fail_t within 16 steps of a pot-1 release or placement.
 
 ## SAE feature-ablation runner (2026-11-10, `ablate_v9.py`, plan `groot-ablate-plan-v1`)
-- **Run it:** set `%env GROOT_ABLATE_PLAN=default` and Run all, or paste `v9_hotfix_cell.py` into a live runtime. Cells 7–9 / the hotfix then run the embedded 1028 plan instead of probe + capture. Other knobs: `GROOT_ABLATE_ONLY` (e.g. `baseline,arm-A`), `GROOT_ABLATE_OUT`, `GROOT_ABLATE_SAE`. It resumes from the per-condition `episodes.jsonl`. Plan and folder layout: `/workspace/runs/groot-1028-v9-ablate/README.md`.
+- **Run it:** `ii rollouts --policy groot-1028` (`docs/groot-rollouts-verify.md`) calls `ablate_v9.run_ablation`. Knobs read by the runner: `GROOT_ABLATE_ONLY` (e.g. `baseline,arm-A`), `GROOT_ABLATE_OUT`, `GROOT_ABLATE_SAE`. It resumes from the per-condition `episodes.jsonl`. Plan and folder layout: `/workspace/runs/groot-1028-v9-ablate/README.md`.
 - **run_pool changes (backwards compatible; the probe and capture paths are unchanged):**
   - `next_job=` is a scheduler callback, asked whenever a slot is free.
   - `editor=` is a forward-hook editor that gets `begin([job.meta["edit"] per batch row])` / `end()` around every predict. The editor is registered before the capture tap. Its per-episode stats end up on `Episode.edit_stats`.
@@ -29,5 +29,3 @@ Command: `python tests/run_v9_parallel.py all`. Results are in `v9/box_test_resu
 - **SPRT stop rule:** stop on H1 of either test, or on H0 of both (Sobel–Wald). With p0 0.56, p1 0.86 / 0.26 and α=β=0.05, the literal "stop when either test decides" could never return rise or fall, because the other test always accepts H0 first. That rule is kept as `stop_rule: either_test_decides` for checking.
 - **Tests:**
   - `tests/test_ablate.py` (pytest) covers the hook arithmetic, the identity path, the final-step gating, the SPRT bounds, the paired delta, the schedule and resume.
-  - `tests/mock_v9_ablate.py` runs the hotfix end to end: run 1 is interrupted, then a torn line is resumed.
-  - `tests/mock_v9_nbcells_ablate.py` covers notebook ablation mode with `GROOT_ABLATE_ONLY`.

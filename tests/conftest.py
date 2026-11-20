@@ -17,6 +17,9 @@ runner = CliRunner()
 class Demo(NamedTuple):
     run: Path
     clips: Path
+    # Model calls during scoring, counted while the run was built: ``attribution`` is one forward and one
+    # backward per window; ``random_controls`` is every edited forward the random-feature controls made.
+    passes: dict[str, int] | None = None
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -41,7 +44,48 @@ def demo(tmp_path_factory, _activation_cache) -> Demo:
     out = root / "runs" / "demo"
     generated = runner.invoke(app, ["generate-clips", "--out", str(clips), "--n", "30", "--seed", "0"])
     assert generated.exit_code == 0, generated.output
-    ran = runner.invoke(
+    with pytest.MonkeyPatch.context() as patch:
+        passes = _count_scoring_passes(patch)
+        ran = _run_demo(clips, out)
+    assert ran.exit_code == 0, ran.output
+    checked = runner.invoke(app, ["validate", str(out)])
+    assert checked.exit_code == 0, checked.output + (ran.output or "")
+    return Demo(out, clips, passes)
+
+
+def _count_scoring_passes(patch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Count the fake adapter's attribution passes and the random controls' forwards, in place of wall-clock time."""
+    from interpretableintelligence import pipeline
+    from interpretableintelligence.adapters.fake import FakeAdapter
+
+    passes = {"attribution": 0, "random_controls": 0}
+    in_controls = [False]
+    objective, predict, percentile = FakeAdapter.attribution_objective, FakeAdapter.predict_masked, pipeline._random_percentile
+
+    def counted_objective(self, *args, **kwargs):
+        passes["attribution"] += 1
+        return objective(self, *args, **kwargs)
+
+    def counted_predict(self, *args, **kwargs):
+        if in_controls[0]:
+            passes["random_controls"] += 1
+        return predict(self, *args, **kwargs)
+
+    def counted_percentile(*args, **kwargs):
+        in_controls[0] = True
+        try:
+            return percentile(*args, **kwargs)
+        finally:
+            in_controls[0] = False
+
+    patch.setattr(FakeAdapter, "attribution_objective", counted_objective)
+    patch.setattr(FakeAdapter, "predict_masked", counted_predict)
+    patch.setattr(pipeline, "_random_percentile", counted_percentile)
+    return passes
+
+
+def _run_demo(clips: Path, out: Path):
+    return runner.invoke(
         app,
         [
             "run",
@@ -60,10 +104,6 @@ def demo(tmp_path_factory, _activation_cache) -> Demo:
             "--no-open",
         ],
     )
-    assert ran.exit_code == 0, ran.output
-    checked = runner.invoke(app, ["validate", str(out)])
-    assert checked.exit_code == 0, checked.output + (ran.output or "")
-    return Demo(out, clips)
 
 
 @pytest.fixture(scope="session")

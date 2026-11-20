@@ -55,7 +55,7 @@ def rise_sprt(p0: float, cap: int) -> dict:
 
 def min_rise_episodes(sprt: dict) -> int | None:
     """Fewest episodes in which the design can call a rise (every one a success), or None if it cannot by ``cap``."""
-    from interpretableintelligence.adapters.groot.v9.ablate_v9 import sequential_decision
+    from interpretableintelligence.rollout_stats import sequential_decision
 
     for n in range(1, int(sprt["cap"]) + 1):
         if sequential_decision([True] * n, sprt)["verdict"] == "rise":
