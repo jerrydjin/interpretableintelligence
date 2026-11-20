@@ -515,7 +515,7 @@ def summarize_groot(rows: list[dict], config: RolloutConfig, *, include_recon: b
     control_index = 0
     sprt_verdicts: dict[int, str] = {}
     if config.rise_sprt is not None:
-        from interpretableintelligence.adapters.groot.v9.ablate_v9 import sequential_decision
+        from interpretableintelligence.rollout_stats import sequential_decision
 
         # Rule 1: the Sobel-Wald three-way SPRT on the arm's successes in episode (seed) order. A fixed-budget run
         # never stops early, so the call is where the plan's SPRT would have stopped on this prefix (or cap_undecided).

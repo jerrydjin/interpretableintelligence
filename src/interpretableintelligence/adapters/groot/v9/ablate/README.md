@@ -34,7 +34,7 @@ The Colab output goes to `/content/physint/groot/groot-1028-v9-ablate` and `/con
 
 ## Early-stopping-valid statistics (added after the run, from the existing records)
 
-Wilson intervals assume a fixed n; the SPRT chose n. `ablate_v9.sequential_inference` enumerates every stopping point of
+Wilson intervals assume a fixed n; the SPRT chose n. `rollout_stats.sequential_inference` (re-exported by `ablate_v9`) enumerates every stopping point of
 the plan's SPRT exactly (same boundaries and stop rule as `default_plan` / `sequential_decision`) and inverts the exact
 tails under the sample-proportion ordering: `seq95` (equal-tailed 95% interval, >= 95% coverage at every p, checked
 exactly and by simulation in `tests/test_sequential_stats.py`) and `p_seq_rise` / `p_seq_fall` against p0. `arms` in the

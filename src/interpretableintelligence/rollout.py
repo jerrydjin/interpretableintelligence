@@ -177,7 +177,7 @@ class RolloutConfig:
     random_sae_feature_ids: tuple[tuple[int, ...], ...] = ()
     # "fall": the edit should lower success (fake policies). "rise": it should raise it (GR00T rise test).
     direction: str = "fall"
-    # Research rule 1 on GR00T --pick plans: the Sobel-Wald SPRT (adapters/groot/v9/ablate_v9.sequential_decision)
+    # Research rule 1 on GR00T --pick plans: the Sobel-Wald SPRT (rollout_stats.sequential_decision)
     # read on each arm's outcomes in episode order. {p0, p1_rise, p1_fall, alpha, beta, cap, stop_rule}, or None.
     rise_sprt: dict | None = None
 
