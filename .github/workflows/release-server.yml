@@ -1,0 +1,74 @@
+name: Release viewer binary
+
+# Builds interpretableintelligence-server (the Rust viewer and read API) for Linux and macOS and
+# attaches the binaries and their SHA-256 sums to a GitHub release. `ii view` downloads the binary
+# for its platform from the release named in src/interpretableintelligence/server_release.json and
+# checks it against the sum recorded there, so people without a Rust toolchain can view runs.
+#
+# Run it from the Actions tab with a tag such as server-v0.1.0, then record the printed sums in
+# server_release.json in a pull request.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example server-v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.asset }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: interpretableintelligence-server-linux-x86_64
+          - os: ubuntu-24.04-arm
+            asset: interpretableintelligence-server-linux-aarch64
+          - os: macos-latest
+            asset: interpretableintelligence-server-macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        # bundled + parquet compile DuckDB in, so the binary needs no libduckdb at run time.
+        run: cargo build --release --locked -p interpretableintelligence-server --features duckdb/bundled,duckdb/parquet
+      - name: Smoke test
+        run: target/release/interpretableintelligence-server --version
+      - name: Stage
+        run: |
+          mkdir -p dist
+          cp target/release/interpretableintelligence-server "dist/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Sums
+        run: |
+          cd dist
+          sha256sum interpretableintelligence-server-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Viewer binary $TAG" \
+            --notes "Prebuilt interpretableintelligence-server for ii view. Sums are in SHA256SUMS."
