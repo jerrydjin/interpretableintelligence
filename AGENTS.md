@@ -129,7 +129,7 @@ Offline world-model acceptance remains `ii run fake` → exactly three `real` fe
 | Run schema / gates | `SCHEMA.md`, `src/interpretableintelligence/thresholds.py` |
 | Steering scorecard on real GR00T | `docs/groot-steer-scorecard.md`, `scripts/groot_steer_scorecard.sh` |
 | Pipeline stages | `ARCHITECTURE.md`, `src/interpretableintelligence/pipeline.py` |
-| GR00T v9 ablation / SPRT | `src/interpretableintelligence/adapters/groot/v9/ablate_v9.py` |
+| GR00T v9 ablation / SPRT | `src/interpretableintelligence/adapters/groot/v9/ablate_v9.py` (runner); the SPRT and its exact inference are in `src/interpretableintelligence/rollout_stats.py` |
 | Demo bundles | `demo-data/`, `ii export-site` |
 | Retrain the GR00T SAE (`ii retrain-sae`) | `docs/groot-retrain-sae.md`, `src/interpretableintelligence/adapters/groot/retrain_sae.py` (capture I/O); the BatchTopK/AuxK trainer and its untrained twin are in core, `src/interpretableintelligence/sae_batchtopk.py` |
 | Import a capture (`ii import`) | `SCHEMA.md` ("Imported runs"), `src/interpretableintelligence/importers/` |
