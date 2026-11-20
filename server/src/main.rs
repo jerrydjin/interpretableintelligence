@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use interpretableintelligence_server::view::http as view;
 use interpretableintelligence_server::{bench, open_state, router};
 use tracing_subscriber::EnvFilter;
 
@@ -36,6 +37,28 @@ enum Command {
         #[arg(long, env = "II_EXPLAIN_URL")]
         explain_url: Option<String>,
     },
+    /// Serve the local viewer for one run folder (what `ii view` runs).
+    View {
+        /// The run folder.
+        run: PathBuf,
+        /// Directory of clip files. Overrides paths recorded on the manifest.
+        #[arg(long)]
+        clips: Option<PathBuf>,
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Use 0 to bind an ephemeral port. The page URL is printed to stdout.
+        #[arg(long, default_value_t = 7860)]
+        port: u16,
+        /// Serve the page from this directory instead of the copy compiled in.
+        #[arg(long = "static")]
+        static_dir: Option<PathBuf>,
+        /// Base URL of the Python steering service; turns on POST /api/steer.
+        #[arg(long)]
+        steer_url: Option<String>,
+        /// JSON status file of a run that is still filling in; a new `generation` reloads the run.
+        #[arg(long)]
+        live: Option<PathBuf>,
+    },
     /// Time frame lookup and top_clips on 1,000,000 synthetic rows.
     Bench {
         /// Directory for the synthetic parquet files. A temp directory is used when omitted.
@@ -55,6 +78,25 @@ fn main() -> ExitCode {
             port,
             explain_url,
         } => serve(runs, clips, host, port, explain_url),
+        Command::View {
+            run,
+            clips,
+            host,
+            port,
+            static_dir,
+            steer_url,
+            live,
+        } => view(
+            view::ViewOptions {
+                run_dir: run,
+                clips_dir: clips,
+                static_dir,
+                steer_url,
+                live_file: live,
+            },
+            host,
+            port,
+        ),
         Command::Bench { out } => match bench_main(out) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -118,6 +160,49 @@ fn serve(
         println!("interpretableintelligence-server listening on http://{addr}");
         let _ = io::stdout().flush();
         if let Err(err) = axum::serve(listener, app).await {
+            eprintln!("error: {err}");
+            return ExitCode::from(1);
+        }
+        ExitCode::SUCCESS
+    })
+}
+
+fn view(options: view::ViewOptions, host: String, port: u16) -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::from(1);
+        }
+    };
+    runtime.block_on(async move {
+        let state = match view::ViewState::open(options).await {
+            Ok(state) => state,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::from(1);
+            }
+        };
+        let listener = match tokio::net::TcpListener::bind(format!("{host}:{port}")).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::from(1);
+            }
+        };
+        let addr = match listener.local_addr() {
+            Ok(addr) => addr,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::from(1);
+            }
+        };
+        println!("interpretableintelligence view  http://{addr}/");
+        let _ = io::stdout().flush();
+        let shutdown = async {
+            let _ = tokio::signal::ctrl_c().await;
+        };
+        if let Err(err) = axum::serve(listener, view::router(state)).with_graceful_shutdown(shutdown).await {
             eprintln!("error: {err}");
             return ExitCode::from(1);
         }

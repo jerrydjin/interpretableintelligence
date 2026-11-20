@@ -16,7 +16,9 @@ path = "src/lib.rs"
 [dependencies]
 axum = "0.8"
 bytes = "1"
+crc32fast = "1"
 clap = { version = "4", features = ["derive", "env"] }
+flate2 = "1"
 duckdb = { version = "1.20000.1", features = ["download-lib"] }
 http-body-util = "0.1"
 include_dir = "0.7"

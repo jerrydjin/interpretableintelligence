@@ -151,6 +151,11 @@ async fn static_file(Path(path): Path<String>) -> Response {
     serve_static(&path)
 }
 
+/// A file of the packaged viewer page, compiled in.
+pub(crate) fn embedded_static(path: &str) -> Option<&'static [u8]> {
+    STATIC_FILES.get_file(path).map(|file| file.contents())
+}
+
 fn serve_static(path: &str) -> Response {
     let Some(file) = STATIC_FILES.get_file(path) else {
         return ApiError::not_found("not found", None, None, None).into_response();
@@ -271,7 +276,7 @@ fn lock_db(state: &AppState) -> std::sync::MutexGuard<'_, duckdb::Connection> {
     state.db.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
-fn content_type(path: &str) -> &'static str {
+pub(crate) fn content_type(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
@@ -280,6 +285,8 @@ fn content_type(path: &str) -> &'static str {
         Some("txt") => "text/plain; charset=utf-8",
         Some("png") => "image/png",
         Some("json") => "application/json",
+        Some("mp4") | Some("m4v") => "video/mp4",
+        Some("webm") => "video/webm",
         _ => "application/octet-stream",
     }
 }

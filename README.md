@@ -92,6 +92,8 @@ cargo run -p interpretableintelligence-server -- serve --runs runs --clips clips
 uv run interpretableintelligence serve --runs runs --port 8000
 ```
 
+The same binary serves the local viewer for one run folder (`interpretableintelligence-server view runs/demo --clips clips`), matched route for route against the Python viewer by `tests/test_view_rust.py`. `interpretableintelligence.server_bin` finds it: `II_SERVER`, else a `cargo build` in a checkout, else the prebuilt binary for the platform from the GitHub release pinned in `server_release.json`, checked against its SHA-256. The **Release viewer binary** workflow (`.github/workflows/release-server.yml`, run by hand) builds Linux x86_64, Linux aarch64 and macOS arm64.
+
 ```bash
 uv run interpretableintelligence explain --run runs/demo --clip clips/demo/clip-000.npy
 uv run interpretableintelligence serve --runs runs
@@ -180,7 +182,7 @@ uv run pytest
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
 
-`uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust read-API tests need `cargo` (https://rustup.rs); and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
+`uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust server tests need `cargo` (https://rustup.rs) or `II_SERVER` pointing at a built binary; and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
 
 ### Compare models on the same clips
 
