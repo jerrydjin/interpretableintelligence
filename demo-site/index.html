@@ -5,44 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
   <title>interpretable intelligence</title>
-  <meta name="description" content="Look inside a vision model on your own pictures, then change its mind.">
+  <meta name="description" content="See what a robot&#x27;s world model has learnt, and test every feature before trusting it.">
   <link rel="stylesheet" href="/static/site.css">
   <link rel="icon" href="/favicon.ico">
 </head>
 <body>
   <header class="bar">
     <a class="mark" href="/" aria-label="interpretable intelligence home"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg><span>interpretable intelligence</span></a>
-    <nav class="site-nav" aria-label="Site sections"><a href="/live/">Playground</a><a href="/start/">Your model</a><a href="/blog/">Blog</a><a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a></nav>
+    <nav class="site-nav" aria-label="Site sections"><a href="/explore/">Explore</a><a href="/live/">Playground</a><a href="/start/">Your model</a><a href="/blog/">Research</a><a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a></nav>
   </header>
-  <main class="prose">
-    <section class="hero">
-      <h1>Look inside a vision model, on your own pictures.</h1>
-      <p class="lede">Drop in a photo or a video frame. See the features a real model picks out and where each one fires. Then switch one off and watch the model's view of the scene change. It runs in your browser, with nothing to install.</p>
-      <p class="actions"><a class="button" href="/live/" data-testid="cta">Open the playground</a><a class="button button-quiet" href="/start/">Run it on your model</a></p>
-    </section>
-    <ol class="steps" data-testid="steps">
-      <li><h3>Bring a picture</h3><p>Upload one, use your camera or start from a robot frame. Pictures never leave your device.</p></li>
-      <li><h3>See what it notices</h3><p>A dictionary splits the model's view into features, like the edge of a table or a white ceiling, and shows where each fires.</p></li>
-      <li><h3>Change its mind</h3><p>Switch a feature off or turn it up, and the rest of the model runs again on the edit.</p></li>
-    </ol>
-    <section class="split">
+  <main class="prose prose-wide">
+    <section class="hero hero-split">
       <div>
-        <h2>Then point it at your model</h2>
-        <p>The same loop runs on your laptop, on any Hugging Face vision model and your own clips. A feature gets a tick only when it passes checks against random look-alikes and an untrained copy of the model.</p>
-        <p><a href="/start/">Run it on your model</a></p>
+        <h1>See what a robot's world model has learnt.</h1>
+        <p class="lede">V-JEPA 2 watches robot video and predicts what comes next. ii finds the features inside it and tests each one before it gets a name you can trust.</p>
+        <p class="actions"><a class="button" href="/explore/" data-testid="cta">Explore V-JEPA 2</a><a class="button button-quiet" href="/live/">Try your own pictures</a></p>
       </div>
-      <pre class="code"><code>uv run ii run hf \
-  --model &lt;your-model&gt; \
-  --clips &lt;your-clips&gt; --steer</code></pre>
+      <figure class="stage">
+        <video src="/explore/media/droid_ep068.mp4" autoplay muted loop playsinline aria-label="A robot taking the lid off a pot"></video>
+        <a class="stage-feature" href="/explore/vjepa2-vitl/L16/270/" data-testid="hero-feature">
+          <span class="tiles"><span class="tile" style="background-image:url(/explore/media/feature_00270.png);background-size:440.94% auto;background-position:1.96% 12.28%"></span><span class="tile" style="background-image:url(/explore/media/feature_00270.png);background-size:440.94% auto;background-position:33.95% 12.28%"></span><span class="tile" style="background-image:url(/explore/media/feature_00270.png);background-size:440.94% auto;background-position:66.05% 12.28%"></span><span class="tile" style="background-image:url(/explore/media/feature_00270.png);background-size:440.94% auto;background-position:98.04% 12.28%"></span></span>
+          <span>Robot gripper / wrist <span class="id">#270</span></span>
+        </a>
+      </figure>
     </section>
+    <ul class="doors" data-testid="doors">
+      <li><a class="card" href="/explore/"><span class="card-title">Explore</span><span class="card-text">Every scored V-JEPA 2 feature, with where it fires and which checks it passed.</span></a></li>
+      <li><a class="card" href="/live/"><span class="card-title">Playground</span><span class="card-text">Your own pictures or video, in your browser. Switch a feature off and see what changes.</span></a></li>
+      <li><a class="card" href="/start/"><span class="card-title">Your model</span><span class="card-text">The same tests on any Hugging Face vision or video model, on your laptop.</span></a></li>
+    </ul>
     <section>
-      <h2>From the blog</h2>
+      <h2>Research</h2>
       <a class="card" href="/blog/groot-1028/" data-testid="post-link">
         <span class="card-title">A feature tracked our robot&#x27;s failures. The control said it wasn&#x27;t the cause.</span>
         <span class="card-text">Switching off feature 720 in NVIDIA&#x27;s GR00T dropped success from 39/75 to 1/9. Random features did that too. How ii kept us from calling it a finding.</span>
       </a>
     </section>
     </main>
-  <footer class="foot"><p>ii is free, local and open on <a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a>.</p></footer>
+  <footer class="foot prose-wide"><p>ii is free, local and open on <a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a>.</p></footer>
 </body>
 </html>

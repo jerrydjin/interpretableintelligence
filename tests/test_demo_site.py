@@ -66,9 +66,11 @@ def test_demo_site_does_not_call_the_viewer_api():
 
 
 GITHUB = "https://github.com/jerrydjin/interpretableintelligence"
-NAV = ["/live/", "/start/", "/blog/", GITHUB]
+NAV = ["/explore/", "/live/", "/start/", "/blog/", GITHUB]
 PAGES = {
     "index.html": None,
+    "explore/index.html": "/explore/",
+    "explore/vjepa2-vitl/L16/270/index.html": "/explore/",
     "start/index.html": "/start/",
     "blog/index.html": "/blog/",
     "blog/groot-1028/index.html": "/blog/",
@@ -113,18 +115,21 @@ def test_every_page_shares_one_header_and_one_stylesheet():
 def test_cut_pages_forward_to_where_they_went():
     from interpretableintelligence.export_site import REDIRECTS
 
-    for old in ("droid", "fake", "demos", "picker", "results", "vjepa", "groot", "explore"):
+    for old in ("droid", "fake", "demos", "picker", "results", "vjepa", "groot"):
         page = (ROOT / old / "index.html").read_text(encoding="utf-8")
         assert f'http-equiv="refresh" content="0; url={REDIRECTS[old]}"' in page
         assert sorted(p.name for p in (ROOT / old).iterdir()) == ["index.html"], old
 
 
-def test_home_is_one_way_in():
+def test_home_leads_with_the_world_model():
     page = (ROOT / "index.html").read_text(encoding="utf-8")
     text = _text(page)
-    assert 'href="/live/" data-testid="cta"' in page
+    assert 'href="/explore/" data-testid="cta"' in page
+    assert 'href="/live/"' in page and 'href="/start/"' in page
     assert 'href="/blog/groot-1028/" data-testid="post-link"' in page
-    assert "nothing to install" in text
+    assert "world model" in text
+    assert 'src="/explore/media/droid_ep068.mp4"' in page
+    assert 'href="/explore/vjepa2-vitl/L16/270/" data-testid="hero-feature"' in page
     for gone in ("/droid/", "/results/", "/demos/", "/fake/", "/picker/", "Synthetic"):
         assert gone not in page
     assert "\u2014" not in page
@@ -206,3 +211,55 @@ def test_export_site_regenerates_the_committed_site(tmp_path):
     assert generated == committed
     for rel in generated:
         assert (out / rel).read_bytes() == (ROOT / rel).read_bytes(), rel
+
+
+def _scoreboard() -> dict:
+    return json.loads((_repo() / "demo-data" / "vjepa-slim" / "scoreboard.json").read_text(encoding="utf-8"))
+
+
+def test_explore_lists_every_scored_feature_from_the_scoreboard():
+    board = _scoreboard()
+    page = (ROOT / "explore" / "index.html").read_text(encoding="utf-8")
+    listed = re.search(r'<ul class="rows" data-testid="feature-list">(.*?)</ul>', page, re.S).group(1)
+    ids = [int(i) for i in re.findall(r'href="/explore/vjepa2-vitl/L16/(\d+)/"', listed)]
+    assert sorted(ids) == sorted(int(f["id"]) for f in board["features"])
+    real = sum(f["real"] is True for f in board["features"])
+    assert ("None has passed all four yet." in _text(page)) == (real == 0)
+    names = re.findall(r'<span class="row-name">([^<]+)</span>', listed)
+    assert len(names) == len(ids)
+    assert "\u2014" not in page
+
+
+def test_feature_pages_read_their_checks_from_the_scoreboard():
+    from interpretableintelligence.site_explore import display_name
+
+    for row in _scoreboard()["features"]:
+        page = (ROOT / "explore" / "vjepa2-vitl" / "L16" / str(row["id"]) / "index.html").read_text(encoding="utf-8")
+        text = _text(page)
+        checks = re.search(r'<ul class="checks" data-testid="checks">(.*?)</ul>', page, re.S).group(1)
+        states = re.findall(r'class="check check-(\w+)"', checks)
+        expected = [
+            "pass" if row["distinct_clips_top20"] >= 5 else "fail",
+            "pass" if row["label_holds_heldout"] else "fail",
+            "pass" if row["random_percentile"] >= 95 else "fail",
+            "pending" if row["absent_in_random_init"] is None else ("pass" if row["absent_in_random_init"] else "fail"),
+        ]
+        assert states == expected, row["id"]
+        assert f"{expected.count('pass')} of 4 checks" in text
+        assert f"{row['distinct_clips_top20']} of its top 20 moments" in text
+        assert f"of {row['n_random']} matched random features" in text
+        assert f"#{row['id']}" in text
+        assert display_name(row["label"])[0].split(",")[0] in text
+        assert (ROOT / "explore" / "media" / f"feature_{int(row['id']):05d}.png").is_file()
+        assert "\u2014" not in page
+
+
+def test_explore_names_are_short_and_distinct_where_they_can_be():
+    from interpretableintelligence.site_explore import display_name, load_run
+
+    assert display_name("robot gripper / wrist (end effector and its cable)") == ("Robot gripper / wrist", "content")
+    assert display_name("positional: band around row h~9, scattered along it") == ("Band around row 9", "position")
+    assert display_name("positional: last tubelet (t=7), scattered tokens", 2) == ("Last frames, scattered tokens", "position")
+    run = load_run(_repo() / "demo-data" / "vjepa-slim")
+    position = [f["name"] for f in run["features"] if f["kind"] == "position"]
+    assert len(position) == len(set(position))

@@ -174,7 +174,7 @@ def test_badges_from_an_export_need_the_same_dictionary(tiny_run, tmp_path):
 
 def test_demo_site_links_the_live_playground_and_keeps_it():
     home = (REPO / "demo-site" / "index.html").read_text(encoding="utf-8")
-    assert 'href="/live/" data-testid="cta"' in home
+    assert 'href="/live/"' in home
     pack = json.loads((LIVE / "packs" / "dinov2-small-droid" / "pack.json").read_text(encoding="utf-8"))
     assert pack["model"]["name"] == "facebook/dinov2-small" and pack["model"]["layer"] == 6
     assert pack["meta_source"] == "export" and pack["n_real"] == 5

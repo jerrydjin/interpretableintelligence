@@ -75,7 +75,7 @@ The feature page's "The numbers" section (the score tiles and the full top-clip 
 
 ## The demo site
 
-`ii export-site` builds `demo-site/`. The public site (home, your-model page, blog) and the live playground share one stylesheet, `static/site.css`: the same tokens, one header, one button, one card and one code block. The playground's own `live.css` holds only its components. The site does not load the viewer's `style.css`. Regenerate the site with `make demo-site` whenever `static/site.css` changes.
+`ii export-site` builds `demo-site/`. The public site (home, Explore, your-model page, Research blog) and the live playground share one stylesheet, `static/site.css`: the same tokens, one header, one button, one card and one code block. The playground's own `live.css` holds only its components. The site does not load the viewer's `style.css`. Regenerate the site with `make demo-site` whenever `static/site.css` changes.
 
 The site has four sections, and every page belongs to one; the nav underlines that section.
 
