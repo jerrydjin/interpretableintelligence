@@ -276,3 +276,38 @@ def h1() -> None:
         for k, v in payload["stats"].items():
             print(f"  {k:20s} {v['value']:+.4f} [{v['lo']:+.4f}, {v['hi']:+.4f}]")
         print("  by direction", payload["by_direction"])
+
+
+# ----------------------------------------------------------------------------- inside the model: ii gripper-trace
+
+
+def _gripper_trace(dest: str, *extra: str) -> dict:
+    if not Path(dest, "gripper_trace.json").exists():
+        _sh(["ii", "gripper-trace", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "gripper_trace.json").read_text())
+    out.pop("events", None)
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def trace_job(smoke: bool = True) -> dict:
+    if smoke:
+        return {"trace-smoke": _gripper_trace(f"{RESULTS}/trace-smoke", "--max-clips", "8", "--bootstrap", "200")}
+    return {
+        "trace-trained": _gripper_trace(f"{RESULTS}/trace-trained"),
+        "trace-random-predictor": _gripper_trace(f"{RESULTS}/trace-random-predictor", "--random-predictor"),
+    }
+
+
+@app.local_entrypoint()
+def trace(full: bool = False) -> None:
+    for name, payload in trace_job.remote(not full).items():
+        _save_local(name, payload, None)
+        print(name, payload["verdict"], payload["n_events"], "events", payload["n_episodes"], "episodes")
+        for k, v in payload["readout"].items():
+            print("  readout", k, v)
+        for k, v in payload["stats"].items():
+            print(f"  {k:20s} {v['value']:+.4f} [{v['lo']:+.4f}, {v['hi']:+.4f}]")
+        for k, v in payload["layers"].items():
+            print(f"  {k:20s}", " ".join(f"{x:.3f}" for x in v))
