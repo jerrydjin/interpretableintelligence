@@ -2,9 +2,31 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="refresh" content="0; url=/blog/groot-1028/">
-  <link rel="canonical" href="/blog/groot-1028/">
-  <title>Moved · interpretable intelligence</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f5">
+  <title>Explore · interpretable intelligence</title>
+  <link rel="stylesheet" href="/static/site.css">
+  <link rel="icon" href="/favicon.ico">
 </head>
-<body><p>This page moved to <a href="/blog/groot-1028/">/blog/groot-1028/</a>.</p></body>
+<body>
+  <header class="bar">
+    <a class="mark" href="/" aria-label="interpretable intelligence home"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg><span>interpretable intelligence</span></a>
+    <nav class="site-nav" aria-label="Site sections"><a href="/explore/" aria-current="page">Explore</a><a href="/live/">Playground</a><a href="/start/">Your model</a><a href="/blog/">Research</a><a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a></nav>
+  </header>
+  <main class="prose">
+    <h1>V-JEPA 2 on robot video</h1>
+    <p class="lede">10 features from layer 16, each tested against four checks. None has passed all four yet.</p>
+    <ul class="rows" data-testid="feature-list"><li><a href="/explore/vjepa2-vitl/L16/270/"><span class="row-name">Robot gripper / wrist</span><span class="id">#270</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/224/"><span class="row-name">Last frames, scattered tokens</span><span class="id">#224</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/336/"><span class="row-name">Band around row 9</span><span class="id">#336</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/991/"><span class="row-name">Single token in the top rows</span><span class="id">#991</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/998/"><span class="row-name">Last frames, many scattered tokens across the frame</span><span class="id">#998</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/3180/"><span class="row-name">Band around row 3</span><span class="id">#3180</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/3446/"><span class="row-name">One sparse token in the last frames</span><span class="id">#3446</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/3574/"><span class="row-name">No consistent pattern</span><span class="id">#3574</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/7476/"><span class="row-name">Upper-right tokens</span><span class="id">#7476</span><span class="status">2 of 4 checks</span></a></li><li><a href="/explore/vjepa2-vitl/L16/7563/"><span class="row-name">No consistent pattern</span><span class="id">#7563</span><span class="status">1 of 4 checks</span></a></li></ul>
+    
+    <h2>The four checks</h2>
+    <ul class="plain">
+      <li><b>Fires broadly.</b> Across many clips, not one scene.</li>
+      <li><b>Name holds up.</b> Still fits clips held back while it was named.</li>
+      <li><b>Beats random edits.</b> Removing it changes the prediction more than 95% of matched random features.</li>
+      <li><b>Was learnt.</b> Missing from an untrained copy of the model.</li>
+    </ul>
+    <p class="fine">Clips from <a href="https://huggingface.co/datasets/lerobot/droid_100">DROID</a> (CC BY 4.0). Model <a href="https://huggingface.co/facebook/vjepa2-vitl-fpc64-256">facebook/vjepa2-vitl-fpc64-256</a>.</p>
+    </main>
+  <footer class="foot"><p>ii is free, local and open on <a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a>.</p></footer>
+</body>
 </html>

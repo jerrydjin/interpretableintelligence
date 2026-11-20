@@ -1,7 +1,6 @@
 # groot-1028-v9-ablate: SAE feature-ablation rise test, task 1028 (unvalidated, real=false)
 
-Plan: `ablate_plan.json` (written by `groot-colab/v9/make_ablate_plan.py`, embedded in `groot_colab_nodrive_v9.ipynb` and
-`v9_hotfix_cell.py`). Runner: `groot-colab/v9/ablate_v9.py`. SAE: `sae_subset.safetensors` = the 30 latents used here, exact
+Plan: `ablate_plan.json` (written by `v9/make_ablate_plan.py`). Runner: `groot-colab/v9/ablate_v9.py`. SAE: `sae_subset.safetensors` = the 30 latents used here, exact
 columns/rows of `groot-1028-v9-n100/sae/weights.safetensors` (norm_mu / norm_scale checked against `sae/norm_stats.safetensors`).
 Inputs read only: `groot-1028-v9-n100/candidates_final.json` (matched controls), `picker_onset_pot0/result.json` (picker 146ee8a).
 
@@ -35,7 +34,7 @@ The Colab output goes to `/content/physint/groot/groot-1028-v9-ablate` and `/con
 
 ## Early-stopping-valid statistics (added after the run, from the existing records)
 
-Wilson intervals assume a fixed n; the SPRT chose n. `ablate_v9.sequential_inference` enumerates every stopping point of
+Wilson intervals assume a fixed n; the SPRT chose n. `rollout_stats.sequential_inference` (re-exported by `ablate_v9`) enumerates every stopping point of
 the plan's SPRT exactly (same boundaries and stop rule as `default_plan` / `sequential_decision`) and inverts the exact
 tails under the sample-proportion ordering: `seq95` (equal-tailed 95% interval, >= 95% coverage at every p, checked
 exactly and by simulation in `tests/test_sequential_stats.py`) and `p_seq_rise` / `p_seq_fall` against p0. `arms` in the

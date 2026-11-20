@@ -7,8 +7,6 @@ aliases, so that bare import resolves here. Cases that open a missing run folder
 skip themselves, the same way ``test_pot_events.py`` does. If the alias is not
 in place and those paths are missing (``box_paths.py`` says how to move them), collection skips the module instead of
 erroring.
-
-``mock_v9_ablate.py`` and ``mock_v9_nbcells_ablate.py`` are drivers, not tests.
 """
 
 from __future__ import annotations
@@ -20,14 +18,6 @@ import pytest
 
 import interpretableintelligence.adapters.groot.v9  # noqa: F401
 from box_paths import COLAB as _COLAB, RUNS as _RUNS
-
-_MOCK_DRIVERS = {"mock_v9_ablate.py", "mock_v9_nbcells_ablate.py"}
-
-
-def pytest_ignore_collect(collection_path, config):
-    if Path(collection_path).name in _MOCK_DRIVERS:
-        return True
-    return None
 
 
 def pytest_pycollect_makemodule(module_path, parent):
