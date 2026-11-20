@@ -116,6 +116,13 @@ def get_clips_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the clips into.")] = Path("clips/droid"),
     n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode. `ii run` needs at least 20.")] = 100,
     seconds: Annotated[float, typer.Option("--seconds", min=0.5, help="Length of each clip.")] = 4.0,
+    with_states: Annotated[
+        bool,
+        typer.Option(
+            "--with-states",
+            help="Also save each clip's per-frame arm pose as <clip>.states.npy (for `ii action-effects`).",
+        ),
+    ] = False,
 ) -> None:
     """Download real robot video to try a real model on: short clips from DROID (MIT licence).
 
@@ -126,7 +133,7 @@ def get_clips_cmd(
     from interpretableintelligence.sample_clips import DATASET, LICENSE, fetch_droid_clips
 
     try:
-        entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo)
+        entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo, with_states=with_states)
     except (ValueError, RuntimeError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         if "connection" in str(exc).lower() or "internet" in str(exc).lower():
@@ -931,6 +938,90 @@ def probe_cmd(
         raise typer.Exit(code=1) from exc
     typer.echo(format_report(result))
     typer.echo(f"wrote {run_dir / 'probe'}")
+
+
+@app.command("action-effects")
+def action_effects_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for action_effects.json, transitions.parquet and regions.png.")],
+    code_dir: Annotated[
+        Path | None,
+        typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2 (Meta's model code). Not needed with --tiny."),
+    ] = None,
+    checkpoint: Annotated[
+        Path | None,
+        typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt. Default: download it to the torch hub cache."),
+    ] = None,
+    random_predictor: Annotated[
+        bool,
+        typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor (seeded init)."),
+    ] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in whose actions move only the top row of patches (tests).")] = False,
+    segmenter: Annotated[
+        str,
+        typer.Option("--segmenter", help="Arm masks: grounded-sam (Grounding DINO boxes refined by SAM) or clipseg (weaker on DROID)."),
+    ] = "grounded-sam",
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for shuffled actions, matched patches, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Does V-JEPA 2-AC predict the world moving, or only its own arm? (Offline, recorded DROID video.)
+
+    Predicts each next latent frame under the real, zero, shuffled and reversed action, and compares
+    how much the action explains on arm patches, on non-arm patches that moved, and on matched still
+    patches. The verdict rule is fixed in the code. Never a rollout finding; touches no scoreboard.
+    """
+    import numpy as np
+
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories, run_action_effects
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+            side = model.crop // model.patch
+
+            def arm_masks(frames):
+                # Stub segmenter: the top row of patches is the arm.
+                h, w = frames.shape[1:3]
+                m = np.zeros(frames.shape[:3], dtype=bool)
+                m[:, : max(1, h // side), :] = True
+                return m
+
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            from interpretableintelligence.worldmodel.segment import ClipSegArm, GroundedSamArm
+
+            segmenters = {"grounded-sam": GroundedSamArm, "clipseg": ClipSegArm}
+            if segmenter not in segmenters:
+                raise ValueError(f"--segmenter must be one of {', '.join(segmenters)}")
+            device = pick_device()
+            model = load_vjepa2ac(device, code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            arm_masks = segmenters[segmenter](device)
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        typer.echo(f"     {len(trajectories)} clips, model {model.name}")
+        extra = {"segmenter": "stub" if tiny else segmenter}
+        result = run_action_effects(model, trajectories, arm_masks, out, seed=seed, n_boot=bootstrap, say=typer.echo, extra=extra)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    moving = result["moving"]
+    s = moving["stats"]
+    typer.echo(
+        f"verdict: {moving['verdict']} on {moving['n_transitions']} transitions with moving objects "
+        f"({moving['n_episodes']} episodes)"
+    )
+    for key in ("benefit_arm", "benefit_moved", "benefit_matched", "moved_minus_matched"):
+        v = s[key]
+        typer.echo(f"  {key:20s} {v['value']:+.4f}  [{v['lo']:+.4f}, {v['hi']:+.4f}]")
+    typer.echo(f"wrote {out}")
 
 
 @app.command("export")
