@@ -42,6 +42,22 @@ def test_steerer_disarmed_and_baseline_rows_are_untouched():
     steer.end()
 
 
+def test_capture_keeps_every_other_call_and_leaves_features_unchanged():
+    head = FakeHead()
+    steer = sb.BackboneSteerer().install_on(head)
+    edit = sb.CaptureEdit("baseline", 7, every=2)
+    for t in range(5):
+        x = torch.full((2, 3, 4), float(t))
+        steer.begin([edit, None])
+        out = head._encode_features(x).backbone_features
+        steer.end()
+        assert torch.equal(out, x)
+    tokens = steer.take("baseline", 7)
+    assert tokens.shape == (3, 3, 4) and tokens.dtype == np.float16
+    assert [float(tokens[i, 0, 0]) for i in range(3)] == [0.0, 2.0, 4.0]
+    assert steer.take("baseline", 7) is None
+
+
 def test_steerer_refuses_a_predict_that_never_reached_the_backbone():
     steer = sb.BackboneSteerer().install_on(FakeHead())
     steer.begin([sb.SteerEdit("a", torch.zeros(4))])

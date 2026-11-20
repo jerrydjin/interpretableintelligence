@@ -48,6 +48,19 @@ class SteerEdit:
         return f"SteerEdit({self.arm})"
 
 
+@dataclass(frozen=True)
+class CaptureEdit:
+    """Leaves the features unchanged and keeps every ``every``-th policy call's backbone tokens (float16, on CPU) for
+    one episode, so closed-loop episodes double as SAE training data (plan field ``capture``)."""
+
+    arm: str
+    ep: int
+    every: int = 2
+
+    def __repr__(self) -> str:
+        return f"CaptureEdit({self.arm}, {self.ep})"
+
+
 class BackboneSteerer:
     """The ``editor`` protocol of ``physint_inproc_v9.run_pool``, acting on ``action_head._encode_features``.
 
@@ -59,6 +72,14 @@ class BackboneSteerer:
         self.rows = None
         self.calls = 0
         self.stats = None
+        self.buffers: dict[tuple[str, int], list] = {}
+        self.seen: dict[tuple[str, int], int] = {}
+
+    def take(self, arm: str, ep: int):
+        """The captured tokens of one episode, [calls, tokens, D] float16 numpy, or None; forgets them."""
+        self.seen.pop((arm, ep), None)
+        parts = self.buffers.pop((arm, ep), None)
+        return np.stack([p.numpy() for p in parts]) if parts else None
 
     def install(self, policy, layer: int):
         del layer
@@ -109,7 +130,14 @@ class BackboneSteerer:
             raise RuntimeError(f"backbone_features has {bf.shape[0]} rows, the predict call has {len(self.rows)} edits")
         delta = bf.new_zeros(bf.shape[0], 1, bf.shape[-1])
         for b, edit in enumerate(self.rows):
-            if edit is not None:
+            if isinstance(edit, CaptureEdit):
+                key = (edit.arm, int(edit.ep))
+                n = self.seen.get(key, 0)
+                self.seen[key] = n + 1
+                if n % max(1, int(edit.every)) == 0:
+                    self.buffers.setdefault(key, []).append(bf[b].detach().to("cpu", copy=True).half())
+                self.stats[b] = {"rel_delta": 0.0}
+            elif edit is not None:
                 delta[b, 0] = edit.vector.to(device=bf.device, dtype=bf.dtype)
                 token_norm = float(bf[b].float().norm(dim=-1).mean())
                 self.stats[b] = {"rel_delta": float(edit.vector.float().norm()) / max(token_norm, 1e-12)}
@@ -227,6 +255,11 @@ def run_steer(ctx, plan: dict, *, out: Path | None = None) -> dict:
     (out / "plan.json").write_text(json.dumps(plan, indent=1, sort_keys=True) + "\n")
     vectors = arm_vectors(plan)
     edits = {arm: (SteerEdit(arm, v) if v is not None else None) for arm, v in vectors.items()}
+    capture = plan.get("capture") or {}
+    capture_arms = set(capture.get("arms", []))
+    if capture_arms - {a["id"] for a in plan["arms"]} or any(edits.get(a) is not None for a in capture_arms):
+        raise ValueError("plan.capture.arms must name arms without a vector")
+    steerer = BackboneSteerer()
     task = plan["task"]
     key = ("plus", int(task["index"]))
     n_init = int(task["n_init_states"])
@@ -242,7 +275,8 @@ def run_steer(ctx, plan: dict, *, out: Path | None = None) -> dict:
         if not queue:
             return None
         arm, i = queue.pop()
-        return v9.Job(key=key, seed=base_seed + i, init_state_id=i % n_init, meta={"arm": arm, "ep": i, "edit": edits[arm]})
+        edit = CaptureEdit(arm, i, int(capture.get("every", 2))) if arm in capture_arms else edits[arm]
+        return v9.Job(key=key, seed=base_seed + i, init_state_id=i % n_init, meta={"arm": arm, "ep": i, "edit": edit})
 
     def on_done(job, ep):
         arm, i = job.meta["arm"], int(job.meta["ep"])
@@ -256,6 +290,11 @@ def run_steer(ctx, plan: dict, *, out: Path | None = None) -> dict:
             fh.write(json.dumps(row) + "\n")
         np.savez_compressed(d / "sim" / f"ep-{i:05d}.npz", actions=np.asarray(ep.actions, np.float32),
                             **{k: v for k, v in ep.sim.items()})
+        if arm in capture_arms:
+            tokens = steerer.take(arm, i)
+            if tokens is not None:
+                (d / "tokens").mkdir(exist_ok=True)
+                np.save(d / "tokens" / f"ep-{i:05d}.npy", tokens)
         print(f"EPISODE steer arm={arm} ep={i} seed={job.seed} success={ep.success} pot0_first={order['pot0_first']} "
               f"lifts={order['pot0_lift_t']},{order['pot1_lift_t']} n_steps={ep.n_steps}", flush=True)
         summary = summarize(plan, out)
@@ -264,6 +303,7 @@ def run_steer(ctx, plan: dict, *, out: Path | None = None) -> dict:
 
     def on_error(job, err):
         ctx.log(f"[steer] ERROR {job.meta} {err[:500]}")
+        steerer.take(job.meta["arm"], int(job.meta["ep"]))
 
     def keep_going():
         if ctx.hours_left() < 0.25:
@@ -272,7 +312,7 @@ def run_steer(ctx, plan: dict, *, out: Path | None = None) -> dict:
         return True
 
     ctx.log(f"[steer] start plan_sha={plan_sha(plan)[:12]} arms={arms} queued={len(queue)}")
-    v9.run_pool(ctx, [], next_job=next_job, editor=BackboneSteerer(), on_done=on_done, on_error=on_error,
+    v9.run_pool(ctx, [], next_job=next_job, editor=steerer, on_done=on_done, on_error=on_error,
                 capture=False, keep_going=keep_going, label="steer")
     summary = summarize(plan, out)
     (out / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")

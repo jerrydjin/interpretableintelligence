@@ -21,6 +21,14 @@ Pre-registered (written before the full run):
   phase shift = change in the held-out-trained action classifier's score. 19 random directions at the same norm.
 - Pass: the trained pick's mean phase shift is above every untrained pick's and every random direction's, and its
   held-out AUROC is at least every untrained pick's. Exploration only: offline, never a finding.
+
+Retry (Nov 20 2026, ``--extra``): the first run's SAE saw only 18k train tokens. The retry adds the backbone tokens
+of 100 unedited closed-loop episodes on unused seeds (``modal_groot_steer_backbone.py --capture``, every other policy
+call) to the SAE's training data only, and trains 6000 steps. Labels, the picker's train windows, the held-out windows,
+the steered windows and the pass rule are unchanged.
+
+    modal run --detach scripts/modal_groot_steer_backbone.py --capture
+    II_MODAL_HOURS=0.5 modal run --detach scripts/modal_groot_backbone_sae.py --extra   # then --fetch --extra
 """
 
 from __future__ import annotations
@@ -35,10 +43,12 @@ import modal
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, "/repo/scripts")
 from modal_groot_phase import CLIPS, RUN, SAE, _capture_labels  # noqa: E402
-from modal_groot_steer import CAPTURE_DIR, GPU, VOL, _prepare, image, retrain_volume, volume  # noqa: E402
+from modal_groot_steer import CAPTURE_DIR, GPU, VOL, WORK, _prepare, image, retrain_volume, volume  # noqa: E402
 
 HOURS = float(os.environ.get("II_MODAL_HOURS", "0.5"))
-OUT = f"{VOL}/work/backbone-sae"
+OUT_BASE = f"{VOL}/work/backbone-sae"
+OUT_EXTRA = f"{VOL}/work/backbone-sae-extra"
+EXTRA = f"{WORK}/capture-backbone"  # retry (Nov 20): closed-loop episodes on seeds 90000+ (modal_groot_steer_backbone.py --capture)
 SEEDS = [2217175575, 1703964116, 2684811898, 1837130788, 3864071313]  # the rule-4 untrained-SAE seeds
 SCALE = 3.0
 MIN_ACTIVE = 0.01
@@ -46,7 +56,8 @@ app = modal.App("ii-groot-backbone-sae", image=image.pip_install("scikit-learn")
 
 
 @app.function(volumes={VOL: volume, "/retrain": retrain_volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=4, memory=32768)
-def backbone_sae(smoke: bool = False, controls: int = 19, n_latents: int = 4096, k: int = 32, steps: int = 4000) -> dict:
+def backbone_sae(smoke: bool = False, controls: int = 19, n_latents: int = 4096, k: int = 32, steps: int = 4000,
+                 extra: bool = False) -> dict:
     import numpy as np
     import torch
     from safetensors.torch import load_file, save_file
@@ -89,6 +100,14 @@ def backbone_sae(smoke: bool = False, controls: int = 19, n_latents: int = 4096,
                          "base": base.detach().float().cpu().numpy()})
             toks.append(bb)
         print(f"captured {cid}: {len(rows)} windows", flush=True)
+    extra_tok = None
+    if extra:  # SAE training tokens only: never labelled, picked on, or steered
+        tok_dir = Path(EXTRA + ("-smoke" if smoke else "")) / "baseline" / "tokens"
+        files = sorted(tok_dir.glob("ep-*.npy"))
+        if not files:
+            raise SystemExit(f"no captured tokens in {tok_dir}: run modal_groot_steer_backbone.py --capture first")
+        extra_tok = torch.cat([torch.from_numpy(np.load(f)).reshape(-1, 2048) for f in files])
+        print(f"extra: {len(files)} episodes, {extra_tok.shape[0]} tokens", flush=True)
 
     lab = np.array([r["label"] for r in rows]); is_tr = np.array([not r["heldout"] for r in rows]); te = ~is_tr
     n_tok = np.array([t.shape[0] for t in toks])
@@ -100,6 +119,10 @@ def backbone_sae(smoke: bool = False, controls: int = 19, n_latents: int = 4096,
     tr_tok = torch.from_numpy(is_tr[win_of_tok]).to(dev)
     train_split = retrain_sae.Split(T[tr_tok], torch.zeros(int(tr_tok.sum()), dtype=torch.long, device=dev),
                                     torch.from_numpy(win_of_tok).to(dev)[tr_tok])
+    if extra_tok is not None:
+        xt = extra_tok.to(dev, torch.float16)
+        train_split = retrain_sae.Split(torch.cat([train_split.acts, xt]), torch.zeros(train_split.n + xt.shape[0], dtype=torch.long, device=dev),
+                                        torch.cat([train_split.episode, torch.full((xt.shape[0],), -1, dtype=torch.long, device=dev)]))
     held_split = retrain_sae.Split(T[~tr_tok], torch.zeros(int((~tr_tok).sum()), dtype=torch.long, device=dev),
                                    torch.from_numpy(win_of_tok).to(dev)[~tr_tok])
     print(f"tokens: train {train_split.n}, held-out {held_split.n}; windows {len(rows)}, phase1 {lab.mean():.2f}", flush=True)
@@ -210,26 +233,30 @@ def backbone_sae(smoke: bool = False, controls: int = 19, n_latents: int = 4096,
         "pass": bool(passed), "finding": False,
         "note": "offline exploration; a pass means the trained SAE beats untrained SAEs on this lever, not a rollout finding",
     }
+    out["extra_clips"] = bool(extra)
     if not smoke:
-        Path(OUT).mkdir(parents=True, exist_ok=True)
-        save_file({key: v.contiguous() for key, v in trained.items()}, f"{OUT}/sae-trained.safetensors")
-        np.save(f"{OUT}/picks.npy", np.stack([p["vec"] for p in picks.values()]))
-        Path(OUT, "result.json").write_text(json.dumps(out, indent=1) + "\n")
+        outdir = OUT_EXTRA if extra else OUT_BASE
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        save_file({key: v.contiguous() for key, v in trained.items()}, f"{outdir}/sae-trained.safetensors")
+        np.save(f"{outdir}/picks.npy", np.stack([p["vec"] for p in picks.values()]))
+        Path(outdir, "result.json").write_text(json.dumps(out, indent=1) + "\n")
         volume.commit()
     return out
 
 
 @app.function(volumes={VOL: volume}, timeout=300)
-def fetch_remote() -> dict:
-    path = Path(OUT, "result.json")
-    return json.loads(path.read_text()) if path.is_file() else {"missing": str(path)}
+def fetch_remote(extra: bool = False) -> dict:
+    path = Path(OUT_EXTRA if extra else OUT_BASE, "result.json")
+    out = json.loads(path.read_text()) if path.is_file() else {"missing": str(path)}
+    out["extra_captured_episodes"] = len(list(Path(EXTRA, "baseline", "tokens").glob("ep-*.npy")))
+    return out
 
 
 @app.local_entrypoint()
-def main(smoke: bool = False, fetch: bool = False, out: str = "backbone-sae.json") -> None:
+def main(smoke: bool = False, fetch: bool = False, extra: bool = False, out: str = "backbone-sae.json") -> None:
     if not smoke and not fetch:  # spawn under --detach so a closed launcher cannot cancel it
-        print("spawned", backbone_sae.spawn(False, 19).object_id, "- fetch with --fetch")
+        print("spawned", backbone_sae.spawn(False, 19, 4096, 32, 6000 if extra else 4000, extra).object_id, "- fetch with --fetch")
         return
-    result = fetch_remote.remote() if fetch else backbone_sae.remote(True, 3)
+    result = fetch_remote.remote(extra) if fetch else backbone_sae.remote(True, 3, 4096, 32, 4000, extra)
     Path(out).write_text(json.dumps(result, indent=1) + "\n")
     print(json.dumps(result, indent=1))

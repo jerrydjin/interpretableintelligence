@@ -5,6 +5,7 @@ moka_pot_1 before moka_pot_2? (``adapters/groot/v9/steer_backbone.py``; never a 
     modal run scripts/modal_groot_steer_backbone.py --smoke                                       # 2 arms x 2 episodes
     modal run --detach scripts/modal_groot_steer_backbone.py                                      # the plan below
     modal run scripts/modal_groot_steer_backbone.py --fetch                                       # summary only
+    modal run --detach scripts/modal_groot_steer_backbone.py --capture   # 100 unedited episodes, backbone tokens kept
 """
 
 from __future__ import annotations
@@ -23,12 +24,26 @@ from modal_groot_steer import CAPTURE_DIR, GPU, PLUS_DIR, VOL, WORK, _prepare, i
 HOURS = float(os.environ.get("II_MODAL_HOURS", "1.25"))
 DOM = f"{WORK}/phase-backbone/dom.npy"
 OUT = f"{WORK}/steer-backbone"
+CAPTURE_OUT = f"{WORK}/capture-backbone"  # SAE training tokens for modal_groot_backbone_sae.py --extra
+CAPTURE_N = 100
 N = 25
 app = modal.App("ii-groot-steer-backbone", image=image)
 
 
-def make_plan(smoke: bool) -> dict:
+def _out(smoke: bool, capture: bool) -> str:
+    return (CAPTURE_OUT if capture else OUT) + ("-smoke" if smoke else "")
+
+
+def make_plan(smoke: bool, capture: bool = False) -> dict:
     man = json.loads(Path(CAPTURE_DIR, "manifest.json").read_text())
+    if capture:  # unedited episodes on unused seeds; every other policy call's backbone tokens are kept
+        n = 2 if smoke else CAPTURE_N
+        return {"schema": "groot-steer-backbone-v1",
+                "task": {"index": int(man["task_index"]), "id": int(man["task_id"]), "name": man["task_name"],
+                         "n_init_states": int(man["n_init_states"])},
+                "seeds": {"base": 90000, "rule": "seed = base + i; init_state_id = i % n_init_states"},
+                "arms": [{"id": "baseline", "kind": "baseline", "n": n}], "outcome": "pot0_first",
+                "capture": {"arms": ["baseline"], "every": 2}}
     n = 2 if smoke else N
     arms = [{"id": "baseline", "kind": "baseline", "n": n},
             {"id": "dom-x3", "kind": "direction", "vector": DOM, "scale": 3.0, "n": n},
@@ -51,7 +66,7 @@ def make_plan(smoke: bool) -> dict:
 
 
 @app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), cpu=8, memory=32768)
-def steer_remote(smoke: bool = False) -> dict:
+def steer_remote(smoke: bool = False, capture: bool = False) -> dict:
     import torch
 
     env = _prepare()
@@ -62,10 +77,10 @@ def steer_remote(smoke: bool = False) -> dict:
 
     del v9_pkg
     v9, v8 = sys.modules["physint_inproc_v9"], sys.modules["physint_inproc_v8"]
-    if not Path(DOM).is_file():
+    if not capture and not Path(DOM).is_file():
         raise SystemExit(f"{DOM} missing: run modal_groot_phase_backbone.py --save-dom {DOM} first")
-    plan = make_plan(smoke)
-    out = Path(OUT + ("-smoke" if smoke else ""))
+    plan = make_plan(smoke, capture)
+    out = Path(_out(smoke, capture))
     plus = Path(PLUS_DIR)
     v8.write_libero_config(plus, log=print)
     backend = LeRobotGroot(DEFAULT_CHECKPOINT)
@@ -91,20 +106,20 @@ def steer_remote(smoke: bool = False) -> dict:
 
 
 @app.function(volumes={VOL: volume}, timeout=300)
-def fetch_remote(smoke: bool = False) -> dict:
-    path = Path(OUT + ("-smoke" if smoke else ""), "summary.json")
+def fetch_remote(smoke: bool = False, capture: bool = False) -> dict:
+    path = Path(_out(smoke, capture), "summary.json")
     return json.loads(path.read_text()) if path.is_file() else {"missing": str(path)}
 
 
 @app.local_entrypoint()
-def main(smoke: bool = False, fetch: bool = False, out: str = "") -> None:
+def main(smoke: bool = False, fetch: bool = False, capture: bool = False, out: str = "") -> None:
     if not fetch and not smoke:
         # Spawn and return: a blocking .remote() was cancelled when the launching shell went away,
         # even under --detach. The runner resumes from the volume, so relaunching is safe.
-        call = steer_remote.spawn(smoke)
+        call = steer_remote.spawn(smoke, capture)
         print("spawned", call.object_id, "- fetch with --fetch")
         return
-    result = fetch_remote.remote(smoke) if fetch else steer_remote.remote(smoke)
+    result = fetch_remote.remote(smoke, capture) if fetch else steer_remote.remote(smoke, capture)
     Path(out or ("steer-backbone-smoke.json" if smoke else "steer-backbone.json")).write_text(json.dumps(result, indent=1) + "\n")
     for row in result.get("table", []):
         print(row["arm"], row["kind"], "n", row["n"], "pot0_first", row.get("pot0_first"), "success", row.get("successes"),
