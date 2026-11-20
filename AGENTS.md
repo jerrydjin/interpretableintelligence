@@ -22,7 +22,7 @@ uv run pytest
 
 `interpretableintelligence` is the long command name; **`ii` is the same CLI**. PyTorch is pinned to CPU wheels in `pyproject.toml` for CI and local dev; GR00T/LIBERO jobs use separate GPU environments (Colab), not this default install.
 
-On a fresh clone of `main` with `cargo`, Chrome and `node` on the machine (as in CI, on Ubuntu and macOS), expect **443 passed, 11 skipped, 4 deselected** (the `slow` tests, excluded by default). Without `cargo` (and no `II_SERVER`) the 11 Rust server tests in `tests/test_contract.py` and `tests/test_view_rust.py` also skip (**432 passed, 22 skipped**). Without Chrome or Chromium the 10 browser tests skip, and without `node` 4 guide tests skip. Every skip prints its reason with `pytest -rs`. Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
+On a fresh clone of `main` with `cargo`, Chrome and `node` on the machine (as in CI, on Ubuntu and macOS), expect **446 passed, 11 skipped, 4 deselected** (the `slow` tests, excluded by default). Without `cargo` (and no `II_SERVER`) the 11 Rust server tests in `tests/test_contract.py` and `tests/test_view_rust.py` also skip (**435 passed, 22 skipped**). Without Chrome or Chromium the 10 browser tests skip, and without `node` 4 guide tests skip. Every skip prints its reason with `pytest -rs`. Run `uv run pytest -m slow` only when you intend to download V-JEPA weights or run large synthetic paths.
 
 ## `ii` CLI (public surface)
 
