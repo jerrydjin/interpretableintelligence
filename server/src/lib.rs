@@ -11,6 +11,7 @@ pub mod model;
 pub mod npy;
 pub mod query;
 pub mod routes;
+pub mod view;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
