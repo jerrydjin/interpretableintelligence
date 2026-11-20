@@ -311,3 +311,31 @@ def trace(full: bool = False) -> None:
             print(f"  {k:20s} {v['value']:+.4f} [{v['lo']:+.4f}, {v['hi']:+.4f}]")
         for k, v in payload["layers"].items():
             print(f"  {k:20s}", " ".join(f"{x:.3f}" for x in v))
+
+
+# ----------------------------------------------------------------------------- inside the model: ii gripper-sae
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=49152)
+def sae_job(layer: int, smoke: bool = True) -> dict:
+    name = f"sae-smoke-L{layer}" if smoke else f"sae-L{layer}"
+    dest = f"{RESULTS}/{name}"
+    extra = ["--max-clips", "12", "--steps", "300", "--bootstrap", "200"] if smoke else []
+    if not Path(dest, "gripper_sae.json").exists():
+        _sh(["ii", "gripper-sae", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, "--layer", str(layer), *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "gripper_sae.json").read_text())
+    out.pop("events", None)
+    return {name: out}
+
+
+@app.local_entrypoint()
+def sae(layer: int, full: bool = False) -> None:
+    for name, payload in sae_job.remote(layer, not full).items():
+        _save_local(name, payload, None)
+        print(name, payload["verdict"], "layer", payload["layer"], payload["n_test_events"], "held-out events",
+              "FVU", round(payload["sae"]["final_fvu"], 4))
+        for arm, v in payload["arms"].items():
+            c, r = v["consistency"], v["recovered"]
+            print(f"  {arm:24s} latents {v['latents']} consistency {c['value']:.3f} [{c['lo']:.3f}, {c['hi']:.3f}] "
+                  f"recovered {r['value']:+.4f} [{r['lo']:+.4f}, {r['hi']:+.4f}]")
