@@ -84,7 +84,7 @@ A token `(window, t)` is the source frame `window_start + t * tubelet * stride`.
 
 Explain a new clip with that run. The cited answer is per window and time, and it includes only real features and only ablation effects. Anything else is listed as unverified. If the run's SAE is not usable, the command refuses.
 
-The read API is the Rust binary `interpretableintelligence-server` (`server/`). It queries the run folder's parquet with DuckDB. `POST /explain` stays in Python, because it has to run the model: start `interpretableintelligence serve` and point the Rust server at it with `--explain-url` (or `II_EXPLAIN_URL`). Without that, `POST /explain` returns 501.
+The read API is the Rust binary `interpretableintelligence-server` (`server/`). It queries the run folder's parquet with DuckDB. `POST /explain` stays in Python, because it has to run the model: start `interpretableintelligence serve` (it serves only that route) and point the Rust server at it with `--explain-url` (or `II_EXPLAIN_URL`). Without that, `POST /explain` returns 501.
 
 ```bash
 cargo build -p interpretableintelligence-server
@@ -180,7 +180,7 @@ uv run pytest
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
 
-`uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust read-API parity tests need `cargo` (https://rustup.rs); and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
+`uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust read-API tests need `cargo` (https://rustup.rs); and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
 
 ### Compare models on the same clips
 
@@ -248,7 +248,6 @@ The model runs on a small backend (`ii serve-live` on your machine, `ii deploy-l
 | `src/interpretableintelligence/steer.py` | Playground steering behind `view --steer` |
 | `src/interpretableintelligence/steer_scorecard.py` | `ii steer-scorecard`: remove and boost features against matched controls, `steering/` |
 | `src/interpretableintelligence/probe.py` | `ii probe`: held-out failure probe on trained-SAE latents vs a random-weights SAE and raw activations, `probe/` |
-| `src/interpretableintelligence/contract_view.py` | Read-API payloads matched by `interpretableintelligence-server` |
 | `src/interpretableintelligence/policies/` | Policy + simulator protocol, fake reacher, robot stubs |
 | `src/interpretableintelligence/rollout.py` | Paired rollouts, control early stopping, schema v1 summary |
 | `src/interpretableintelligence/importers/` | `ii import`: rollout logs captured elsewhere to a run folder (`groot-v9` first) |
