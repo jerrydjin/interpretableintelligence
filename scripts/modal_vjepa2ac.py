@@ -246,3 +246,33 @@ def h5_fetch() -> None:
     for name, payload in h5_read.remote().items():
         _save_local(name, payload, None)
         print(name, payload["verdict"], payload["n_transitions"], "transitions")
+
+
+# ----------------------------------------------------------------------------- H1: ii gripper-probe
+
+
+def _gripper_probe(dest: str, *extra: str) -> dict:
+    if not Path(dest, "gripper_probe.json").exists():
+        _sh(["ii", "gripper-probe", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "gripper_probe.json").read_text())
+    out.pop("events", None)
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def h1_job() -> dict:
+    return {
+        "h1-trained": _gripper_probe(f"{RESULTS}/h1-trained"),
+        "h1-random-predictor": _gripper_probe(f"{RESULTS}/h1-random-predictor", "--random-predictor"),
+    }
+
+
+@app.local_entrypoint()
+def h1() -> None:
+    for name, payload in h1_job.remote().items():
+        _save_local(name, payload, None)
+        print(name, payload["verdict"], payload["n_events"], "events", payload["n_episodes"], "episodes")
+        for k, v in payload["stats"].items():
+            print(f"  {k:20s} {v['value']:+.4f} [{v['lo']:+.4f}, {v['hi']:+.4f}]")
+        print("  by direction", payload["by_direction"])

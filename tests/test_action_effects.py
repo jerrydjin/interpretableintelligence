@@ -305,3 +305,29 @@ def test_cli_plan_probe_tiny(tmp_path):
     assert data["schema"] == "plan-probe/v1" and data["n_transitions"] > 0
     assert data["verdict"] in {"exploitable", "robust", "mixed", "insufficient_data"}
     assert (out / "transitions.parquet").is_file()
+
+
+# ----------------------------------------------------------------------------- gripper-probe (H1)
+
+
+def test_find_gripper_events():
+    from interpretableintelligence.worldmodel.gripper_probe import find_events
+
+    s = np.zeros((12, 7), dtype=np.float32)
+    s[:, 0] = 0.4
+    s[4:, 6] = 1.0  # closes between 3 and 4, arm still
+    s[9:, 6] = 0.0  # opens between 8 and 9 ...
+    s[9:, 0] = 0.5  # ... while the arm jumps 10 cm: not an event
+    assert find_events(s) == [(3, 4)]
+
+
+def test_cli_gripper_probe_tiny(tmp_path):
+    clips = _clips_with_states(tmp_path, n=3)
+    out = tmp_path / "gp"
+    result = CliRunner().invoke(app, ["gripper-probe", "--clips", str(clips), "--out", str(out), "--tiny",
+                                      "--samples", "20", "--steps", "2", "--bootstrap", "20"])
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "gripper_probe.json").read_text())
+    assert data["schema"] == "gripper-probe/v1"
+    assert data["n_events"] == 3  # each test clip closes its gripper once, mid-clip
+    assert data["verdict"] in {"reads_gripper", "gripper_blind", "mixed", "insufficient_data"}
