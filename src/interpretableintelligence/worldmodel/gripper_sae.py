@@ -202,11 +202,12 @@ def run_gripper_sae(model: ACWorldModel, trajectories: list[Trajectory], out_dir
     config = sb.RetrainConfig(n_latents=n_latents, k=k, steps=steps, seed=seed, norm="fit")
     trained, curve = sb.train(split, mu, scale, config, log=lambda m: None)
     health = sb.evaluate(trained, split)
-    dictionaries = {"trained": trained}
+    sb.save_sae_dir(trained, out_dir / "sae", {"layer": layer, "n_latents": n_latents, "k": k, "model": model.name})
+    dictionaries = {"trained": {key: v.to(device) for key, v in trained.items()}}
     for r in range(random_saes):
-        w = sb.untrained_weights(trained, seed + 1000 + r)
+        w = {key: v.to(device) for key, v in sb.untrained_weights(trained, seed + 1000 + r).items()}
         threshold, _ = sb.batchtopk_threshold(w, split.chunks, k)
-        w["threshold"] = torch.tensor(threshold)
+        w["threshold"] = torch.tensor(threshold, device=device)
         dictionaries[f"random:{seed + 1000 + r}"] = w
     n_rows = split.n
     del split
@@ -274,5 +275,4 @@ def run_gripper_sae(model: ACWorldModel, trajectories: list[Trajectory], out_dir
         "events": records,
     }
     (out_dir / "gripper_sae.json").write_text(json.dumps(result, indent=2, default=float) + "\n")
-    sb.save_sae_dir(trained, out_dir / "sae", {"layer": layer, "n_latents": n_latents, "k": k, "model": model.name})
     return result
