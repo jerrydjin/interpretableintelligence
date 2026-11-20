@@ -217,7 +217,7 @@ The playground needs the model, so the export precomputes it: remove, scale, cla
 
 A real run is larger, mostly video and frame images. `--max-clips N` carries only N clips (the top examples of `real` features first, then candidates), cuts each feature's example list to those clips, and the page says "showing N of M clips". The scores on the page are still the whole run's.
 
-`make demo-site` (or `ii export-site --out demo-site`) rebuilds the static site in `demo-site/`: the home page, the run-it-on-your-model page and the blog, all on one stylesheet (`static/site.css`) shared with the live playground. Serve that directory with any static host. It does not start the viewer API.
+`make demo-site` (or `ii export-site --out demo-site`) rebuilds the static site in `demo-site/`: the home page, Explore (one page per scored V-JEPA 2 feature from `demo-data/vjepa-slim/`), the run-it-on-your-model page and the Research blog, all on one stylesheet (`static/site.css`) shared with the live playground. Serve that directory with any static host. It does not start the viewer API.
 
 `demo-site/live/` is the live playground: DINOv2-small and the DROID dictionary. Any picture, a webcam or the sample frames; see which features fire on each patch, switch one off, turn it up or force it on, and watch the model's final view change. `ii export-live runs/<id> --out demo-site/live/packs/<name>` packs another `hf` image-model run; open it with `/live/?pack=packs/<name>/`.
 

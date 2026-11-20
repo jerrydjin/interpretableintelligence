@@ -15,6 +15,8 @@ import tempfile
 from html import escape
 from pathlib import Path
 
+from interpretableintelligence import site_explore
+
 REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
 LIVE_KEEP = ("live", "vercel.json")
@@ -25,15 +27,17 @@ README_URL = GITHUB_URL + "/blob/main/README.md"
 POST_SLUG = "groot-1028"
 POST_TITLE = "A feature tracked our robot's failures. The control said it wasn't the cause."
 POST_DATE = "November 2026"
+VJEPA_RUN = REPO / "demo-data" / "vjepa-slim"
 V9_NOTES = REPO / "src" / "interpretableintelligence" / "adapters" / "groot" / "v9" / "V9_NOTES.md"
 
-# The site has three sections. Every page belongs to one, and the nav marks it.
+# The site has four sections. Every page belongs to one, and the nav marks it.
 SECTIONS = (
+    ("explore", "/explore/", "Explore"),
     ("play", "/live/", "Playground"),
     ("model", "/start/", "Your model"),
-    ("blog", "/blog/", "Blog"),
+    ("blog", "/blog/", "Research"),
 )
-SECTION_OF = {"live": "play", "start": "model", "blog": "blog", "post": "blog"}
+SECTION_OF = {"explore": "explore", "feature": "explore", "live": "play", "start": "model", "blog": "blog", "post": "blog"}
 # Old addresses and where they live now. The pages behind them were cut.
 REDIRECTS = {
     "droid": "/live/",
@@ -41,9 +45,8 @@ REDIRECTS = {
     "demos": "/",
     "picker": "/blog/",
     "results": "/blog/",
-    "vjepa": "/blog/",
+    "vjepa": "/explore/",
     "groot": f"/blog/{POST_SLUG}/",
-    "explore": f"/blog/{POST_SLUG}/",
 }
 MARK_SVG = (
     '<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">'
@@ -53,10 +56,11 @@ MARK_SVG = (
 )
 
 
-def export_site(out_dir: Path, groot_dir: Path | None = None) -> Path:
-    """Regenerate ``out_dir`` from the vendored GR00T measurements, keeping the live playground."""
+def export_site(out_dir: Path, groot_dir: Path | None = None, vjepa_dir: Path | None = None) -> Path:
+    """Regenerate ``out_dir`` from the vendored V-JEPA 2 and GR00T results, keeping the live playground."""
     out = Path(out_dir)
     groot = Path(groot_dir) if groot_dir else REPO / "demo-data" / "groot"
+    run = site_explore.load_run(Path(vjepa_dir) if vjepa_dir else VJEPA_RUN)
     summary = _load_groot_summary(groot)
     checks = _groot_checks(groot)
     keep_dir = Path(tempfile.mkdtemp(prefix="ii-site-keep-"))
@@ -73,7 +77,8 @@ def export_site(out_dir: Path, groot_dir: Path | None = None) -> Path:
     shutil.rmtree(keep_dir, ignore_errors=True)
     _copy_static(out / "static")
     (out / "favicon.ico").write_bytes(_favicon_png())
-    _write_home(out / "index.html", summary)
+    _write_home(out / "index.html", summary, run)
+    _write_explore(out / "explore", run)
     _write_start(out / "start" / "index.html")
     _write_blog_index(out / "blog" / "index.html", summary)
     _write_post(out / "blog" / POST_SLUG, groot / "groot-1028-ablate-summary.json", summary, checks)
@@ -113,7 +118,7 @@ def _nav(current: str) -> str:
     return "".join(parts)
 
 
-def _page(title: str, current: str, body: str, description: str = "") -> str:
+def _page(title: str, current: str, body: str, description: str = "", wide: bool = False) -> str:
     meta = f'\n  <meta name="description" content="{escape(description)}">' if description else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -127,8 +132,8 @@ def _page(title: str, current: str, body: str, description: str = "") -> str:
 </head>
 <body>
   {site_header(current)}
-  <main class="prose">{body}</main>
-  <footer class="foot"><p>ii is free, local and open on <a href="{GITHUB_URL}">GitHub</a>.</p></footer>
+  <main class="prose{" prose-wide" if wide else ""}">{body}</main>
+  <footer class="foot{" prose-wide" if wide else ""}"><p>ii is free, local and open on <a href="{GITHUB_URL}">GitHub</a>.</p></footer>
 </body>
 </html>
 """
@@ -153,31 +158,35 @@ def _redirect(path: Path, target: str) -> None:
     )
 
 
-def _write_home(path: Path, summary: dict) -> None:
-    """The front door: one promise, one way in, your own model next, and the blog."""
+def _write_home(path: Path, summary: dict, run: dict) -> None:
+    """The front door: the world model first, then the ways in."""
+    lead = run["features"][0]
+    clip = site_explore.HERO_CLIP
+    tiles = "".join(
+        f'<span class="tile" style="{site_explore.tile_style(lead["id"], i)}"></span>' for i in range(4)
+    )
     body = f"""
-    <section class="hero">
-      <h1>Look inside a vision model, on your own pictures.</h1>
-      <p class="lede">Drop in a photo or a video frame. See the features a real model picks out and where each one fires. Then switch one off and watch the model's view of the scene change. It runs in your browser, with nothing to install.</p>
-      <p class="actions"><a class="button" href="/live/" data-testid="cta">Open the playground</a><a class="button button-quiet" href="/start/">Run it on your model</a></p>
-    </section>
-    <ol class="steps" data-testid="steps">
-      <li><h3>Bring a picture</h3><p>Upload one, use your camera or start from a robot frame. Pictures never leave your device.</p></li>
-      <li><h3>See what it notices</h3><p>A dictionary splits the model's view into features, like the edge of a table or a white ceiling, and shows where each fires.</p></li>
-      <li><h3>Change its mind</h3><p>Switch a feature off or turn it up, and the rest of the model runs again on the edit.</p></li>
-    </ol>
-    <section class="split">
+    <section class="hero hero-split">
       <div>
-        <h2>Then point it at your model</h2>
-        <p>The same loop runs on your laptop, on any Hugging Face vision model and your own clips. A feature gets a tick only when it passes checks against random look-alikes and an untrained copy of the model.</p>
-        <p><a href="/start/">Run it on your model</a></p>
+        <h1>See what a robot's world model has learnt.</h1>
+        <p class="lede">V-JEPA 2 watches robot video and predicts what comes next. ii finds the features inside it and tests each one before it gets a name you can trust.</p>
+        <p class="actions"><a class="button" href="/explore/" data-testid="cta">Explore V-JEPA 2</a><a class="button button-quiet" href="/live/">Try your own pictures</a></p>
       </div>
-      <pre class="code"><code>uv run ii run hf \\
-  --model &lt;your-model&gt; \\
-  --clips &lt;your-clips&gt; --steer</code></pre>
+      <figure class="stage">
+        <video src="/explore/media/{clip}" autoplay muted loop playsinline aria-label="A robot taking the lid off a pot"></video>
+        <a class="stage-feature" href="{site_explore.feature_href(lead["id"])}" data-testid="hero-feature">
+          <span class="tiles">{tiles}</span>
+          <span>{escape(lead["name"])} <span class="id">#{lead["id"]}</span></span>
+        </a>
+      </figure>
     </section>
+    <ul class="doors" data-testid="doors">
+      <li><a class="card" href="/explore/"><span class="card-title">Explore</span><span class="card-text">Every scored V-JEPA 2 feature, with where it fires and which checks it passed.</span></a></li>
+      <li><a class="card" href="/live/"><span class="card-title">Playground</span><span class="card-text">Your own pictures or video, in your browser. Switch a feature off and see what changes.</span></a></li>
+      <li><a class="card" href="/start/"><span class="card-title">Your model</span><span class="card-text">The same tests on any Hugging Face vision or video model, on your laptop.</span></a></li>
+    </ul>
     <section>
-      <h2>From the blog</h2>
+      <h2>Research</h2>
       <a class="card" href="/blog/{POST_SLUG}/" data-testid="post-link">
         <span class="card-title">{escape(POST_TITLE)}</span>
         <span class="card-text">{escape(_post_teaser(summary))}</span>
@@ -185,9 +194,24 @@ def _write_home(path: Path, summary: dict) -> None:
     </section>
     """
     path.write_text(
-        _page("interpretable intelligence", "", body, "Look inside a vision model on your own pictures, then change its mind."),
+        _page("interpretable intelligence", "", body, "See what a robot's world model has learnt, and test every feature before trusting it.", wide=True),
         encoding="utf-8",
     )
+
+
+def _write_explore(dest: Path, run: dict) -> None:
+    """Explore: a list of the scored V-JEPA 2 features and a page for each."""
+    site_explore.copy_media(run["dir"], dest / "media")
+    (dest / "index.html").write_text(
+        _page("Explore · interpretable intelligence", "explore", site_explore.index_body(run)), encoding="utf-8"
+    )
+    for feature in run["features"]:
+        page = dest / site_explore.RUN_SLUG / str(feature["id"]) / "index.html"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(
+            _page(f"{feature['name']} · V-JEPA 2 · interpretable intelligence", "feature", site_explore.feature_body(run, feature)),
+            encoding="utf-8",
+        )
 
 
 def _write_start(path: Path) -> None:
@@ -238,13 +262,13 @@ uv sync</code></pre>
 def _write_blog_index(path: Path, summary: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = f"""
-    <h1>Blog</h1>
+    <h1>Research</h1>
     <p class="lede">What we found when we pointed <code>ii</code> at real models.</p>
     <ul class="posts" data-testid="posts">
       <li><a class="card" href="/blog/{POST_SLUG}/"><span class="meta">{POST_DATE}</span><span class="card-title">{escape(POST_TITLE)}</span><span class="card-text">{escape(_post_teaser(summary))}</span></a></li>
     </ul>
     """
-    path.write_text(_page("Blog · interpretable intelligence", "blog", body), encoding="utf-8")
+    path.write_text(_page("Research · interpretable intelligence", "blog", body), encoding="utf-8")
 
 
 def _post_teaser(summary: dict) -> str:
@@ -277,7 +301,7 @@ def _write_post(dest: Path, summary_path: Path, summary: dict, checks: dict) -> 
     real = "true" if summary["real"] is True else "false"
     body = f"""
     <article class="post">
-    <p class="meta"><a href="/blog/">Blog</a> · {POST_DATE}</p>
+    <p class="meta"><a href="/blog/">Research</a> · {POST_DATE}</p>
     <h1>{escape(POST_TITLE)}</h1>
     <p class="lede">We build <code>ii</code> so that anyone can look inside a vision or robot model. To test it on something real, we pointed it at {escape(identity["name"])}, NVIDIA's robot policy, on LIBERO-plus task {escape(identity["task"])}: a kitchen task it completes about half the time. We wanted to know whether one learned feature inside the policy makes it fail.</p>
 
