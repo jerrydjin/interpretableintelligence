@@ -116,6 +116,13 @@ def get_clips_cmd(
     out: Annotated[Path, typer.Option("--out", help="Directory to write the clips into.")] = Path("clips/droid"),
     n: Annotated[int, typer.Option("--n", min=1, max=100, help="Number of clips, one per robot episode. `ii run` needs at least 20.")] = 100,
     seconds: Annotated[float, typer.Option("--seconds", min=0.5, help="Length of each clip.")] = 4.0,
+    with_states: Annotated[
+        bool,
+        typer.Option(
+            "--with-states",
+            help="Also save each clip's per-frame arm pose as <clip>.states.npy (for `ii action-effects`).",
+        ),
+    ] = False,
 ) -> None:
     """Download real robot video to try a real model on: short clips from DROID (MIT licence).
 
@@ -126,7 +133,7 @@ def get_clips_cmd(
     from interpretableintelligence.sample_clips import DATASET, LICENSE, fetch_droid_clips
 
     try:
-        entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo)
+        entries = fetch_droid_clips(out, n=n, seconds=seconds, say=typer.echo, with_states=with_states)
     except (ValueError, RuntimeError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         if "connection" in str(exc).lower() or "internet" in str(exc).lower():
@@ -927,6 +934,300 @@ def probe_cmd(
         raise typer.Exit(code=1) from exc
     typer.echo(format_report(result))
     typer.echo(f"wrote {run_dir / 'probe'}")
+
+
+@app.command("action-effects")
+def action_effects_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for action_effects.json, transitions.parquet and regions.png.")],
+    code_dir: Annotated[
+        Path | None,
+        typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2 (Meta's model code). Not needed with --tiny."),
+    ] = None,
+    checkpoint: Annotated[
+        Path | None,
+        typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt. Default: download it to the torch hub cache."),
+    ] = None,
+    random_predictor: Annotated[
+        bool,
+        typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor (seeded init)."),
+    ] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in whose actions move only the top row of patches (tests).")] = False,
+    segmenter: Annotated[
+        str,
+        typer.Option("--segmenter", help="Arm masks: grounded-sam (Grounding DINO boxes refined by SAM) or clipseg (weaker on DROID)."),
+    ] = "grounded-sam",
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for shuffled actions, matched patches, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Does V-JEPA 2-AC predict the world moving, or only its own arm? (Offline, recorded DROID video.)
+
+    Predicts each next latent frame under the real, zero, shuffled and reversed action, and compares
+    how much the action explains on arm patches, on non-arm patches that moved, and on matched still
+    patches. The verdict rule is fixed in the code. Never a rollout finding; touches no scoreboard.
+    """
+    import numpy as np
+
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories, run_action_effects
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+            side = model.crop // model.patch
+
+            def arm_masks(frames):
+                # Stub segmenter: the top row of patches is the arm.
+                h, w = frames.shape[1:3]
+                m = np.zeros(frames.shape[:3], dtype=bool)
+                m[:, : max(1, h // side), :] = True
+                return m
+
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            from interpretableintelligence.worldmodel.segment import ClipSegArm, GroundedSamArm
+
+            segmenters = {"grounded-sam": GroundedSamArm, "clipseg": ClipSegArm}
+            if segmenter not in segmenters:
+                raise ValueError(f"--segmenter must be one of {', '.join(segmenters)}")
+            device = pick_device()
+            model = load_vjepa2ac(device, code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            arm_masks = segmenters[segmenter](device)
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        typer.echo(f"     {len(trajectories)} clips, model {model.name}")
+        extra = {"segmenter": "stub" if tiny else segmenter}
+        result = run_action_effects(model, trajectories, arm_masks, out, seed=seed, n_boot=bootstrap, say=typer.echo, extra=extra)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    moving = result["moving"]
+    s = moving["stats"]
+    typer.echo(
+        f"verdict: {moving['verdict']} on {moving['n_transitions']} transitions with moving objects "
+        f"({moving['n_episodes']} episodes)"
+    )
+    for key in ("benefit_arm", "benefit_moved", "benefit_matched", "moved_minus_matched"):
+        v = s[key]
+        typer.echo(f"  {key:20s} {v['value']:+.4f}  [{v['lo']:+.4f}, {v['hi']:+.4f}]")
+    typer.echo(f"wrote {out}")
+
+
+@app.command("plan-probe")
+def plan_probe_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for plan_probe.json and transitions.parquet.")],
+    code_dir: Annotated[
+        Path | None,
+        typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2 (Meta's model code). Not needed with --tiny."),
+    ] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    stride: Annotated[int, typer.Option("--stride", min=1, help="Probe every Nth transition of each clip.")] = 4,
+    samples: Annotated[int, typer.Option("--samples", min=10, help="CEM samples per iteration.")] = 200,
+    steps: Annotated[int, typer.Option("--steps", min=1, help="CEM iterations.")] = 8,
+    wide_xyz: Annotated[float, typer.Option("--wide-xyz", min=0.08, help="Arm step limit (m) of the wide search.")] = 0.5,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the searches, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Can V-JEPA 2-AC's planner be fooled by impossible actions? (Offline, recorded DROID video.)
+
+    For each transition, plans toward the next real frame with CEM inside Meta's action range and with
+    a much wider range, and counts how often the wide search returns an out-of-range action that scores
+    better than both the real action and the best in-range one. The verdict rule is fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.plan_probe import run_plan_probe
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            model.predict_batch = 64
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        typer.echo(f"     {len(trajectories)} clips, model {model.name}")
+        result = run_plan_probe(
+            model, trajectories, out, stride=stride, samples=samples, steps=steps, wide_xyz=wide_xyz,
+            seed=seed, n_boot=bootstrap, say=typer.echo,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"verdict: {result['verdict']} on {result['n_transitions']} transitions ({result['n_episodes']} episodes)")
+    for key, v in result["stats"].items():
+        typer.echo(f"  {key:30s} {v['value']:+.4f}  [{v['lo']:+.4f}, {v['hi']:+.4f}]")
+    typer.echo(f"wrote {out}")
+
+
+@app.command("gripper-probe")
+def gripper_probe_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for gripper_probe.json.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    samples: Annotated[int, typer.Option("--samples", min=10, help="CEM samples per iteration.")] = 100,
+    steps: Annotated[int, typer.Option("--steps", min=1, help="CEM iterations.")] = 6,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the search, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Does V-JEPA 2-AC's goal score read the gripper? (Offline, recorded DROID video.)
+
+    At moments where the gripper opens or closes while the arm stays still, scores the right and the
+    wrong gripper command toward the next frame and plans one step. The verdict rule is fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.gripper_probe import run_gripper_probe
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            model.predict_batch = 64
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_gripper_probe(model, trajectories, out, samples=samples, steps=steps, seed=seed, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"verdict: {result['verdict']} on {result['n_events']} gripper events ({result['n_episodes']} episodes)")
+    for key, v in result["stats"].items():
+        typer.echo(f"  {key:20s} {v['value']:+.4f}  [{v['lo']:+.4f}, {v['hi']:+.4f}]")
+    typer.echo(f"wrote {out}")
+
+
+@app.command("gripper-trace")
+def gripper_trace_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for gripper_trace.json.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the episode folds, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Where does V-JEPA 2-AC lose the gripper command? (Offline, recorded DROID video.)
+
+    Reads gripper state from the encoder's latents, traces the right and wrong gripper command through
+    every predictor block with activation patching, and reads the predicted latent with the same probe.
+    The verdict rules are fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.gripper_trace import run_gripper_trace
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_gripper_trace(model, trajectories, out, seed=seed, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    v = result["verdict"]
+    typer.echo(f"verdict: encoder {v['encoder']}, command {v['command']} on {result['n_events']} gripper events ({result['n_episodes']} episodes)")
+    for name in ("encoder", "pooled", "pixels"):
+        r = result["readout"][name]
+        typer.echo(f"  {name + ' AUROC':20s} {r['value']:.4f}  [{r['lo']:.4f}, {r['hi']:.4f}]")
+    for key, r in result["stats"].items():
+        typer.echo(f"  {key:20s} {r['value']:+.4f}  [{r['lo']:+.4f}, {r['hi']:+.4f}]")
+    typer.echo(f"wrote {out}")
+
+
+@app.command("gripper-sae")
+def gripper_sae_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for gripper_sae.json and the SAE.")],
+    layer: Annotated[int, typer.Option("--layer", min=0, help="Predictor layer (0 = input, i = block i's output), e.g. where `ii gripper-trace` peaks.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    n_latents: Annotated[int, typer.Option("--latents", min=2, help="SAE dictionary size.")] = 4096,
+    k: Annotated[int, typer.Option("--k", min=1, help="BatchTopK k.")] = 32,
+    steps: Annotated[int, typer.Option("--steps", min=1, help="SAE training steps.")] = 3000,
+    stride: Annotated[int, typer.Option("--stride", min=1, help="Use every Nth real transition for SAE training rows.")] = 2,
+    random_saes: Annotated[int, typer.Option("--random-saes", min=1, help="Untrained SAEs as the control.")] = 5,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the folds, SAE, controls and bootstrap.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Is there a gripper-command feature inside V-JEPA 2-AC's predictor? (Offline, recorded DROID video.)
+
+    Trains an SAE on the predictor's frame tokens at one layer, picks the latents that move most with
+    the gripper command on half the episodes, and tests them on the other half against untrained SAEs.
+    The verdict rule is fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.gripper_sae import run_gripper_sae
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, seed=seed)
+            model.predict_batch = 32
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_gripper_sae(model, trajectories, out, layer=layer, n_latents=n_latents, k=k, steps=steps, stride=stride,
+                                 random_saes=random_saes, seed=seed, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"verdict: {result['verdict']} at layer {layer} on {result['n_test_events']} held-out gripper events")
+    for name, arm in result["arms"].items():
+        c, r = arm["consistency"], arm["recovered"]
+        typer.echo(f"  {name:24s} consistency {c['value']:.3f} [{c['lo']:.3f}, {c['hi']:.3f}]  recovered {r['value']:+.4f} [{r['lo']:+.4f}, {r['hi']:+.4f}]")
+    typer.echo(f"wrote {out}")
 
 
 @app.command("export")
