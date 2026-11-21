@@ -12,11 +12,9 @@ import json
 import math
 import os
 import shutil
-import threading
 import time
 import urllib.error
 import urllib.request
-import webbrowser
 from collections import defaultdict
 from pathlib import Path
 
@@ -90,7 +88,7 @@ from interpretableintelligence.thresholds import (
     TOP_K_ABLATION_PER_CLIP,
     TOP_K_EXAMPLES,
 )
-from interpretableintelligence.view import bind_server, enable_steering, load_run
+from interpretableintelligence.view import load_run
 
 # Torch's own default (physical cores it may use), read before any run changes it.
 _DEFAULT_THREADS = max(1, torch.get_num_threads())
@@ -432,17 +430,16 @@ def execute_pipeline(
     view_inputs = _with_kind(feature_inputs, "view")
     if (out / "scoreboard.json").is_file():
         view_inputs = _with_kind(view_inputs, "view", scoreboard_sha=file_sha256(out / "scoreboard.json"))
-    httpd = None
-    thread = None
+    viewer = None
     _url = None
     if _view_ready(out, view_inputs):
         log("skip view")
         if serve:
-            _model, httpd, thread, _url = _open_viewer(out, clips_dir, host, port, open_browser, log, steer=steer)
+            _model, viewer, _url = _open_viewer(out, clips_dir, host, port, open_browser, log, steer=steer)
     else:
         log("run view")
         with _measure(device) as measured:
-            model, httpd, thread, _url = _open_viewer(
+            model, viewer, _url = _open_viewer(
                 out, clips_dir, host, port, open_browser, log, serve=serve, steer=steer
             )
             measured["rows"] = len(model.run_payload["clips"])
@@ -460,19 +457,10 @@ def execute_pipeline(
         log(line)
     if not serve:
         log("viewer not started")
-    for line in _closing_lines(out, _url if thread is not None else None, score=score, steer=steer):
+    for line in _closing_lines(out, _url if viewer is not None else None, score=score, steer=steer):
         log(line)
-    try:
-        if thread is not None:
-            thread.join()
-    except KeyboardInterrupt:
-        raise
-    finally:
-        if httpd is not None:
-            httpd.shutdown()
-            if thread is not None and thread.is_alive():
-                thread.join(timeout=5)
-            httpd.server_close()
+    if viewer is not None:
+        viewer.wait()
     return {"report": report, "scoreboard": scoreboard, "manifest": manifest}
 
 
@@ -1666,36 +1654,34 @@ def _mean_rows(source: RowSource, ids: np.ndarray, n_rows: int) -> np.ndarray:
 
 
 def _open_viewer(out, clips_dir, host, port, open_browser, log, serve: bool = True, steer: bool = False):
+    """Load the run (the view stage's check) and, with ``serve``, start the viewer on it.
+
+    Returns ``(model, viewer, url)``; ``viewer`` is a ``view_launch.Viewer`` (the Rust binary, or
+    the Python server when the binary cannot serve this run) and is ``None`` without ``serve``.
+    """
+    from interpretableintelligence.view_launch import open_in_browser, start_viewer  # noqa: PLC0415
+
     model = load_run(Path(out), Path(clips_dir))
     if not serve:
-        return model, None, None, None
+        return model, None, None
+    steerer = None
     if steer:
-        enable_steering(model, Path(clips_dir))
-    httpd = bind_server(model, host, int(port))
-    thread = threading.Thread(target=httpd.serve_forever, name="interpretableintelligence-view", daemon=False)
-    thread.start()
-    bound_host, bound_port = httpd.server_address[:2]
-    url = f"http://{bound_host}:{bound_port}/"
+        from interpretableintelligence.steer import Steerer  # noqa: PLC0415 (only the playground loads a model)
+
+        steerer = Steerer(Path(out), Path(clips_dir))
+    viewer = start_viewer(Path(out), Path(clips_dir), host=host, port=int(port), steerer=steerer, model=model, log=log)
     try:
-        payload = _wait_health(url)
+        payload = _wait_health(viewer.url)
+        if payload.get("run_id") != model.run_payload["run_id"]:
+            raise RuntimeError("viewer /api/run returned a different run")
     except Exception:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join(timeout=5)
+        viewer.close()
         raise
-    if payload.get("run_id") != model.run_payload["run_id"]:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join(timeout=5)
-        raise RuntimeError("viewer /api/run returned a different run")
-    log(f"viewer {url}")
+    log(f"viewer {viewer.url}")
     log("health /api/run ok")
     if open_browser:
-        try:
-            webbrowser.open(url)
-        except OSError:
-            pass
-    return model, httpd, thread, url
+        open_in_browser(viewer.url)
+    return model, viewer, viewer.url
 
 
 def _wait_health(url: str) -> dict:
