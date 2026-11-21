@@ -12,6 +12,9 @@ pub struct NpyHeader {
     pub shape: Vec<u64>,
     pub data_offset: u64,
     pub itemsize: u64,
+    /// The dtype string, such as `<f4` or `|u1`.
+    pub descr: String,
+    pub fortran_order: bool,
 }
 
 #[derive(Debug)]
@@ -54,7 +57,8 @@ pub fn read_header(path: &Path) -> Result<NpyHeader, NpyError> {
         .map_err(|err| NpyError(err.to_string()))?;
     let text = String::from_utf8_lossy(&header);
     let shape = parse_shape(&text)?;
-    let itemsize = parse_itemsize(&text)?;
+    let (descr, itemsize) = parse_descr(&text)?;
+    let fortran_order = text.contains("'fortran_order': True") || text.contains("\"fortran_order\": True");
     let data_offset = file
         .stream_position()
         .map_err(|err| NpyError(err.to_string()))?;
@@ -79,6 +83,8 @@ pub fn read_header(path: &Path) -> Result<NpyHeader, NpyError> {
         shape,
         data_offset,
         itemsize,
+        descr,
+        fortran_order,
     })
 }
 
@@ -109,7 +115,7 @@ fn parse_shape(header: &str) -> Result<Vec<u64>, NpyError> {
         .collect()
 }
 
-fn parse_itemsize(header: &str) -> Result<u64, NpyError> {
+fn parse_descr(header: &str) -> Result<(String, u64), NpyError> {
     let key = header
         .find("'descr'")
         .or_else(|| header.find("\"descr\""))
@@ -147,9 +153,10 @@ fn parse_itemsize(header: &str) -> Result<u64, NpyError> {
     if digits.is_empty() {
         return Err(NpyError(format!("unsupported numpy dtype {dtype}")));
     }
-    digits
+    let itemsize = digits
         .parse::<u64>()
-        .map_err(|_| NpyError(format!("unsupported numpy dtype {dtype}")))
+        .map_err(|_| NpyError(format!("unsupported numpy dtype {dtype}")))?;
+    Ok((dtype.to_string(), itemsize))
 }
 
 pub fn shape_tuple(shape: &[u64]) -> String {

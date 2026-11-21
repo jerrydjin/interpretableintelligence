@@ -9,7 +9,6 @@ is only ``POST /explain``.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import socket
 import subprocess
@@ -18,6 +17,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+
+from interpretableintelligence.server_bin import ServerNotFound, find_server
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "read-api"
@@ -91,20 +92,11 @@ class _RustServer:
 
 
 def _server_bin() -> Path:
-    override = os.environ.get("II_SERVER")
-    if override:
-        return Path(override)
-    debug = ROOT / "target" / "debug" / "interpretableintelligence-server"
-    release = ROOT / "target" / "release" / "interpretableintelligence-server"
-    if debug.is_file():
-        return debug
-    if release.is_file():
-        return release
-    if shutil.which("cargo") is None:
-        # The Python install (uv sync) needs no Rust; only this Rust/Python parity check does.
-        pytest.skip("cargo is not installed (https://rustup.rs); the Rust read-API tests need it")
-    subprocess.check_call(["cargo", "build", "-p", "interpretableintelligence-server"], cwd=ROOT)
-    return debug
+    try:
+        return find_server()
+    except ServerNotFound as exc:
+        # The Python install (uv sync) needs no Rust; only the Rust server's own tests do.
+        pytest.skip(f"no interpretableintelligence-server binary: {exc}")
 
 
 def _canon(value):
