@@ -52,6 +52,7 @@ import json
 import math
 import re
 import struct
+import sys
 import tempfile
 import threading
 import webbrowser
@@ -469,7 +470,8 @@ def serve_run(
 
 
 def _say(line: str) -> None:
-    print(line, flush=True)
+    # Notes go to stderr: the first stdout line stays the page URL.
+    print(line, file=sys.stderr, flush=True)
 
 
 def serve_model(
