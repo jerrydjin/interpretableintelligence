@@ -104,6 +104,6 @@ uv run modal volume rm -r interpretableintelligence runs
 - `modal_app.py` defines the Modal app, image, and Volume. `image.py` lists what the image installs (the same dependencies as `pyproject.toml`; a test keeps them equal).
 - `pricing.py` is the price table, the cap-to-timeout conversion, and nothing else.
 
-The viewer side is `LiveRun` in `view.py`: it forwards to the loaded run, reloads when new files arrive, and adds `live` to `/api/run`. The page polls `/api/run` while `live.state` is `running`.
+The viewer side is `view_launch.py`: the Rust viewer gets a `--live` JSON status file (the remote status plus a `generation` counter). Each stage that lands bumps `generation`, the binary loads the run folder again on the next request, and `/api/run` carries the file's contents as `live`. When the Python viewer serves the run instead (see the README), `LiveRun` in `view.py` does the same in process. The page polls `/api/run` while `live.state` is `running`.
 
 Nothing in this lane changes what a run means. The scoreboard comes from the same scorer, the gates are the same, and a feature found on a remote GPU is held to the same research rules as one found locally.

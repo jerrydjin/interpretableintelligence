@@ -444,16 +444,32 @@ def serve_run(
     port: int = 7860,
     open_browser: bool = True,
     steer: bool = False,
+    log=None,
 ) -> None:
-    """Load ``run_dir``, serve the viewer, and optionally open a browser.
+    """Serve the viewer for ``run_dir`` until interrupted, and optionally open a browser.
 
-    ``steer`` loads the run's model and SAE (``interpretableintelligence.steer``) and turns on the
-    playground: ``POST /api/steer``. Without it the viewer only reads the run folder.
+    The Rust binary serves the run (``view_launch.start_viewer``; the Python server below when it
+    cannot). ``steer`` loads the run's model and SAE (``interpretableintelligence.steer``) and turns
+    on the playground: ``POST /api/steer``. Without it the viewer only reads the run folder.
     """
-    model = load_run(Path(run_dir), None if clips_dir is None else Path(clips_dir))
+    from interpretableintelligence.view_launch import open_in_browser, start_viewer  # noqa: PLC0415
+
+    run_dir = Path(run_dir)
+    clips = None if clips_dir is None else Path(clips_dir)
+    steerer = None
     if steer:
-        enable_steering(model, None if clips_dir is None else Path(clips_dir))
-    serve_model(model, host=host, port=port, open_browser=open_browser)
+        from interpretableintelligence.steer import Steerer  # noqa: PLC0415 (only the playground loads a model)
+
+        steerer = Steerer(run_dir, clips)
+    viewer = start_viewer(run_dir, clips, host=host, port=port, steerer=steerer, log=log or _say)
+    print(f"interpretableintelligence view  {viewer.url}", flush=True)
+    if open_browser:
+        open_in_browser(viewer.url)
+    viewer.wait()
+
+
+def _say(line: str) -> None:
+    print(line, flush=True)
 
 
 def serve_model(
@@ -931,23 +947,12 @@ def _handler(model: RunModel):
             if model.steerer is None:
                 self._send_json({"error": "steering is off; start the viewer with --steer"}, status=404)
                 return
-            from interpretableintelligence.steer import SteerError  # noqa: PLC0415
+            from interpretableintelligence.view_launch import STEER_LIMIT, answer_steer  # noqa: PLC0415
 
             length = int(self.headers.get("Content-Length") or 0)
-            if length <= 0 or length > 64 * 1024:
-                self._send_json({"error": "request body must be a JSON object under 64 KiB"}, status=400)
-                return
-            try:
-                payload = json.loads(self.rfile.read(length))
-            except (ValueError, UnicodeDecodeError):
-                self._send_json({"error": "request body is not valid JSON"}, status=400)
-                return
-            try:
-                result = model.steerer.steer(payload)
-            except SteerError as exc:
-                self._send_json(exc.as_dict(), status=400)
-                return
-            self._send_json(result)
+            body = self.rfile.read(length) if 0 < length <= STEER_LIMIT else b""
+            status, reply = answer_steer(model.steerer, body)
+            self._send_json(reply, status=status)
 
         def _target(self) -> tuple[str, dict[str, list[str]]]:
             parsed = urlparse(self.path)

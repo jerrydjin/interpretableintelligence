@@ -253,7 +253,7 @@ def guided_run(
     say("")
 
     chosen = pick_feature(scoreboard)
-    from interpretableintelligence.view import enable_steering, load_run, serve_model
+    from interpretableintelligence.view import load_run
 
     model = load_run(out_dir, clips_dir)
     top = None
@@ -272,20 +272,24 @@ def guided_run(
         return result
 
     say("3/3  Opening the playground")
-    enable_steering(model, clips_dir)
+    from interpretableintelligence.steer import Steerer  # noqa: PLC0415 (loads the model)
+    from interpretableintelligence.view_launch import open_in_browser, start_viewer  # noqa: PLC0415
 
-    def announce(url: str) -> None:
-        say(f"     {url}")
-        say("")
-        for line in result["next_steps"]:
-            say(line)
-
-    serve_model(
-        model,
+    viewer = start_viewer(
+        out_dir,
+        clips_dir,
         host=host,
         port=port,
-        open_browser=open_browser,
-        fragment=route,
-        announce=announce,
+        steerer=Steerer(out_dir, clips_dir),
+        model=model,
+        log=lambda line: say(f"     {line}"),
     )
+    url = f"{viewer.url}{route}"
+    say(f"     {url}")
+    say("")
+    for line in result["next_steps"]:
+        say(line)
+    if open_browser:
+        open_in_browser(url)
+    viewer.wait()
     return result

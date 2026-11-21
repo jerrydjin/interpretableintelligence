@@ -140,17 +140,13 @@ def test_run_steer_opens_the_playground(demo) -> None:
     from interpretableintelligence.pipeline import _open_viewer
 
     lines: list[str] = []
-    _model, httpd, thread, url = _open_viewer(
-        demo.run, demo.clips, "127.0.0.1", 0, False, lines.append, steer=True
-    )
+    _model, viewer, url = _open_viewer(demo.run, demo.clips, "127.0.0.1", 0, False, lines.append, steer=True)
     try:
         with urllib.request.urlopen(url + "api/run") as response:
             payload = json.loads(response.read())
         assert payload["steer"]["enabled"] is True
     finally:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join(timeout=5)
+        viewer.close()
 
 
 def test_playground_works_before_scoring(demo, tmp_path: Path) -> None:
