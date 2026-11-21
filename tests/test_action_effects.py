@@ -433,3 +433,51 @@ def test_gripper_sae_patching_all_latents_recovers_the_gap():
     # patching none closes nothing.
     rec = gs.patch_recovery(model, z, acts, states, 2, [(eye, list(range(2 * d))), (eye, [])])
     assert abs(rec[0] - 1.0) < 1e-4 and abs(rec[1]) < 1e-6
+
+
+# ----------------------------------------------------------------------------- gripper-circuit
+
+
+def test_gripper_circuit_finds_the_planted_eraser():
+    from interpretableintelligence.adapters.vjepa2ac.model import _TinyCircuitPredictor, tiny_circuit_model
+    from interpretableintelligence.worldmodel import gripper_circuit as gc
+
+    model = tiny_circuit_model(seed=0)
+    z = model.encode_frames(np.stack([_scene(0)[0], _scene(1)[0]]))
+    state, arm = np.zeros(7, np.float32), np.array([0.01, 0, 0], np.float32)
+    m = gc.measure_event(model, z[0], state, arm, 1.0)
+    # Block 1 writes the command (peak at layer 2); block 3's attention, head 1, erases 90% of it and leaves the arm alone.
+    assert abs(m["s_grip"][3][0] + _TinyCircuitPredictor.ERASE) < 1e-4 and m["s_arm"][3][0] == 0
+    assert abs(m["sh_grip"][3][1] + _TinyCircuitPredictor.ERASE) < 1e-4
+    p = gc.pick([m], k_comp=1, k_head=1, n_rand=3, seed=0)
+    assert p["peak"] == 2 and p["comps"] == [(3, 0)] and p["heads"] == [(3, 1)]
+    t = gc.knock_and_steer(model, z[0], z[1], state, arm, 1.0, p, seed=0)
+    # Knocking out the eraser (as a part or as a head) brings the gap back; random parts change nothing.
+    assert t["knock"]["top_comps"]["grip_last"][0] > 5 * t["grip_last"]
+    assert t["knock"]["top_heads"]["grip_last"][0] > 5 * t["grip_last"]
+    np.testing.assert_allclose(t["knock"]["rand_comps"]["grip_last"], t["grip_last"], rtol=1e-5)
+    assert t["attention"]["b3.h1"]["action_right"] > 0.99  # the eraser reads the action token
+    assert len(t["steer_rand"]) == gc.N_RAND_STEER and set(t["steer"]) == {str(a) for a in gc.ALPHAS}
+
+
+def test_gripper_circuit_needs_attention_blocks():
+    from interpretableintelligence.worldmodel import gripper_circuit as gc
+
+    model = tiny_world_model(seed=0)
+    with pytest.raises(ValueError, match="attn"):
+        gc.measure_event(model, model.encode_frames(np.stack([_scene(0)[0]]))[0], np.zeros(7, np.float32), np.zeros(3, np.float32), 1.0)
+
+
+def test_cli_gripper_circuit_tiny(tmp_path):
+    clips = _clips_with_states(tmp_path, n=6)
+    out = tmp_path / "gc"
+    args = ["gripper-circuit", "--clips", str(clips), "--out", str(out), "--tiny", "--components", "1", "--heads", "1",
+            "--random-sets", "3", "--bootstrap", "50"]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "gripper_circuit.json").read_text())
+    assert data["schema"] == "gripper-circuit/v1" and data["n_events"] == 6
+    assert all(p is None or p["comps"] == ["b3.attn"] for p in data["picks"].values())
+    assert data["verdict"]["components"] == "erasers" and data["verdict"]["heads"] == "erasers"
+    assert data["knockout"]["all_attn"]["recovered"]["value"] > 0.9  # every attention output after the peak includes the eraser
+    assert data["verdict"]["steer"] in {"fixes_gripper", "no_fix", "insufficient_data"}

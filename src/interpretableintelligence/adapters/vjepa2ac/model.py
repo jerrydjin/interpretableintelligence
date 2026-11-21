@@ -316,6 +316,110 @@ class _TinyPredictor(nn.Module):
         return x[:, 2:]
 
 
+class _TinyAttn(nn.Module):
+    """Attention laid out like Meta's ``ACRoPEAttention`` (``qkv``, ``proj``, ``num_heads``, calls
+    ``F.scaled_dot_product_attention``), without RoPE. The mask makes every token read the action token."""
+
+    def __init__(self, dim: int, heads: int) -> None:
+        super().__init__()
+        self.num_heads = heads
+        self.qkv = nn.Linear(dim, 3 * dim, bias=False)
+        self.proj = nn.Linear(dim, dim, bias=False)
+        nn.init.zeros_(self.qkv.weight)
+        nn.init.zeros_(self.proj.weight)
+
+    def forward(self, x: torch.Tensor, mask=None, attn_mask=None, T=None, H=None, W=None, action_tokens=0) -> torch.Tensor:
+        b, n, c = x.shape
+        q, k, v = self.qkv(x).unflatten(-1, (3, self.num_heads, -1)).permute(2, 0, 3, 1, 4)
+        y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+        return self.proj(y.transpose(1, 2).reshape(b, n, c))
+
+
+class _TinyMLP(nn.Module):
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        self.fc = nn.Linear(dim, dim, bias=False)
+        nn.init.zeros_(self.fc.weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fc(x)
+
+
+class _TinyACBlock(nn.Module):
+    """``x + attn(norm1(x))`` then ``x + mlp(norm2(x))``, Meta's ``ACBlock`` with identity norms."""
+
+    def __init__(self, dim: int, heads: int) -> None:
+        super().__init__()
+        self.norm1 = nn.Identity()
+        self.attn = _TinyAttn(dim, heads)
+        self.norm2 = nn.Identity()
+        self.mlp = _TinyMLP(dim)
+
+    def forward(self, x: torch.Tensor, mask=None, attn_mask=None, T=None, H=None, W=None, action_tokens=0) -> torch.Tensor:
+        x = x + self.attn(self.norm1(x), mask=mask, attn_mask=attn_mask, T=T, H=H, W=W, action_tokens=action_tokens)
+        return x + self.mlp(self.norm2(x))
+
+
+class _TinyCircuitPredictor(nn.Module):
+    """A planted gripper eraser, for ``ii gripper-circuit``'s tests.
+
+    Four blocks with Meta's sublayer layout. Block 1's head 0 copies the arm x step and the gripper
+    command from the action token into frame dims 8 and 9. Block 3's head 1 reads the gripper command
+    again and writes ``-ERASE`` times it into dim 9, so the gripper effect peaks after block 1 and is
+    mostly gone at the output while the arm effect stays. Everything else writes zero.
+    """
+
+    N_BLOCKS = 4
+    HEADS = 4
+    ERASE = 0.9
+
+    def __init__(self, dim: int, n_tokens: int) -> None:
+        super().__init__()
+        if dim < 16:
+            raise ValueError("the circuit stand-in needs dim >= 16")
+        self.dim = dim
+        hd = dim // self.HEADS
+        self.predictor_blocks = nn.ModuleList([_TinyACBlock(dim, self.HEADS) for _ in range(self.N_BLOCKS)])
+        with torch.no_grad():
+            w = self.predictor_blocks[1].attn
+            w.qkv.weight[2 * dim + 0, 0] = 1.0  # head 0 value 0 <- arm x
+            w.qkv.weight[2 * dim + 1, 6] = 1.0  # head 0 value 1 <- gripper
+            w.proj.weight[8, 0] = 1.0
+            w.proj.weight[9, 1] = 1.0
+            e = self.predictor_blocks[3].attn
+            e.qkv.weight[2 * dim + hd, 6] = 1.0  # head 1 value 0 <- gripper
+            e.proj.weight[9, hd] = -self.ERASE
+        n = n_tokens + 2
+        mask = torch.zeros(n, n, dtype=torch.bool)
+        mask[:, 0] = True
+        self.register_buffer("attn_mask", mask)
+
+    def forward(self, z: torch.Tensor, actions: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
+        p = self.attn_mask.shape[0] - 2
+        pad = self.dim - STATE_DIM
+        a = F.pad(actions[:, -1:], (0, pad))
+        s = F.pad(states[:, -1:], (0, pad))
+        x = torch.cat([a, s, z[:, -p:]], dim=1)
+        for blk in self.predictor_blocks:
+            x = blk(x, mask=None, attn_mask=self.attn_mask, T=1, action_tokens=2)
+        return x[:, 2:]
+
+
+def tiny_circuit_model(*, seed: int = 0, crop: int = 128, patch: int = 16, dim: int = 16) -> ACWorldModel:
+    """Random CPU encoder plus ``_TinyCircuitPredictor``: a known gripper eraser at block 3, head 1."""
+    torch.manual_seed(seed)
+    side = crop // patch
+    return ACWorldModel(
+        encoder=_TinyEncoder(dim, patch).eval(),
+        predictor=_TinyCircuitPredictor(dim, side * side).eval(),
+        device=torch.device("cpu"),
+        crop=crop,
+        patch=patch,
+        name="tiny-circuit",
+        info={"eraser": "b3.h1", "writer": "b1.h0"},
+    )
+
+
 def tiny_world_model(*, seed: int = 0, crop: int = 128, patch: int = 16, dim: int = 16, action_tokens=None) -> ACWorldModel:
     """Random CPU stand-in with V-JEPA 2-AC's interface. Actions move only ``action_tokens``."""
     torch.manual_seed(seed)
