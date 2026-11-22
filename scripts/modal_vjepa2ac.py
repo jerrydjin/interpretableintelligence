@@ -379,3 +379,81 @@ def circuit(full: bool = False) -> None:
         for kind, k in payload["knockout"].items():
             print(f"  knocked {kind} drift", " ".join(f"{x:.3f}" for x in k["curve"]))
             print(f"  random {kind} drift ", " ".join(f"{x:.3f}" for x in k.get("random_curve", [])))
+
+
+# ----------------------------------------------------------------------------- screen: ii impossible-events
+
+
+def _impossible(dest: str, *extra: str, fresh: bool = False) -> dict:
+    import shutil
+
+    if fresh:
+        shutil.rmtree(dest, ignore_errors=True)
+    if not Path(dest, "impossible_events.json").exists():
+        _sh(["ii", "impossible-events", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "impossible_events.json").read_text())
+    out.pop("transitions", None)
+    out["heatmaps"] = {p.name: p.read_bytes() for p in sorted(Path(dest, "heatmaps").glob("*.png"))}
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def ie_smoke_job() -> dict:
+    import time
+
+    t0 = time.time()
+    out = _impossible(f"{RESULTS}/ie-smoke", "--max-clips", "5", "--bootstrap", "200", fresh=True)
+    out["wall_s"] = time.time() - t0
+    return {"ie-smoke": out}
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def ie_full_job() -> dict:
+    return {
+        "ie-trained": _impossible(f"{RESULTS}/ie-trained"),
+        "ie-random-predictor": _impossible(f"{RESULTS}/ie-random-predictor", "--random-predictor"),
+    }
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def ie_read() -> dict:
+    out = {}
+    for name in ("ie-trained", "ie-random-predictor"):
+        f = Path(RESULTS, name, "impossible_events.json")
+        if f.exists():
+            payload = json.loads(f.read_text())
+            payload.pop("transitions", None)
+            payload["heatmaps"] = {p.name: p.read_bytes() for p in sorted(Path(RESULTS, name, "heatmaps").glob("*.png"))}
+            out[name] = payload
+    return out
+
+
+def _ie_report(results: dict) -> None:
+    dest = Path(os.environ.get("II_H2_LOCAL", "h2-results"))
+    for name, payload in results.items():
+        for fname, data in payload.pop("heatmaps", {}).items():
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / f"{name}-{fname}").write_bytes(data)
+        _save_local(name, payload, None)
+        print(name, payload["n_transitions"], "transitions", payload["n_episodes"], "episodes", "wall_s", payload.get("wall_s"))
+        for e, v in payload["edits"].items():
+            d = v["detected"]
+            print(f"  {e:13s} {v['verdict']:17s} " + "  ".join(f"{k} {d[k]['value']:.2f} [{d[k]['lo']:.2f},{d[k]['hi']:.2f}]" for k in d)
+                  + f"  ratio {v['surprise_ratio']['model']:.3f} n={v['n_transitions']}")
+
+
+@app.local_entrypoint()
+def ie_smoke() -> None:
+    _ie_report(ie_smoke_job.remote())
+
+
+@app.local_entrypoint()
+def ie_run() -> None:
+    ie_full_job.spawn()
+    print("spawned the impossible-events screen; fetch with ::ie_fetch")
+
+
+@app.local_entrypoint()
+def ie_fetch() -> None:
+    _ie_report(ie_read.remote())
