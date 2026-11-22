@@ -394,7 +394,6 @@ def _impossible(dest: str, *extra: str, fresh: bool = False) -> dict:
         volume.commit()
     out = json.loads(Path(dest, "impossible_events.json").read_text())
     out.pop("transitions", None)
-    out["heatmaps"] = {p.name: p.read_bytes() for p in sorted(Path(dest, "heatmaps").glob("*.png"))}
     return out
 
 
@@ -408,6 +407,12 @@ def ie_smoke_job() -> dict:
     return {"ie-smoke": out}
 
 
+@app.function(volumes={VOL: volume}, timeout=300)
+def ie_png(name: str, fname: str) -> bytes:
+    """One heatmap file, alone: large function results go through Modal's blob store, which this network blocks."""
+    return Path(RESULTS, name, "heatmaps", fname).read_bytes()
+
+
 @app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
 def ie_full_job() -> dict:
     return {
@@ -419,12 +424,12 @@ def ie_full_job() -> dict:
 @app.function(volumes={VOL: volume}, timeout=300)
 def ie_read() -> dict:
     out = {}
-    for name in ("ie-trained", "ie-random-predictor"):
+    for name in ("ie-smoke", "ie-trained", "ie-random-predictor"):
         f = Path(RESULTS, name, "impossible_events.json")
         if f.exists():
             payload = json.loads(f.read_text())
             payload.pop("transitions", None)
-            payload["heatmaps"] = {p.name: p.read_bytes() for p in sorted(Path(RESULTS, name, "heatmaps").glob("*.png"))}
+            payload["heatmap_files"] = sorted(p.name for p in Path(RESULTS, name, "heatmaps").glob("*.png"))
             out[name] = payload
     return out
 
@@ -432,9 +437,12 @@ def ie_read() -> dict:
 def _ie_report(results: dict) -> None:
     dest = Path(os.environ.get("II_H2_LOCAL", "h2-results"))
     for name, payload in results.items():
-        for fname, data in payload.pop("heatmaps", {}).items():
-            dest.mkdir(parents=True, exist_ok=True)
-            (dest / f"{name}-{fname}").write_bytes(data)
+        for fname in payload.pop("heatmap_files", []):
+            try:
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / f"{name}-{fname}").write_bytes(ie_png.remote(name, fname))
+            except Exception as exc:  # noqa: BLE001 - a heatmap that cannot come back is not worth the run
+                print("heatmap", fname, "not fetched:", exc)
         _save_local(name, payload, None)
         print(name, payload["n_transitions"], "transitions", payload["n_episodes"], "episodes", "wall_s", payload.get("wall_s"))
         for e, v in payload["edits"].items():
@@ -445,7 +453,8 @@ def _ie_report(results: dict) -> None:
 
 @app.local_entrypoint()
 def ie_smoke() -> None:
-    _ie_report(ie_smoke_job.remote())
+    ie_smoke_job.remote()
+    _ie_report({k: v for k, v in ie_read.remote().items() if k == "ie-smoke"})
 
 
 @app.local_entrypoint()
