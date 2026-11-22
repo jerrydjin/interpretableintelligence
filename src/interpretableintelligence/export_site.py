@@ -15,7 +15,7 @@ import tempfile
 from html import escape
 from pathlib import Path
 
-from interpretableintelligence import site_explore
+from interpretableintelligence import site_explore, site_gripper_post
 
 REPO = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).resolve().parent / "static"
@@ -28,6 +28,7 @@ POST_SLUG = "groot-1028"
 POST_TITLE = "A feature tracked our robot's failures. The control said it wasn't the cause."
 POST_DATE = "November 2026"
 VJEPA_RUN = REPO / "demo-data" / "vjepa-slim"
+VJEPA2AC_DATA = REPO / "demo-data" / "vjepa2ac"
 V9_NOTES = REPO / "src" / "interpretableintelligence" / "adapters" / "groot" / "v9" / "V9_NOTES.md"
 
 # The site has four sections. Every page belongs to one, and the nav marks it.
@@ -77,11 +78,13 @@ def export_site(out_dir: Path, groot_dir: Path | None = None, vjepa_dir: Path | 
     shutil.rmtree(keep_dir, ignore_errors=True)
     _copy_static(out / "static")
     (out / "favicon.ico").write_bytes(_favicon_png())
-    _write_home(out / "index.html", summary, run)
+    gripper = site_gripper_post.facts(site_gripper_post.load(VJEPA2AC_DATA))
+    _write_home(out / "index.html", summary, run, gripper)
     _write_explore(out / "explore", run)
     _write_start(out / "start" / "index.html")
     _write_blog_index(out / "blog" / "index.html", summary)
     _write_post(out / "blog" / POST_SLUG, groot / "groot-1028-ablate-summary.json", summary, checks)
+    site_gripper_post.write_post(out / "blog" / site_gripper_post.SLUG, VJEPA2AC_DATA, _page)
     for old, target in REDIRECTS.items():
         _redirect(out / old / "index.html", target)
     return out
@@ -158,7 +161,7 @@ def _redirect(path: Path, target: str) -> None:
     )
 
 
-def _write_home(path: Path, summary: dict, run: dict) -> None:
+def _write_home(path: Path, summary: dict, run: dict, gripper: dict) -> None:
     """The front door: the world model first, then the ways in."""
     lead = run["features"][0]
     clip = site_explore.HERO_CLIP
@@ -187,9 +190,9 @@ def _write_home(path: Path, summary: dict, run: dict) -> None:
     </ul>
     <section>
       <h2>Research</h2>
-      <a class="card" href="/blog/{POST_SLUG}/" data-testid="post-link">
-        <span class="card-title">{escape(POST_TITLE)}</span>
-        <span class="card-text">{escape(_post_teaser(summary))}</span>
+      <a class="card" href="/blog/{site_gripper_post.SLUG}/" data-testid="post-link">
+        <span class="card-title">{escape(site_gripper_post.TITLE)}</span>
+        <span class="card-text">{escape(site_gripper_post.teaser(gripper))}</span>
       </a>
     </section>
     """
@@ -252,6 +255,7 @@ def _write_blog_index(path: Path, summary: dict) -> None:
     body = f"""
     <h1>Research</h1>
     <ul class="rows" data-testid="posts">
+      <li><a href="/blog/{site_gripper_post.SLUG}/"><span class="row-name">{escape(site_gripper_post.TITLE)}</span><span class="meta">{site_gripper_post.DATE}</span></a></li>
       <li><a href="/blog/{POST_SLUG}/"><span class="row-name">{escape(POST_TITLE)}</span><span class="meta">{POST_DATE}</span></a></li>
     </ul>
     """

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f5">
+  <title>A robot world model ignores its own gripper. We looked inside to see why. · interpretable intelligence</title>
+  <meta name="description" content="Meta&#x27;s V-JEPA 2-AC picks the right gripper command 54% of the time. We traced the command through its predictor, knocked parts out and tried to steer it back.">
+  <link rel="stylesheet" href="/static/site.css">
+  <link rel="icon" href="/favicon.ico">
+</head>
+<body>
+  <header class="bar">
+    <a class="mark" href="/" aria-label="interpretable intelligence home"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg><span>interpretable intelligence</span></a>
+    <nav class="site-nav" aria-label="Site sections"><a href="/explore/">Explore</a><a href="/live/">Playground</a><a href="/start/">Your model</a><a href="/blog/" aria-current="page">Research</a><a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a></nav>
+  </header>
+  <main class="prose">
+    <article class="post">
+    <p class="back"><a href="/blog/">Research</a></p>
+    <h1>A robot world model ignores its own gripper. We looked inside to see why.</h1>
+    <p class="lede">Meta's V-JEPA 2-AC plans robot arm moves by imagining the next frame and scoring how close it gets to a goal picture. We used <code>ii</code> to look inside its predictor and ask one narrow question: does it take the gripper into account?</p>
+
+    <h2>The blind spot</h2>
+    <p data-testid="post-headline">We found 119 moments in 68 DROID episodes where the gripper opens or closes while the arm moves less than 3 cm. With the arm step fixed, the planning score preferred the right gripper command 54% of the time (95% interval 45-63%). That is a coin flip. An untrained predictor scores 39%, because it always prefers one direction.</p>
+
+    <h2>Where the command goes</h2>
+    <p>The predictor reads the command once. After block 1, copying the action token from the right-command run into the wrong one restores 0% of the difference, and copying the frame tokens restores 97%.</p>
+    <p data-testid="post-fade">Then the effect fades. Against a 6 cm arm step, the gripper's effect grows to 1.50 times the arm's at block 9, then falls to 0.28 by the output. In an untrained predictor it stays between 1.7 and 2.0 the whole way, so the fade is learned.</p>
+
+    <figure class="chart" data-testid="ratio-chart">
+      <svg viewBox="0 0 560 200" role="img" aria-label="Gripper effect over arm effect after each predictor block, trained against untrained predictor">
+        <text x="28" y="178.0" text-anchor="end">0</text><line x1="34" x2="490" y1="174.0" y2="174.0" class="grid"/><text x="28" y="102.4" text-anchor="end">1</text><line x1="34" x2="490" y1="98.4" y2="98.4" class="grid"/><text x="28" y="26.7" text-anchor="end">2</text><line x1="34" x2="490" y1="22.7" y2="22.7" class="grid"/>
+        <polyline points="34.0,22.1 53.8,26.1 73.7,29.5 93.5,30.6 113.3,32.8 133.1,33.6 153.0,34.6 172.8,36.3 192.6,37.5 212.4,38.3 232.3,39.0 252.1,40.3 271.9,41.8 291.7,42.2 311.6,43.0 331.4,43.3 351.2,44.2 371.0,45.2 390.9,46.1 410.7,46.7 430.5,46.8 450.3,46.9 470.2,47.0 490.0,47.3" class="line-quiet"/>
+        <polyline points="34.0,128.1 53.8,127.5 73.7,127.6 93.5,126.6 113.3,121.3 133.1,112.3 153.0,85.9 172.8,65.5 192.6,60.9 212.4,72.2 232.3,87.8 252.1,107.5 271.9,118.9 291.7,132.5 311.6,135.6 331.4,139.2 351.2,141.4 371.0,143.4 390.9,145.7 410.7,148.3 430.5,150.6 450.3,152.7 470.2,153.7 490.0,153.1" class="line"/>
+        <text x="496" y="157.1" class="label">trained</text><text x="496" y="51.3" class="label-quiet">untrained</text>
+        <text x="34.0" y="192" text-anchor="middle">1</text><text x="133.1" y="192" text-anchor="middle">6</text><text x="252.1" y="192" text-anchor="middle">12</text><text x="371.0" y="192" text-anchor="middle">18</text><text x="490.0" y="192" text-anchor="middle">24</text>
+      </svg>
+      <figcaption>Gripper effect divided by the effect of a 6 cm arm step, on the frame tokens after each of the 24 predictor blocks. 119 events.</figcaption>
+    </figure>
+
+    <h2>Looking for what turns it down</h2>
+    <ul>
+      <li data-testid="post-sae">A sparse dictionary at block 9 has a latent that moves with the command on 75% of held-out events, against 65% for the best of 5 untrained dictionaries. Setting it and the next two latents to their right-command values changes the final prediction by 0%.</li>
+      <li data-testid="post-suspects">Attention in blocks 10, 12 and 14 each removes 9-16% of the gripper difference it receives, while adding 6-10% to the arm's. Each half of the episodes picked them on its own.</li>
+      <li data-testid="post-knockout">Knocking the top parts out recovered none of what was lost (-7%), the same as random parts (-7%). With every attention output after block 9 knocked out, the difference stays up to 33% larger, then the last two blocks bring it back to where it was (-0.2% recovered).</li>
+      <li data-testid="post-steer">Adding the block-9 effect back at the output raised the right-command preference to 59% (49-68%). That is above every random direction (45-54%), but short of the 60% bar we set before the run.</li>
+    </ul>
+
+    <h2>What we think is going on</h2>
+    <p>A probe on the encoder reads gripper open or closed on new episodes at AUROC 0.53, about the same as raw pixels (0.52). The predictor is trained to match those latents, and they barely change when the gripper does. Our reading is that the model learned the gripper hardly matters to its target, and its last blocks enforce that however we edit the middle. If so, the fix is a view of the gripper the encoder can see, not an edit inside the predictor. We have not tested that.</p>
+    <p data-testid="post-verdict">None of this is a finding. The dictionary latent passed its own check by a small margin. The knockouts and the steering did not pass. It is all offline, on recorded video, one planning step ahead.</p>
+
+    <details class="appendix" data-testid="appendix">
+      <summary>Every number behind this post</summary>
+      <p>Model: V-JEPA 2-AC (ViT-g encoder, 24-block action-conditioned predictor) from Meta's vjepa2 code, fp16 on a T4. Data: 100 clips from LeRobot's droid_100 sample, 12 s each, at the model's 4 frames per second. Intervals resample whole episodes.</p>
+      <p>Goal score: prefers the right command 54% (45-63%); untrained predictor 39% (33-44%). Verdict <code>gripper_blind</code>.</p>
+      <p>Encoder probe AUROC 0.534 (0.471-0.597); pixels 0.520. Gripper over arm by block, trained: 0.61 0.61 0.61 0.63 0.70 0.82 1.16 1.43 1.50 1.35 1.14 0.88 0.73 0.55 0.51 0.46 0.43 0.41 0.37 0.34 0.31 0.28 0.27 0.28. Untrained: 2.01 1.96 1.91 1.90 1.87 1.86 1.84 1.82 1.80 1.79 1.78 1.77 1.75 1.74 1.73 1.73 1.72 1.70 1.69 1.68 1.68 1.68 1.68 1.68.</p>
+      <p>Dictionary: BatchTopK, 4096 latents, k=32, explained variance 0.81, 60 held-out events in 37 episodes. Top latent 75% (64-85%). Verdict <code>gripper_feature</code>.</p>
+      <p>Knockouts, held-out fold: top parts -0.072 (-0.083 to -0.061), random sets mean -0.066; top heads -0.025, random -0.006; all attention after the peak -0.002. Final gripper drift 0.0270 with all attention knocked out, 0.0275 without. Steering: baseline 54%, steered 59%, arm check 96%, score change 1.1%, 10 random directions 45-54%. Verdicts: parts <code>none</code>, heads <code>none</code>, steering <code>no_fix</code>.</p>
+      <p>Commands: <code>ii gripper-probe</code>, <code>ii gripper-trace</code>, <code>ii gripper-sae --layer 9</code>, <code>ii gripper-circuit</code>. Sources: <a href="gripper-probe.json"><code>gripper-probe.json</code></a>, <a href="gripper-probe-random-predictor.json"><code>gripper-probe-random-predictor.json</code></a>, <a href="gripper-trace.json"><code>gripper-trace.json</code></a>, <a href="gripper-trace-random-predictor.json"><code>gripper-trace-random-predictor.json</code></a>, <a href="gripper-sae-L9.json"><code>gripper-sae-L9.json</code></a>, <a href="gripper-circuit.json"><code>gripper-circuit.json</code></a>.</p>
+    </details>
+    </article>
+    </main>
+  <footer class="foot"><p>ii is free, local and open on <a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a>.</p></footer>
+</body>
+</html>

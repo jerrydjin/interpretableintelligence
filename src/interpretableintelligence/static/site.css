@@ -206,3 +206,11 @@ h3 { font-size: var(--t-lead); line-height: 1.25; margin: 28px 0 8px; }
 .mark-pass { background: var(--real); }
 .mark-fail { background: var(--fail); }
 .mark-pending { border: 1.5px solid var(--ink-3); }
+.chart { margin: 20px 0 28px; max-width: 68ch; }
+.chart svg { width: 100%; height: auto; display: block; font-size: 11px; fill: var(--ink-3); }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .line { fill: none; stroke: var(--ink); stroke-width: 2; }
+.chart .line-quiet { fill: none; stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.chart .label { fill: var(--ink); }
+.chart .label-quiet { fill: var(--ink-3); }
+.chart figcaption { font-size: var(--t-small); color: var(--ink-3); margin-top: 6px; }
