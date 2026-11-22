@@ -339,3 +339,43 @@ def sae(layer: int, full: bool = False) -> None:
             c, r = v["consistency"], v["recovered"]
             print(f"  {arm:24s} latents {v['latents']} consistency {c['value']:.3f} [{c['lo']:.3f}, {c['hi']:.3f}] "
                   f"recovered {r['value']:+.4f} [{r['lo']:+.4f}, {r['hi']:+.4f}]")
+
+
+# ----------------------------------------------------------------------------- inside the model: ii gripper-circuit
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def circuit_job(smoke: bool = True) -> dict:
+    name = "circuit-smoke" if smoke else "circuit"
+    dest = f"{RESULTS}/{name}"
+    extra = ["--max-clips", "10", "--random-sets", "4", "--bootstrap", "200"] if smoke else []
+    if smoke or not Path(dest, "gripper_circuit.json").exists():
+        _sh(["ii", "gripper-circuit", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "gripper_circuit.json").read_text())
+    out.pop("events", None)
+    return {name: out}
+
+
+@app.local_entrypoint()
+def circuit(full: bool = False) -> None:
+    for name, payload in circuit_job.remote(not full).items():
+        _save_local(name, payload, None)
+        print(name, payload["verdict"], payload["n_tested"], "held-out events", payload["n_episodes"], "episodes")
+        print("  ratio curve", " ".join(f"{x:.3f}" for x in payload["ratio_curve"]))
+        for f, p in payload["picks"].items():
+            print("  fold", f, p)
+        for kind, k in payload["knockout"].items():
+            r, pc = k["recovered"], k["prefers_correct"]
+            print(f"  knockout {kind}: recovered {r['value']:+.3f} [{r['lo']:+.3f}, {r['hi']:+.3f}] random mean {k.get('random_mean', float('nan')):+.3f} "
+                  f"max {k.get('random_max', float('nan')):+.3f}; prefers_correct {pc['value']:.3f} [{pc['lo']:.3f}, {pc['hi']:.3f}]")
+        print("  baseline", payload["baseline"])
+        for a, s in payload["steer"].items():
+            print(f"  steer {a}: {s}")
+        print("  steer random", payload["steer_random"])
+        print("  attention", payload["attention"])
+        print("  baseline check", payload["baseline_check"])
+        print("  wrong-command drift per block", " ".join(f"{x:.3f}" for x in payload["curve"]))
+        for kind, k in payload["knockout"].items():
+            print(f"  knocked {kind} drift", " ".join(f"{x:.3f}" for x in k["curve"]))
+            print(f"  random {kind} drift ", " ".join(f"{x:.3f}" for x in k.get("random_curve", [])))

@@ -1176,6 +1176,67 @@ def gripper_trace_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("gripper-circuit")
+def gripper_circuit_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for gripper_circuit.json.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    tiny: Annotated[bool, typer.Option("--tiny", help="CPU stand-in with a planted gripper eraser (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    components: Annotated[int, typer.Option("--components", min=1, help="Attention or MLP parts knocked out together.")] = 4,
+    heads: Annotated[int, typer.Option("--heads", min=1, help="Attention heads knocked out together.")] = 8,
+    random_sets: Annotated[int, typer.Option("--random-sets", min=1, help="Random sets of the same size, the knockout control.")] = 20,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the episode folds, random sets, directions and bootstrap.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Which predictor parts shrink V-JEPA 2-AC's gripper command, and does undoing them help? (Offline.)
+
+    Scores every attention and MLP output (and head) on how much of the gripper difference it
+    removes, knocks the top ones out on held-out episodes against random sets, and re-injects the
+    command's peak-layer effect against random directions. The verdict rules are fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_circuit_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.gripper_circuit import run_gripper_circuit
+
+    try:
+        if tiny:
+            model = tiny_circuit_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, seed=seed)
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_gripper_circuit(model, trajectories, out, k_comp=components, k_head=heads, n_rand=random_sets, seed=seed,
+                                     n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    v = result["verdict"]
+    typer.echo(f"verdict: components {v['components']}, heads {v['heads']}, steer {v['steer']} on {result['n_tested']} held-out events "
+               f"({result['n_episodes']} episodes)")
+    for f, p in result["picks"].items():
+        if p:
+            typer.echo(f"  fold {f} picks: peak layer {p['peak']}, parts {', '.join(p['comps'])}, heads {', '.join(p['heads'])}")
+    for kind, k in result["knockout"].items():
+        r = k["recovered"]
+        ctrl = f"  random mean {k['random_mean']:+.3f}, max {k['random_max']:+.3f}" if "random_mean" in k else "  (descriptive)"
+        typer.echo(f"  knockout {kind:8s} recovered {r['value']:+.3f} [{r['lo']:+.3f}, {r['hi']:+.3f}]{ctrl}")
+    b = result["baseline"]["prefers_correct"]
+    typer.echo(f"  prefers_correct     baseline {b['value']:.3f} [{b['lo']:.3f}, {b['hi']:.3f}]")
+    for a, s in result["steer"].items():
+        p = s["prefers_correct"]
+        typer.echo(f"  steer alpha {a:4s}    {p['value']:.3f} [{p['lo']:.3f}, {p['hi']:.3f}]  arm_pref {s['arm_pref']['value']:.3f}  damage {s['damage']['value']:+.3f}")
+    typer.echo(f"wrote {out}")
+
+
 @app.command("gripper-sae")
 def gripper_sae_cmd(
     clips: Annotated[
