@@ -15,36 +15,24 @@
   </header>
   <main class="prose">
     <h1>Run it on your own model</h1>
-    <p class="lede"><code>ii</code> is free and runs on your laptop. Give it a Hugging Face vision model and a folder of short videos, and you get the same playground, with a check on every feature.</p>
-    <ol class="steps steps-wide" data-testid="start-steps">
-      <li>
-        <h3>Install</h3>
-        <p>You need git and <a href="https://docs.astral.sh/uv/">uv</a>. No GPU, no account.</p>
-        <pre class="code"><code>git clone https://github.com/jerrydjin/interpretableintelligence.git
+    <p class="lede">Free, on your laptop. No GPU, no account.</p>
+    <h2>Install</h2>
+    <p>You need git and <a href="https://docs.astral.sh/uv/">uv</a>.</p>
+    <pre class="code"><code>git clone https://github.com/jerrydjin/interpretableintelligence
 cd interpretableintelligence
 uv sync</code></pre>
-      </li>
-      <li>
-        <h3>Try the practice model</h3>
-        <p><code data-cmd="try">ii try</code> finds features in a small model with three planted on purpose, so you can check what the tool finds against the truth. About 15 seconds.</p>
-        <pre class="code"><code>uv run ii try</code></pre>
-      </li>
-      <li>
-        <h3>Your model, your clips</h3>
-        <p>Any Hugging Face vision model works: ViT-style and video encoders, CNNs, the vision tower of CLIP, SigLIP and VLMs. No clips of your own? <code>uv run ii get-clips --out clips/droid</code> downloads 100 short robot clips.</p>
-        <pre class="code"><code>uv run ii run hf --model facebook/dinov2-small \
+    <h2>Try the practice model</h2>
+    <p><code data-cmd="try">ii try</code> runs on a small model with three features planted on purpose, so you can check what it finds against the truth. About 15 seconds.</p>
+    <pre class="code"><code>uv run ii try</code></pre>
+    <h2>Your model</h2>
+    <p>Any Hugging Face vision or video model. No clips? <code>uv run ii get-clips --out clips/droid</code> downloads 100 short robot clips.</p>
+    <pre class="code"><code>uv run ii run hf --model facebook/dinov2-small \
   --clips clips/droid --out runs/mine --no-score --steer</code></pre>
-      </li>
-      <li>
-        <h3>Check what you found</h3>
-        <p>Run it again without <code>--no-score</code>. A feature gets a tick only when it fires across many clips, its name holds on clips held back, switching it off beats random look-alike edits, and an untrained copy of the model does not have it.</p>
-      </li>
-    </ol>
-    <h2>Robot policies</h2>
-    <p><code data-cmd="rollouts">ii rollouts</code> switches features off inside a policy and compares task success against matched random-feature controls and an untrained dictionary, so a drop that any edit would cause is not mistaken for a finding. <a href="/blog/groot-1028/">How we used it on GR00T.</a></p>
+    <h2>Score it</h2>
+    <p>Run it again without <code>--no-score</code> and every feature gets <a href="/explore/">the four checks</a>.</p>
     <h2>Commands</h2>
-    <ul class="commands" data-testid="commands"><li><code data-cmd="try">ii try</code><span>New here? Start with this. Finds features in a small practice model and opens the playground.</span></li><li><code data-cmd="run">ii run</code><span>Capture, train, extract features, score what is missing, then serve the viewer.</span></li><li><code data-cmd="view">ii view</code><span>Start a local viewer for a run folder and open it in a browser.</span></li><li><code data-cmd="rollouts">ii rollouts</code><span>Switch features off inside a policy and compare task success against matched random controls.</span></li><li><code data-cmd="validate">ii validate</code><span>Validate a run folder against the schema.</span></li></ul>
-    <p><a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md">Every command is in the README.</a></p>
+    <ul class="commands" data-testid="commands"><li><code data-cmd="run">ii run</code><span>Capture, train, extract features, score what is missing, then serve the viewer.</span></li><li><code data-cmd="view">ii view</code><span>Start a local viewer for a run folder and open it in a browser.</span></li><li><code data-cmd="rollouts">ii rollouts</code><span>Switch features off inside a policy and compare task success against matched random controls.</span></li><li><code data-cmd="validate">ii validate</code><span>Validate a run folder against the schema.</span></li></ul>
+    <p class="fine"><a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/README.md">All commands</a></p>
     </main>
   <footer class="foot"><p>ii is free, local and open on <a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a>.</p></footer>
 </body>

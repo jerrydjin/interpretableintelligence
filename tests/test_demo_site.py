@@ -149,7 +149,7 @@ def test_start_page_commands_exist():
     named = set(re.findall(r'data-cmd="([^"]+)"', page))
     assert named <= cli
     commands = re.search(r'<ul class="commands" data-testid="commands">(.*?)</ul>', page, re.S).group(1)
-    assert set(re.findall(r'data-cmd="([^"]+)"', commands)) == {"try", "run", "view", "rollouts", "validate"}
+    assert set(re.findall(r'data-cmd="([^"]+)"', commands)) == {"run", "view", "rollouts", "validate"}
     assert "\u2014" not in page
 
 
@@ -171,7 +171,7 @@ def test_blog_post_reads_every_number_from_the_result_files():
     assert f"{sum(r['verdict'] == 'fall' for r in matched)} of {len(matched)} matched random features" in text
     assert f"{fell} of {len(controls)} random controls fell" in text
     assert summary["real"] is False and "real=false" in text
-    assert 'data-testid="post-verdict">Tested: no causal effect found<' in page
+    assert 'data-testid="post-verdict">neither candidate passed it<' in page
     assert f"{summary['episodes_logged']} rollouts in total." in text
     for row in summary["table"]:
         assert f"{row['cond']} {row['successes']}/{row['n']}" in text
