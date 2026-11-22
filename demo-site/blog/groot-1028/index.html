@@ -16,9 +16,9 @@
   </header>
   <main class="prose">
     <article class="post">
-    <p class="meta"><a href="/blog/">Research</a> · November 2026</p>
+    <p class="back"><a href="/blog/">Research</a></p>
     <h1>A feature tracked our robot&#x27;s failures. The control said it wasn&#x27;t the cause.</h1>
-    <p class="lede">We build <code>ii</code> so that anyone can look inside a vision or robot model. To test it on something real, we pointed it at GR00T N1.7, NVIDIA's robot policy, on LIBERO-plus task 1028: a kitchen task it completes about half the time. We wanted to know whether one learned feature inside the policy makes it fail.</p>
+    <p class="lede">We pointed <code>ii</code> at GR00T N1.7, NVIDIA's robot policy, on LIBERO-plus task 1028, a kitchen task it completes about half the time. Does one learned feature inside it make it fail?</p>
 
     <h2>What we did</h2>
     <ol>
@@ -30,12 +30,11 @@
     <p>Before any of that, a sanity check: putting the dictionary's reconstruction in place of the real activations, with nothing switched off, left the actions identical to the baseline in 8 of 8 episodes. So the hook itself does not move the policy.</p>
 
     <h2>It looked like the answer</h2>
-    <p data-testid="post-headline">Switching feature 720 off dropped success from 39/75 to 1/9. The stop rule called it a fall after 9 episodes. That is the kind of number that ends up on a slide.</p>
+    <p data-testid="post-headline">Switching feature 720 off dropped success from 39/75 to 1/9. The stop rule called it a fall after 9 episodes.</p>
 
     <h2>Then the control</h2>
     <p data-testid="post-controls">Next to every candidate we switched off random features matched to it. For feature 720, 3 of 10 matched random features also made the policy fail. Across both candidates, 5 of 20 random controls fell.</p>
-    <p>Breaking a policy is easy. Many edits make it worse, so a drop when you remove a feature only says the policy uses that part of its activations. If feature 720 caused failures, switching it off should have raised success. That was the test, and neither candidate passed it. Both stay <code>real=false</code>.</p>
-    <p class="verdict" data-testid="post-verdict">Tested: no causal effect found</p>
+    <p>Breaking a policy is easy. Many edits make it worse, so a drop when you remove a feature only says the policy uses that part of its activations. If feature 720 caused failures, switching it off should have raised success. That was the test, and <span data-testid="post-verdict">neither candidate passed it</span>. Both stay <code>real=false</code>.</p>
 
     <h2>What we changed in ii</h2>
     <p>The result shaped the tool. A feature now counts as a finding on a robot policy only when all of these hold on shared seeds:</p>
@@ -46,9 +45,6 @@
       <li>It beats an untrained dictionary run through the same picker, so the feature has to do better than what random weights would produce.</li>
     </ul>
     <p><code data-cmd="rollouts">ii rollouts</code> with <code>--pick</code> runs all four. The ablation in this post ran on the repo's earlier runner (<a href="https://github.com/jerrydjin/interpretableintelligence/blob/main/src/interpretableintelligence/adapters/groot/v9/ablate_v9.py"><code>ablate_v9.py</code></a>), before the untrained-dictionary control shipped.</p>
-
-    <h2>Try the same loop</h2>
-    <p>Finding features, switching them off and comparing against random look-alikes is what the <a href="/live/">playground</a> does on a vision model in your browser, and what <a href="/start/"><code>ii run hf</code></a> does on your own model.</p>
 
     <details class="appendix" data-testid="appendix">
       <summary>Every number behind this post</summary>

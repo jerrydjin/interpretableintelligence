@@ -1,5 +1,9 @@
 {
   "repo": "jerrydjin/interpretableintelligence",
-  "tag": null,
-  "sha256": {}
+  "tag": "server-v0.1.0",
+  "sha256": {
+    "interpretableintelligence-server-linux-aarch64": "56602cee8912cf70599a2c47b27774a4883db706b58f247d2f5f80e8cb94d77b",
+    "interpretableintelligence-server-linux-x86_64": "ad82e264848a3971ab7976c033e44ac83cc8133f6faea6e65d53f90a96b9d5be",
+    "interpretableintelligence-server-macos-arm64": "4463cc50e1b64417e16d52e73bca5c4e1ece8cb1038f487604aaab0eaf4a5ffe"
+  }
 }

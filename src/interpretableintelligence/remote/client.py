@@ -8,7 +8,8 @@ The flow, start to finish:
 3. Start the worker. Each finished stage arrives as a file list; files whose sha256 differs from
    the local copy are downloaded, checked and moved into place.
 4. As soon as the folder has what the viewer needs (after ``features``), serve it locally. Later
-   stages reload it in place, and the page refreshes itself (``LiveRun``).
+   stages bump the ``generation`` in the viewer's ``--live`` status file, the viewer loads the
+   folder again, and the page refreshes itself (``view_launch``).
 5. Write ``remote.json`` (what ran, where, for how long, and the estimated cost) next to the run.
 
 The local folder is a mirror of the remote one. Run outputs are the pipeline's own, unchanged.
@@ -19,9 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import threading
 import time
-import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -158,40 +157,32 @@ class _Mirror:
 
 
 class _Viewer:
-    def __init__(self, out: Path, clips_dir: Path, live: dict, host: str, port: int, open_browser: bool, log) -> None:
-        from interpretableintelligence.view import LiveRun, bind_server  # noqa: PLC0415
+    """The viewer on a run that is still filling in: status and a reload ``generation`` go to the
+    ``--live`` file the Rust binary watches (``view_launch``)."""
 
-        self.model = LiveRun(out, clips_dir, live)
-        self.httpd = bind_server(self.model, host, int(port))
-        self.thread = threading.Thread(target=self.httpd.serve_forever, name="ii-remote-view", daemon=True)
-        self.thread.start()
-        bound_host, bound_port = self.httpd.server_address[:2]
-        self.url = f"http://{bound_host}:{bound_port}/"
+    def __init__(self, out: Path, clips_dir: Path, live: dict, host: str, port: int, open_browser: bool, log) -> None:
+        from interpretableintelligence.view_launch import open_in_browser, start_viewer  # noqa: PLC0415
+
+        self.viewer = start_viewer(out, clips_dir, host=host, port=int(port), live=live, log=log)
+        self.url = self.viewer.url
         log(f"viewer {self.url}  (updates live as the remote run finishes stages)")
         if open_browser:
-            try:
-                webbrowser.open(self.url)
-            except OSError:
-                pass
+            open_in_browser(self.url)
 
     def reload(self, log) -> None:
         try:
-            self.model.reload()
+            self.viewer.reload()
         except Exception as exc:  # noqa: BLE001 (a half-synced folder; the next stage fixes it)
             log(f"remote: viewer kept the previous state ({type(exc).__name__}: {exc})")
 
+    def update(self, **fields) -> None:
+        self.viewer.update(**fields)
+
     def wait(self) -> None:
-        try:
-            while self.thread.is_alive():
-                self.thread.join(timeout=0.5)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self.close()
+        self.viewer.wait()
 
     def close(self) -> None:
-        self.httpd.shutdown()
-        self.httpd.server_close()
+        self.viewer.close()
 
 
 def _bytes(n: int) -> str:
@@ -366,7 +357,7 @@ def execute_remote(
                         elif changed:
                             viewer.reload(log)
                         if viewer is not None:
-                            viewer.model.update(stage=name)
+                            viewer.update(stage=name)
                 elif kind == "done":
                     changed, _nbytes = mirror.apply(session, last_files, strict=True)
                     if viewer is not None and changed:
@@ -397,7 +388,7 @@ def execute_remote(
         write_record()
         _final_cost_line(rate, state, time.monotonic() - clock, max_cost, log)
         if viewer is not None:
-            viewer.model.update(state=state["status"], finished_at=time.time())
+            viewer.update(state=state["status"], finished_at=time.time())
 
     if state["status"] != "done":
         if viewer is not None:

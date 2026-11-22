@@ -92,7 +92,7 @@ cargo run -p interpretableintelligence-server -- serve --runs runs --clips clips
 uv run interpretableintelligence serve --runs runs --port 8000
 ```
 
-The same binary serves the local viewer for one run folder (`interpretableintelligence-server view runs/demo --clips clips`), matched route for route against the Python viewer by `tests/test_view_rust.py`. `interpretableintelligence.server_bin` finds it: `II_SERVER`, else a `cargo build` in a checkout, else the prebuilt binary for the platform from the GitHub release pinned in `server_release.json`, checked against its SHA-256. The **Release viewer binary** workflow (`.github/workflows/release-server.yml`, run by hand) builds Linux x86_64, Linux aarch64 and macOS arm64.
+The same binary serves the local viewer for one run folder (`interpretableintelligence-server view runs/demo --clips clips`), matched route for route against the Python viewer by `tests/test_view_rust.py`. `interpretableintelligence.server_bin` finds it: `II_SERVER`, else a `cargo build` in a checkout, else the prebuilt binary for the platform from the GitHub release pinned in `server_release.json`, checked against its SHA-256. The **Release viewer binary** workflow (`.github/workflows/release-server.yml`, run by hand) builds Linux x86_64, Linux aarch64 and macOS arm64. `ii view`, `ii try`, `ii run` and `ii run --remote` start that binary (`view_launch.py`); `--steer` runs a small Python steering service the binary forwards `/api/steer` to. The Python viewer in `view.py` still serves a run when no binary is available for the machine, when the run's clips are video files (the binary does not decode video frames or transcode yet), or with `II_VIEWER=python`.
 
 ```bash
 uv run interpretableintelligence explain --run runs/demo --clip clips/demo/clip-000.npy
@@ -182,7 +182,7 @@ uv run pytest
 
 Feature `3` is the planted reacher feature. The command prints the success delta, a paired Wald interval, the exact McNemar p-value, the percentile against the controls, and rollouts per validated feature. Controls stop early only for efficacy: a one-sided sequential probability ratio test on discordant pairs, with `--alpha` split across the controls. A control that does not cross that boundary runs to `--episodes`. The percentile splits ties, so a control whose delta matches the other controls scores 50. `--policy fake-null` plants nothing: success is a fair coin of the edited latents. A second invocation skips episodes already written.
 
-`uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust server tests need `cargo` (https://rustup.rs) or `II_SERVER` pointing at a built binary; and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
+`uv run pytest` needs nothing beyond `uv sync`. A few groups skip themselves, with the reason, when a tool is missing: the browser tests need Chrome or Chromium (an installed one, `uv run playwright install chromium`, or a path in `II_CHROME`); the guide tests need `node`; the Rust server tests need `cargo` (https://rustup.rs), `II_SERVER` pointing at a built binary, or network access to download the pinned release binary; and the GR00T box scripts under `adapters/groot/tests/` need a GPU box's checkpoint and trees (`box_paths.py` there says where they look).
 
 ### Compare models on the same clips
 
@@ -247,6 +247,7 @@ The model runs on a small backend (`ii serve-live` on your machine, `ii deploy-l
 | `src/interpretableintelligence/run.py` | `execute_run` entry that does not start the viewer, and `interpretableintelligence rank` |
 | `scripts/compare_attribution_vs_ablation.py` | Spearman and top-K overlap for a finished run |
 | `src/interpretableintelligence/view.py` | Local clip viewer over a finished run folder |
+| `src/interpretableintelligence/view_launch.py` | Starts the Rust viewer binary for `view`, `try`, `run` and `run --remote`, with the steering service and the `--live` status file |
 | `src/interpretableintelligence/steer.py` | Playground steering behind `view --steer` |
 | `src/interpretableintelligence/steer_scorecard.py` | `ii steer-scorecard`: remove and boost features against matched controls, `steering/` |
 | `src/interpretableintelligence/probe.py` | `ii probe`: held-out failure probe on trained-SAE latents vs a random-weights SAE and raw activations, `probe/` |

@@ -219,42 +219,30 @@ def _write_start(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     commands = dict(_ii_commands())
     known = set(commands)
-    useful = ("try", "run", "view", "rollouts", "validate")
+    useful = ("run", "view", "rollouts", "validate")
     command_items = "".join(
         f"<li>{_cmd(name, known)}<span>{escape(commands[name])}</span></li>" for name in useful
     )
     body = f"""
     <h1>Run it on your own model</h1>
-    <p class="lede"><code>ii</code> is free and runs on your laptop. Give it a Hugging Face vision model and a folder of short videos, and you get the same playground, with a check on every feature.</p>
-    <ol class="steps steps-wide" data-testid="start-steps">
-      <li>
-        <h3>Install</h3>
-        <p>You need git and <a href="https://docs.astral.sh/uv/">uv</a>. No GPU, no account.</p>
-        <pre class="code"><code>git clone {GITHUB_URL}.git
+    <p class="lede">Free, on your laptop. No GPU, no account.</p>
+    <h2>Install</h2>
+    <p>You need git and <a href="https://docs.astral.sh/uv/">uv</a>.</p>
+    <pre class="code"><code>git clone {GITHUB_URL}
 cd interpretableintelligence
 uv sync</code></pre>
-      </li>
-      <li>
-        <h3>Try the practice model</h3>
-        <p>{_cmd("try", known)} finds features in a small model with three planted on purpose, so you can check what the tool finds against the truth. About 15 seconds.</p>
-        <pre class="code"><code>uv run ii try</code></pre>
-      </li>
-      <li>
-        <h3>Your model, your clips</h3>
-        <p>Any Hugging Face vision model works: ViT-style and video encoders, CNNs, the vision tower of CLIP, SigLIP and VLMs. No clips of your own? <code>uv run ii get-clips --out clips/droid</code> downloads 100 short robot clips.</p>
-        <pre class="code"><code>uv run ii run hf --model facebook/dinov2-small \\
+    <h2>Try the practice model</h2>
+    <p>{_cmd("try", known)} runs on a small model with three features planted on purpose, so you can check what it finds against the truth. About 15 seconds.</p>
+    <pre class="code"><code>uv run ii try</code></pre>
+    <h2>Your model</h2>
+    <p>Any Hugging Face vision or video model. No clips? <code>uv run ii get-clips --out clips/droid</code> downloads 100 short robot clips.</p>
+    <pre class="code"><code>uv run ii run hf --model facebook/dinov2-small \\
   --clips clips/droid --out runs/mine --no-score --steer</code></pre>
-      </li>
-      <li>
-        <h3>Check what you found</h3>
-        <p>Run it again without <code>--no-score</code>. A feature gets a tick only when it fires across many clips, its name holds on clips held back, switching it off beats random look-alike edits, and an untrained copy of the model does not have it.</p>
-      </li>
-    </ol>
-    <h2>Robot policies</h2>
-    <p>{_cmd("rollouts", known)} switches features off inside a policy and compares task success against matched random-feature controls and an untrained dictionary, so a drop that any edit would cause is not mistaken for a finding. <a href="/blog/{POST_SLUG}/">How we used it on GR00T.</a></p>
+    <h2>Score it</h2>
+    <p>Run it again without <code>--no-score</code> and every feature gets <a href="/explore/">the four checks</a>.</p>
     <h2>Commands</h2>
     <ul class="commands" data-testid="commands">{command_items}</ul>
-    <p><a href="{README_URL}">Every command is in the README.</a></p>
+    <p class="fine"><a href="{README_URL}">All commands</a></p>
     """
     path.write_text(_page("Your model · interpretable intelligence", "start", body), encoding="utf-8")
 
@@ -263,9 +251,8 @@ def _write_blog_index(path: Path, summary: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = f"""
     <h1>Research</h1>
-    <p class="lede">What we found when we pointed <code>ii</code> at real models.</p>
-    <ul class="posts" data-testid="posts">
-      <li><a class="card" href="/blog/{POST_SLUG}/"><span class="meta">{POST_DATE}</span><span class="card-title">{escape(POST_TITLE)}</span><span class="card-text">{escape(_post_teaser(summary))}</span></a></li>
+    <ul class="rows" data-testid="posts">
+      <li><a href="/blog/{POST_SLUG}/"><span class="row-name">{escape(POST_TITLE)}</span><span class="meta">{POST_DATE}</span></a></li>
     </ul>
     """
     path.write_text(_page("Research · interpretable intelligence", "blog", body), encoding="utf-8")
@@ -301,9 +288,9 @@ def _write_post(dest: Path, summary_path: Path, summary: dict, checks: dict) -> 
     real = "true" if summary["real"] is True else "false"
     body = f"""
     <article class="post">
-    <p class="meta"><a href="/blog/">Research</a> · {POST_DATE}</p>
+    <p class="back"><a href="/blog/">Research</a></p>
     <h1>{escape(POST_TITLE)}</h1>
-    <p class="lede">We build <code>ii</code> so that anyone can look inside a vision or robot model. To test it on something real, we pointed it at {escape(identity["name"])}, NVIDIA's robot policy, on LIBERO-plus task {escape(identity["task"])}: a kitchen task it completes about half the time. We wanted to know whether one learned feature inside the policy makes it fail.</p>
+    <p class="lede">We pointed <code>ii</code> at {escape(identity["name"])}, NVIDIA's robot policy, on LIBERO-plus task {escape(identity["task"])}, a kitchen task it completes about half the time. Does one learned feature inside it make it fail?</p>
 
     <h2>What we did</h2>
     <ol>
@@ -315,12 +302,11 @@ def _write_post(dest: Path, summary_path: Path, summary: dict, checks: dict) -> 
     <p>Before any of that, a sanity check: putting the dictionary's reconstruction in place of the real activations, with nothing switched off, left the actions identical to the baseline in {checks["recon_identical"]} of {checks["recon_compared"]} episodes. So the hook itself does not move the policy.</p>
 
     <h2>It looked like the answer</h2>
-    <p data-testid="post-headline">Switching feature {escape(single_name)} off dropped success from {_fraction(baseline)} to {_fraction(single)}. The stop rule called it a fall after {int(single["n"])} episodes. That is the kind of number that ends up on a slide.</p>
+    <p data-testid="post-headline">Switching feature {escape(single_name)} off dropped success from {_fraction(baseline)} to {_fraction(single)}. The stop rule called it a fall after {int(single["n"])} episodes.</p>
 
     <h2>Then the control</h2>
     <p data-testid="post-controls">Next to every candidate we switched off random features matched to it. For feature {escape(single_name)}, {matched_fell} of {len(matched)} matched random features also made the policy fail. Across both candidates, {fell} of {len(controls)} random controls fell.</p>
-    <p>Breaking a policy is easy. Many edits make it worse, so a drop when you remove a feature only says the policy uses that part of its activations. If feature {escape(single_name)} caused failures, switching it off should have raised success. That was the test, and neither candidate passed it. Both stay <code>real={real}</code>.</p>
-    <p class="verdict" data-testid="post-verdict">{escape(_groot_status(summary))}</p>
+    <p>Breaking a policy is easy. Many edits make it worse, so a drop when you remove a feature only says the policy uses that part of its activations. If feature {escape(single_name)} caused failures, switching it off should have raised success. That was the test, and <span data-testid="post-verdict">neither candidate passed it</span>. Both stay <code>real={real}</code>.</p>
 
     <h2>What we changed in ii</h2>
     <p>The result shaped the tool. A feature now counts as a finding on a robot policy only when all of these hold on shared seeds:</p>
@@ -331,9 +317,6 @@ def _write_post(dest: Path, summary_path: Path, summary: dict, checks: dict) -> 
       <li>It beats an untrained dictionary run through the same picker, so the feature has to do better than what random weights would produce.</li>
     </ul>
     <p>{_cmd("rollouts", set(dict(_ii_commands())))} with <code>--pick</code> runs all four. The ablation in this post ran on the repo's earlier runner (<a href="{RUNNER_URL}"><code>ablate_v9.py</code></a>), before the untrained-dictionary control shipped.</p>
-
-    <h2>Try the same loop</h2>
-    <p>Finding features, switching them off and comparing against random look-alikes is what the <a href="/live/">playground</a> does on a vision model in your browser, and what <a href="/start/"><code>ii run hf</code></a> does on your own model.</p>
 
     <details class="appendix" data-testid="appendix">
       <summary>Every number behind this post</summary>
@@ -419,11 +402,6 @@ def _load_groot_summary(groot: Path) -> dict:
     if not isinstance(summary, dict) or not isinstance(summary.get("table"), list):
         raise ValueError(f"{path} has no ablation table")
     return summary
-
-
-def _groot_status(summary: dict) -> str:
-    _require_no_effect(summary)
-    return "Tested: no causal effect found"
 
 
 def _require_no_effect(summary: dict) -> None:
