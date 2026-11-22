@@ -206,3 +206,4 @@ h3 { font-size: var(--t-lead); line-height: 1.25; margin: 28px 0 8px; }
 .mark-pass { background: var(--real); }
 .mark-fail { background: var(--fail); }
 .mark-pending { border: 1.5px solid var(--ink-3); }
+.stage-picture { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: var(--radius-sm); }

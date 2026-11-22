@@ -248,10 +248,19 @@ def _sparse_rows(acts: np.ndarray) -> tuple[list[int], list[int], list[float]]:
     return offsets, ids, values
 
 
+def _runs_on_backend(pack_json: Path) -> bool:
+    """Browser-only packs (the words readout) say so in ``runs_in``; older packs run everywhere."""
+    try:
+        runs_in = json.loads(pack_json.read_text(encoding="utf-8")).get("runs_in")
+    except (OSError, ValueError):
+        return True
+    return not isinstance(runs_in, list) or "backend" in runs_in
+
+
 def load_packs(packs_dir: Path, device: torch.device | None = None, only: list[str] | None = None) -> dict[str, PackModel]:
     """Every pack under ``packs_dir`` (directories with a pack.json), keyed by directory name."""
     packs_dir = Path(packs_dir)
-    found = sorted(p.parent for p in packs_dir.glob("*/pack.json"))
+    found = sorted(p.parent for p in packs_dir.glob("*/pack.json") if _runs_on_backend(p))
     if only:
         found = [p for p in found if p.name in only]
         missing = set(only) - {p.name for p in found}

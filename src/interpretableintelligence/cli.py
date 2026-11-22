@@ -1364,12 +1364,27 @@ def export_live_cmd(
     ] = None,
     samples: Annotated[int, typer.Option("--samples", min=0, help="Sample frames to ship with the pack.")] = 16,
     title: Annotated[str | None, typer.Option("--title", help="Name shown in the playground.")] = None,
+    readout: Annotated[
+        str,
+        typer.Option(
+            "--readout",
+            help="tokens: how far an edit turns the model's final tokens. words (CLIP models): what the model sees, in words, and which features make it see each one.",
+        ),
+    ] = "tokens",
+    words: Annotated[Path | None, typer.Option("--words", help="With --readout words: text file of words, one per line (default: a built-in list of everyday things).")] = None,
+    sample_dir: Annotated[
+        Path | None,
+        typer.Option("--sample-dir", help="Ship the pictures in this folder (optional credits.json: file name to credit line) instead of clip frames."),
+    ] = None,
 ) -> None:
     """Pack a run for the live in-browser playground: the model split at the SAE's layer, the SAE, labels and badges."""
     from interpretableintelligence.live import LiveExportError, export_live
 
     try:
-        summary = export_live(run_dir, out, clips_dir=clips, meta_from=meta_from, n_samples=samples, title=title, log=typer.echo)
+        summary = export_live(
+            run_dir, out, clips_dir=clips, meta_from=meta_from, n_samples=samples, title=title, log=typer.echo,
+            readout=readout, words_path=words, sample_dir=sample_dir,
+        )
     except (LiveExportError, FileNotFoundError, OSError, KeyError, ValueError, RuntimeError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -1400,7 +1415,7 @@ def serve_live_cmd(
 ) -> None:
     """Run the live playground's model server on this machine (the API in docs/PLAYGROUND-API.md).
 
-    Open the page with ?api=http://127.0.0.1:8787 to use it. ii deploy-live hosts the same thing on Modal.
+    Open the feature playground (/live/features.html) with ?api=http://127.0.0.1:8787 to use it. ii deploy-live hosts the same thing on Modal.
     With --builds, the page can also name a Hugging Face vision model and get a dictionary for it;
     each build runs ii run hf --no-score on the --build-clips clips here, then packs it.
     """

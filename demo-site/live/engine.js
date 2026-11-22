@@ -10,6 +10,15 @@
 //                   cosine distance between clean and edited final tokens.
 // Same maths as `steer.steer_edit` and the local playground. Exploration only: nothing
 // here can change a feature's badge.
+//
+// A version 2 pack with the words readout (CLIP, `ii export-live --readout words`) has no
+// "back" half. Its "words" graph takes the hidden state and a vector u and returns the image
+// embedding e and d(e.u)/d(hidden), and text.bin holds every word's text embedding, so:
+//   encode(image)        also gives what the model sees: a softmax over the words.
+//   why(state, word)     the features that make it see that word: activation x gradient of
+//                        the word's log-probability along each feature's direction, summed
+//                        over patches (a first-order estimate; switching off measures it).
+//   see(state, edits)    the words after an edit, e.g. [{id, kind: "ablate"}, ...].
 
 const ORT_VERSION = "1.31.1";
 const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
@@ -90,6 +99,33 @@ async function fetchBytes(url, key, onBytes) {
   return buf;
 }
 
+// A pack file, or a big one shipped as parts (pack.json lists them), joined back together.
+async function fetchFile(base, entry, version, onBytes) {
+  const parts = Array.isArray(entry) ? entry : [entry];
+  const seen = new Array(parts.length).fill(0);
+  const totals = new Array(parts.length).fill(0);
+  let cachedAll = true;
+  const bufs = await Promise.all(
+    parts.map((name, i) =>
+      fetchBytes(base + name, `${base}${name}?v=${version}`, (got, total, cached) => {
+        seen[i] = got;
+        totals[i] = total || got;
+        if (!cached) cachedAll = false;
+        const sum = (a) => a.reduce((x, y) => x + y, 0);
+        onBytes(sum(seen), sum(totals), cachedAll);
+      }),
+    ),
+  );
+  if (bufs.length === 1) return bufs[0];
+  const out = new Uint8Array(bufs.reduce((a, b) => a + b.byteLength, 0));
+  let at = 0;
+  for (const b of bufs) {
+    out.set(b, at);
+    at += b.byteLength;
+  }
+  return out;
+}
+
 function halfToFloat(bits) {
   const out = new Float32Array(bits.length);
   for (let i = 0; i < bits.length; i++) {
@@ -124,8 +160,9 @@ export class Engine {
   async load({ onProgress = () => {}, preferGpu = true } = {}) {
     const t0 = now();
     const pack = await (await fetch(this.base + "pack.json")).json();
-    if (pack.format !== "ii-live-pack" || pack.version !== 1) throw new Error("this pack is not an ii live pack v1");
+    if (pack.format !== "ii-live-pack" || ![1, 2].includes(pack.version)) throw new Error("this pack is not an ii live pack");
     this.pack = pack;
+    this.wordsMode = pack.model.readout === "words";
     const { ort, backend } = await loadOrt(preferGpu);
     this.ort = ort;
     this.backend = backend;
@@ -135,7 +172,7 @@ export class Engine {
     for (const old of OLD_CACHES) globalThis.caches?.delete(old)?.catch(() => {});
     // The rest of the network ("back") is only needed to make an edit, so it downloads and
     // starts after the first picture is read: the first answer arrives on about half the bytes.
-    const want = ["front", "sae", "decoder"];
+    const want = this.wordsMode ? ["front", "sae", "decoder", "words", "text"] : ["front", "sae", "decoder"];
     const sizes = {};
     const loaded = {};
     let cachedAll = true;
@@ -145,13 +182,16 @@ export class Engine {
       onProgress({ phase: "download", loaded: got, total, cached: cachedAll });
     };
     let backSeen = 0;
-    const backKey = `${this.base}${files.back}?v=${digests.back || sha}`;
-    this._backBytes = fetchBytes(this.base + files.back, backKey, (seen) => (backSeen = seen));
-    this._backBytes.catch(() => {}); // surfaced by the first edit, not here
+    if (!this.wordsMode) {
+      const backKey = `${this.base}${files.back}?v=${digests.back || sha}`;
+      this._backBytes = fetchBytes(this.base + files.back, backKey, (seen) => (backSeen = seen));
+      this._backBytes.catch(() => {}); // surfaced by the first edit, not here
+    }
+    const vocab = this.wordsMode ? fetch(this.base + files.vocab).then((r) => r.json()) : null;
     const [bytes, features] = await Promise.all([
       Promise.all(
         want.map((name) =>
-          fetchBytes(this.base + files[name], `${this.base}${files[name]}?v=${digests[name] || sha}`, (seen, total, cached) => {
+          fetchFile(this.base, files[name], digests[name] || sha, (seen, total, cached) => {
             loaded[name] = seen;
             sizes[name] = total || seen;
             if (!cached) cachedAll = false;
@@ -165,8 +205,14 @@ export class Engine {
     onProgress({ phase: "compile" });
     const t1 = now();
     this.decoder = halfToFloat(new Uint16Array(bytes[2].buffer, bytes[2].byteOffset, bytes[2].byteLength / 2)); // [n_features, d]
-    this._bytes = { front: bytes[0], sae: bytes[1] };
+    this._bytes = { front: bytes[0], sae: bytes[1], words: this.wordsMode ? bytes[3] : null };
     this.features = features;
+    if (this.wordsMode) {
+      this.vocab = await vocab;
+      this.textDim = pack.words.dim;
+      this.text = halfToFloat(new Uint16Array(bytes[4].buffer, bytes[4].byteOffset, bytes[4].byteLength / 2)); // [n_words, dim]
+      this.logitScale = pack.words.logit_scale;
+    }
     this.nFeatures = pack.sae.n_features;
     this.d = pack.model.d_model;
     this.gridH = pack.model.grid.h;
@@ -197,7 +243,7 @@ export class Engine {
     this.timings.warmup = now() - t2;
     this.timings.ready = now() - t0;
     // Queued now, so it runs before any edit asks for it.
-    this.backReady = this._serial(() => this._startBack());
+    this.backReady = this.wordsMode ? Promise.resolve() : this._serial(() => this._startBack());
     this.backReady.catch(() => {});
     this.backProgress = () => backSeen;
     onProgress({ phase: "ready" });
@@ -244,6 +290,14 @@ export class Engine {
     }
     this.front = await this.ort.InferenceSession.create(this._bytes.front, options);
     this.sae = await this.ort.InferenceSession.create(this._bytes.sae, options);
+    if (this.wordsMode) {
+      try {
+        await this.words?.release();
+      } catch {
+        /* already gone */
+      }
+      this.words = await this.ort.InferenceSession.create(this._bytes.words, options);
+    }
     this.backend = backend;
   }
 
@@ -267,7 +321,13 @@ export class Engine {
     const g = this._ctx;
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = "high";
-    g.drawImage(source, 0, 0, s, s);
+    if (this.pack.model.resize === "crop") {
+      // The middle square of the picture, as CLIP was trained (and as the page shows it).
+      const w = source.naturalWidth || source.videoWidth || source.width;
+      const h = source.naturalHeight || source.videoHeight || source.height;
+      const side = Math.min(w, h);
+      g.drawImage(source, (w - side) / 2, (h - side) / 2, side, side, 0, 0, s, s);
+    } else g.drawImage(source, 0, 0, s, s);
     const rgba = g.getImageData(0, 0, s, s).data;
     const [m0, m1, m2] = this.pack.model.mean;
     const [s0, s1, s2] = this.pack.model.std;
@@ -354,9 +414,11 @@ export class Engine {
     }
     const t3 = now();
     let base = null;
-    if (readout) base = await this.runBack(hid);
+    let seen = null;
+    if (this.wordsMode && readout) seen = await this._see(hid);
+    else if (readout) base = await this.runBack(hid);
     const t4 = now();
-    const state = { hidden: hid.slice(), rows, totals, peaks, base };
+    const state = { hidden: hid.slice(), rows, totals, peaks, base, seen };
     state.timing = { preprocess: t1 - t0, model: t2 - t1, features: t3 - t2, readout: t4 - t3, total: t4 - t0 };
     return state;
   }
@@ -379,6 +441,135 @@ export class Engine {
       if (j >= 0) out[t] = row.val[j];
     });
     return out;
+  }
+
+  // ---------------------------------------------------------------- words readout
+
+  // Hidden state (and u) through the words graph: the embedding, and d(e.u)/d(hidden) when u is given.
+  async _wordsRun(hidden, u = null) {
+    const ort = this.ort;
+    const tokens = this.prefix + this.nTok;
+    const feeds = {
+      hidden: new ort.Tensor("float32", hidden, [1, tokens, this.d]),
+      u: new ort.Tensor("float32", u || new Float32Array(this.textDim), [1, this.textDim]),
+    };
+    const out = await this.words.run(feeds, u ? ["embed", "grad"] : ["embed"]);
+    const embed = out.embed.data instanceof Float32Array ? out.embed.data : await out.embed.getData();
+    let grad = null;
+    if (u) grad = out.grad.data instanceof Float32Array ? out.grad.data : await out.grad.getData();
+    return { embed: embed.slice(), grad };
+  }
+
+  // The words: log-probabilities over the vocabulary at the model's logit scale.
+  wordsFrom(embed) {
+    const { textDim: D, text } = this;
+    const n = this.vocab.length;
+    let norm = 0;
+    for (let i = 0; i < D; i++) norm += embed[i] * embed[i];
+    norm = Math.sqrt(norm) || 1;
+    const logits = new Float32Array(n);
+    let max = -Infinity;
+    for (let w = 0; w < n; w++) {
+      let dot = 0;
+      const off = w * D;
+      for (let i = 0; i < D; i++) dot += text[off + i] * embed[i];
+      logits[w] = (this.logitScale * dot) / norm;
+      if (logits[w] > max) max = logits[w];
+    }
+    let sum = 0;
+    for (let w = 0; w < n; w++) sum += Math.exp(logits[w] - max);
+    const lse = max + Math.log(sum);
+    const logp = new Float32Array(n);
+    const prob = new Float32Array(n);
+    for (let w = 0; w < n; w++) {
+      logp[w] = logits[w] - lse;
+      prob[w] = Math.exp(logp[w]);
+    }
+    return { embed, norm, logp, prob };
+  }
+
+  async _see(hidden) {
+    const { embed } = await this._wordsRun(hidden);
+    return this.wordsFrom(embed);
+  }
+
+  // d log p(word) / d e, for e before normalisation: s (t_w - sum_v p_v t_v), projected off e, over |e|.
+  _uFor(seen, word) {
+    const { textDim: D, text } = this;
+    const n = this.vocab.length;
+    const a = new Float32Array(D);
+    for (let i = 0; i < D; i++) a[i] = text[word * D + i];
+    for (let v = 0; v < n; v++) {
+      const p = seen.prob[v];
+      if (p < 1e-7) continue;
+      const off = v * D;
+      for (let i = 0; i < D; i++) a[i] -= p * text[off + i];
+    }
+    const nrm = seen.norm;
+    let along = 0;
+    for (let i = 0; i < D; i++) along += (a[i] * seen.embed[i]) / nrm;
+    const u = new Float32Array(D);
+    for (let i = 0; i < D; i++) u[i] = (this.logitScale * (a[i] - (along * seen.embed[i]) / nrm)) / nrm;
+    return u;
+  }
+
+  why(state, word) {
+    return this._serial(() => this._why(state, word));
+  }
+
+  // Every feature firing on the picture, scored by how much it pushes `word` up (positive) or down.
+  async _why(state, word) {
+    const t0 = now();
+    const { d, nTok, prefix } = this;
+    const { grad } = await this._wordsRun(state.hidden, this._uFor(state.seen, word));
+    const score = new Map();
+    const patches = new Float32Array(nTok); // where on the picture the features push the word up
+    state.rows.forEach((row, t) => {
+      const g = (prefix + t) * d;
+      for (let j = 0; j < row.idx.length; j++) {
+        const f = row.idx[j];
+        const dir = f * d;
+        let dot = 0;
+        for (let i = 0; i < d; i++) dot += grad[g + i] * this.decoder[dir + i];
+        const s = row.val[j] * dot;
+        score.set(f, (score.get(f) || 0) + s);
+        patches[t] += s;
+      }
+    });
+    const ranked = [...score.entries()].map(([id, s]) => ({ id, score: s })).sort((a, b) => b.score - a.score);
+    return { word, ranked, patches, ms: now() - t0 };
+  }
+
+  see(state, edits) {
+    return this._serial(async () => {
+      const t0 = now();
+      const seen = await this._see(this.applyEdits(state, edits));
+      seen.ms = now() - t0;
+      return seen;
+    });
+  }
+
+  // edits: [{id, kind, value}] applied together on the patch tokens (x' = x + (f' - f) W_dec).
+  applyEdits(state, edits) {
+    const { d, nTok, prefix } = this;
+    const hidden = state.hidden.slice();
+    const maps = edits.map((e) => this.featureMap(state, e.id));
+    for (let t = 0; t < nTok; t++) {
+      const off = (prefix + t) * d;
+      edits.forEach((e, n) => {
+        const current = maps[n][t];
+        let target;
+        if (e.kind === "ablate") target = 0;
+        else if (e.kind === "scale") target = current * e.value;
+        else if (e.kind === "clamp") target = e.value;
+        else target = current + e.value;
+        const delta = target - current;
+        if (delta === 0) return;
+        const dir = e.id * d;
+        for (let i = 0; i < d; i++) hidden[off + i] += delta * this.decoder[dir + i];
+      });
+    }
+    return hidden;
   }
 
   // The playground edit on the patch tokens, then the rest of the network.

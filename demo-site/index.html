@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
   <title>interpretable intelligence</title>
-  <meta name="description" content="See what a robot&#x27;s world model has learnt, and test every feature before trusting it.">
+  <meta name="description" content="Ask a vision model what it sees, then find the features that make it see that and switch them off.">
   <link rel="stylesheet" href="/static/site.css">
   <link rel="icon" href="/favicon.ico">
 </head>
@@ -17,22 +17,19 @@
   <main class="prose prose-wide">
     <section class="hero hero-split">
       <div>
-        <h1>See what a robot's world model has learnt.</h1>
-        <p class="lede">V-JEPA 2 watches robot video and predicts what comes next. ii finds the features inside it and tests each one before it gets a name you can trust.</p>
-        <p class="actions"><a class="button" href="/explore/" data-testid="cta">Explore V-JEPA 2</a><a class="button button-quiet" href="/live/">Try your own pictures</a></p>
+        <h1>Ask a vision model what it sees, then find out why.</h1>
+        <p class="lede">Pick a picture and the model says what it sees, in words. ii shows you the features inside it that make it see that, and lets you switch them off to check.</p>
+        <p class="actions"><a class="button" href="/live/" data-testid="cta">Open the playground</a><a class="button button-quiet" href="/start/">Run it on your model</a></p>
       </div>
       <figure class="stage">
-        <video src="/explore/media/droid_ep068.mp4" autoplay muted loop playsinline aria-label="A robot taking the lid off a pot"></video>
-        <a class="stage-feature" href="/explore/vjepa2-vitl/L16/270/" data-testid="hero-feature">
-          <span class="tiles"><span class="tile" style="background-image:url(/explore/media/feature_00270.png);background-size:440.94% auto;background-position:1.96% 12.28%"></span><span class="tile" style="background-image:url(/explore/media/feature_00270.png);background-size:440.94% auto;background-position:33.95% 12.28%"></span><span class="tile" style="background-image:url(/explore/media/feature_00270.png);background-size:440.94% auto;background-position:66.05% 12.28%"></span><span class="tile" style="background-image:url(/explore/media/feature_00270.png);background-size:440.94% auto;background-position:98.04% 12.28%"></span></span>
-          <span>Robot gripper / wrist <span class="id">#270</span></span>
-        </a>
+        <a href="/live/#p=01-coco-14475" data-testid="hero-picture"><img src="/live/packs/clip-b16-words/samples/01-coco-14475.jpg" alt="A picture from the playground" class="stage-picture"></a>
+        <a class="stage-feature" href="/live/#p=01-coco-14475"><span>What does it see? Open this picture in the playground</span></a>
       </figure>
     </section>
     <ul class="doors" data-testid="doors">
-      <li><a class="card" href="/explore/"><span class="card-title">Explore</span><span class="card-text">Every scored V-JEPA 2 feature, with where it fires and which checks it passed.</span></a></li>
-      <li><a class="card" href="/live/"><span class="card-title">Playground</span><span class="card-text">Your own pictures or video, in your browser. Switch a feature off and see what changes.</span></a></li>
-      <li><a class="card" href="/start/"><span class="card-title">Your model</span><span class="card-text">The same tests on any Hugging Face vision or video model, on your laptop.</span></a></li>
+      <li><a class="card" href="/live/"><span class="card-title">Playground</span><span class="card-text">Your own pictures, in your browser. See what the model sees, which features make it see that, and switch them off.</span></a></li>
+      <li><a class="card" href="/start/"><span class="card-title">Your model</span><span class="card-text">The same tools on any Hugging Face vision or video model, on your laptop.</span></a></li>
+      <li><a class="card" href="/explore/"><span class="card-title">V-JEPA 2</span><span class="card-text">A robot's world model: its scored features, with where each fires and which checks it passed.</span></a></li>
     </ul>
     <section>
       <h2>Research</h2>

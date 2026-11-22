@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
-  <title>Live playground · ii</title>
-  <meta name="description" content="A vision model in your browser. Drop in your own pictures or a video, see what it notices, then switch a feature off.">
+  <title>Playground · ii</title>
+  <meta name="description" content="Ask a vision model what it sees in your picture, then find the features inside it that make it see that, and switch them off. Runs in your browser.">
   <link rel="preload" href="../static/fonts/geist-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="../static/fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="../static/site.css">
   <link rel="stylesheet" href="live.css">
   <link rel="icon" href="../favicon.ico">
 </head>
-<body>
+<body class="see">
   <header class="bar">
     <a class="mark" href="/" aria-label="interpretable intelligence home">
       <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M4 7.5 7.5 5.5 11 7.5 7.5 9.5Z" fill="#e8582a"/><path d="M4 7.5 7.5 9.5V20L4 18Z" fill="#c8400f"/><path d="M11 7.5 7.5 9.5V20L11 18Z" fill="#e04a14"/><path d="M11 3 14.5 1 18 3 14.5 5Z" fill="#141413"/><path d="M11 3 14.5 5V20L11 18Z" fill="#141413"/><path d="M18 3 14.5 5V20L18 18Z" fill="#45423b"/></svg>
@@ -24,52 +24,47 @@
 
   <main>
     <section class="intro">
-      <h1>Playground</h1>
-      <p class="lede"><span id="model-name">DINOv2-small</span>, a vision model, <span id="where-runs">running in your browser</span>. Drop in your own pictures or a video, see what it notices, then switch a feature off.</p>
-      <div id="byom"></div>
+      <h1>What does it see?</h1>
+      <p class="lede">CLIP, a model that matches pictures to words, running in your browser. Pick a picture and it tells you what it sees. Then find the features inside it that make it see that, and switch them off.</p>
     </section>
 
     <section class="loader" id="loader" aria-live="polite">
       <div class="loader-track"><div class="loader-fill" id="loader-fill"></div></div>
-      <p id="loader-text">Getting the model ready. It is about 28 MB the first time and instant after that.</p>
+      <p id="loader-text">Getting the model ready.</p>
     </section>
 
     <section class="work" id="work" hidden>
       <div class="stage-col">
-        <div class="stage" id="stage">
+        <div class="stage square" id="stage">
           <img id="photo" alt="The picture the model is looking at">
           <video id="cam" playsinline muted hidden></video>
           <canvas id="heat" aria-hidden="true"></canvas>
-          <canvas id="grid" aria-hidden="true"></canvas>
-          <div class="drop-hint" id="drop-hint">Drop pictures or a video anywhere</div>
+          <div class="drop-hint" id="drop-hint">Drop a picture anywhere</div>
         </div>
         <div class="stage-key" id="stage-key"></div>
         <div class="tray">
           <div class="thumbs" id="thumbs" aria-label="Example pictures"></div>
           <div class="tray-actions">
-            <label class="pill-btn" for="file">Add your pictures or a video</label>
-            <input type="file" id="file" accept="image/*,video/*" multiple hidden>
+            <label class="pill-btn" for="file">Use your own picture</label>
+            <input type="file" id="file" accept="image/*" hidden>
             <button class="pill-btn" id="cam-btn" type="button">Use your camera</button>
-            <button class="pill-btn" id="examples-btn" type="button" hidden>Back to the examples</button>
-            <span class="tray-note">or drop a folder's worth of pictures anywhere</span>
+            <span class="tray-note" id="credit"></span>
           </div>
         </div>
       </div>
 
       <div class="panel" id="panel">
-        <div class="find">
-          <input type="search" id="search" placeholder="Find a feature by name or number" autocomplete="off" aria-label="Find a feature">
-        </div>
         <div id="panel-body"></div>
       </div>
     </section>
 
     <section class="how" id="how">
-      <p class="fine"><span id="where-fine">Runs on your device with <a href="https://onnxruntime.ai/">ONNX Runtime Web</a>; your pictures never leave it.</span> Model <a href="https://huggingface.co/facebook/dinov2-small">facebook/dinov2-small</a> (Apache 2.0), cut at block 6 of 12. A tick means the feature passed <a href="/explore/">four checks</a>: <span id="n-real">5</span> of 3,072 so far. Playing never changes a tick.</p>
+      <p class="fine">Runs on your device with <a href="https://onnxruntime.ai/">ONNX Runtime Web</a>; your pictures never leave it. Model <a href="https://huggingface.co/openai/clip-vit-base-patch16">openai/clip-vit-base-patch16</a> (MIT), read at block <span id="layer">8</span> of 12 through a dictionary of <span id="n-features">6,144</span> features trained on <span id="n-train">photos and robot video</span>. The words are a list of <span id="n-words">everyday things</span>; the model scores each as "a photo of a …". "Why it sees" ranks features by a first-order estimate (activation times gradient); switching them off is the real test, and the random line beside it is the control. This is exploration, not a verified finding.</p>
+      <p class="fine">Prefer to browse every feature? The <a href="features.html">feature playground</a> runs DINOv2 on robot video.</p>
       <p class="fine perf" id="perf"></p>
     </section>
   </main>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="see.js"></script>
 </body>
 </html>
