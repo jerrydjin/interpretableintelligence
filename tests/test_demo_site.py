@@ -74,6 +74,7 @@ PAGES = {
     "start/index.html": "/start/",
     "blog/index.html": "/blog/",
     "blog/groot-1028/index.html": "/blog/",
+    "blog/vjepa2ac-gripper/index.html": "/blog/",
     "live/index.html": "/live/",
 }
 
@@ -126,7 +127,7 @@ def test_home_leads_with_the_world_model():
     text = _text(page)
     assert 'href="/explore/" data-testid="cta"' in page
     assert 'href="/live/"' in page and 'href="/start/"' in page
-    assert 'href="/blog/groot-1028/" data-testid="post-link"' in page
+    assert 'href="/blog/vjepa2ac-gripper/" data-testid="post-link"' in page
     assert "world model" in text
     assert 'src="/explore/media/droid_ep068.mp4"' in page
     assert 'href="/explore/vjepa2-vitl/L16/270/" data-testid="hero-feature"' in page
@@ -184,6 +185,33 @@ def test_blog_post_reads_every_number_from_the_result_files():
     lower = text.lower()
     for claim in ("causes failure", "caused the failure", "failure cause"):
         assert claim not in lower
+    assert "\u2014" not in page
+
+
+def test_gripper_post_reads_every_number_from_the_result_files():
+    from interpretableintelligence.site_gripper_post import FILES
+
+    data_dir = _repo() / "demo-data" / "vjepa2ac"
+    post = ROOT / "blog" / "vjepa2ac-gripper"
+    for name in FILES:
+        assert (post / name).read_bytes() == (data_dir / name).read_bytes(), name
+    page = (post / "index.html").read_text(encoding="utf-8")
+    text = _text(page)
+    load = lambda name: json.loads((data_dir / name).read_text(encoding="utf-8"))  # noqa: E731
+    probe, trace, sae, circuit = (load(n) for n in ("gripper-probe.json", "gripper-trace.json", "gripper-sae-L9.json", "gripper-circuit.json"))
+    pref = probe["stats"]["prefers_correct"]
+    assert probe["verdict"] == "gripper_blind"
+    assert f"{probe['n_events']} moments in {probe['n_episodes']} DROID episodes" in text
+    assert f"right gripper command {100 * pref['value']:.0f}% of the time (95% interval {100 * pref['lo']:.0f}-{100 * pref['hi']:.0f}%)" in text
+    ratio = trace["layers"]["grip_over_arm_frame"]
+    assert f"grows to {max(ratio):.2f} times the arm's at block {ratio.index(max(ratio))}, then falls to {ratio[-1]:.2f}" in text
+    tr = sae["arms"]["trained"]["consistency"]["value"]
+    assert f"on {100 * tr:.0f}% of held-out events" in text
+    steer = circuit["steer"]["1.0"]["prefers_correct"]
+    assert f"preference to {100 * steer['value']:.0f}% ({100 * steer['lo']:.0f}-{100 * steer['hi']:.0f}%)" in text
+    assert circuit["verdict"] == {"components": "none", "heads": "none", "steer": "no_fix"}
+    assert 'data-testid="post-verdict">None of this is a finding.' in page
+    assert f"AUROC {trace['readout']['encoder']['value']:.2f}" in text
     assert "\u2014" not in page
 
 

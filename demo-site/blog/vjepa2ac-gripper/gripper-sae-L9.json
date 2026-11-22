@@ -1,0 +1,179 @@
+{
+  "schema": "gripper-sae/v1",
+  "model": "vjepa2-ac",
+  "model_info": {
+    "encoder_missing": 0,
+    "encoder_unexpected": 0,
+    "random_predictor": false
+  },
+  "layer": 9,
+  "seed": 0,
+  "n_boot": 2000,
+  "sae": {
+    "n_latents": 4096,
+    "k": 32,
+    "steps": 3000,
+    "stride": 2,
+    "rows": 268800,
+    "final_fvu": 0.19330446422100067,
+    "health": {
+      "n_tokens": 268800,
+      "n_episodes": 49,
+      "ev_normalised": 0.8072,
+      "ev_raw": 0.8072,
+      "fvu": 0.1928,
+      "ev_per_dim_mean": 0.7693,
+      "variance_share_top_dims": 0.1619,
+      "top_dims": [
+        348,
+        136,
+        271,
+        957,
+        751,
+        534,
+        107,
+        891
+      ],
+      "l0_mean": 32.0,
+      "alive_latents": 4096,
+      "dead_latents": 0,
+      "alive_frac": 1.0,
+      "dense_latents": 5,
+      "dense_rule": "fires on more than 10% of tokens",
+      "firing_freq_quantiles_alive": {
+        "q10": 0.00342,
+        "q50": 0.00587,
+        "q90": 0.0126,
+        "q99": 0.0331
+      },
+      "ev_within_token_position": {
+        "0": 0.8072
+      }
+    }
+  },
+  "n_selection_events": 59,
+  "n_test_events": 60,
+  "n_test_episodes": 37,
+  "arms": {
+    "trained": {
+      "latents": [
+        2154,
+        3293,
+        1623
+      ],
+      "consistency": {
+        "value": 0.75,
+        "lo": 0.6363636363636364,
+        "hi": 0.8461538461538461
+      },
+      "recovered": {
+        "value": -0.0002689878348022793,
+        "lo": -0.00095635054723341,
+        "hi": 0.0005890411348758613
+      }
+    },
+    "random:1000": {
+      "latents": [
+        883,
+        2217,
+        2269
+      ],
+      "consistency": {
+        "value": 0.65,
+        "lo": 0.5357142857142857,
+        "hi": 0.7619047619047619
+      },
+      "recovered": {
+        "value": -0.0005372257422380696,
+        "lo": -0.0019487463588579196,
+        "hi": 0.0009690330863662292
+      }
+    },
+    "random:1001": {
+      "latents": [
+        3825,
+        3143,
+        2328
+      ],
+      "consistency": {
+        "value": 0.43333333333333335,
+        "lo": 0.2968605324074074,
+        "hi": 0.576992753623188
+      },
+      "recovered": {
+        "value": -0.0006556945089385276,
+        "lo": -0.0013651038231088668,
+        "hi": 1.1616851962435313e-05
+      }
+    },
+    "random:1002": {
+      "latents": [
+        2403,
+        232,
+        4065
+      ],
+      "consistency": {
+        "value": 0.26666666666666666,
+        "lo": 0.15873015873015872,
+        "hi": 0.37932758620689644
+      },
+      "recovered": {
+        "value": -0.0001575038178956619,
+        "lo": -0.0008304385631121515,
+        "hi": 0.0005673301233486102
+      }
+    },
+    "random:1003": {
+      "latents": [
+        1754,
+        3053,
+        944
+      ],
+      "consistency": {
+        "value": 0.5166666666666667,
+        "lo": 0.3859311740890688,
+        "hi": 0.6491228070175439
+      },
+      "recovered": {
+        "value": 0.0008865808341809814,
+        "lo": -0.000397427889278645,
+        "hi": 0.002394616412301105
+      }
+    },
+    "random:1004": {
+      "latents": [
+        2816,
+        1190,
+        119
+      ],
+      "consistency": {
+        "value": 0.5666666666666667,
+        "lo": 0.4242295839753467,
+        "hi": 0.7017543859649122
+      },
+      "recovered": {
+        "value": 1.5545523935809693e-05,
+        "lo": -0.0006992930131846807,
+        "hi": 0.0007455666738541662
+      }
+    },
+    "trained-random-latents": {
+      "latents": [
+        2608,
+        2093,
+        3482
+      ],
+      "consistency": {
+        "value": 0.2833333333333333,
+        "lo": 0.1896551724137931,
+        "hi": 0.3750512295081964
+      },
+      "recovered": {
+        "value": 0.0007173012333669922,
+        "lo": -5.259675765617355e-05,
+        "hi": 0.0018480302706397186
+      }
+    }
+  },
+  "verdict": "gripper_feature"
+}

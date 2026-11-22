@@ -1,0 +1,50 @@
+{
+  "schema": "gripper-probe/v1",
+  "model": "vjepa2-ac-random-predictor",
+  "model_info": {
+    "encoder_missing": 0,
+    "encoder_unexpected": 0,
+    "random_predictor": true
+  },
+  "seed": 0,
+  "n_boot": 2000,
+  "rules": {
+    "min_grip_change": 0.5,
+    "max_arm_m": 0.03,
+    "max_arm_rad": 0.15,
+    "max_gap": 4,
+    "blind_hi": 0.65
+  },
+  "n_events": 119,
+  "n_episodes": 68,
+  "stats": {
+    "prefers_correct": {
+      "value": 0.3865546218487395,
+      "lo": 0.3303550950196592,
+      "hi": 0.4406779661016949
+    },
+    "plan_sign_correct": {
+      "value": 0.3697478991596639,
+      "lo": 0.31067124204887847,
+      "hi": 0.4263565891472868
+    },
+    "gap_rel": {
+      "value": -6.952226380592143e-06,
+      "lo": -1.0479939981811098e-05,
+      "hi": -3.592322864766459e-06
+    }
+  },
+  "by_direction": {
+    "closing": {
+      "n": 73,
+      "prefers_correct": 0.0,
+      "plan_sign_correct": 0.0
+    },
+    "opening": {
+      "n": 46,
+      "prefers_correct": 1.0,
+      "plan_sign_correct": 0.9565217391304348
+    }
+  },
+  "verdict": "gripper_blind"
+}
