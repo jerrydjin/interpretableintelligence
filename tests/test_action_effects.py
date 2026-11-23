@@ -481,3 +481,87 @@ def test_cli_gripper_circuit_tiny(tmp_path):
     assert data["verdict"]["components"] == "erasers" and data["verdict"]["heads"] == "erasers"
     assert data["knockout"]["all_attn"]["recovered"]["value"] > 0.9  # every attention output after the peak includes the eraser
     assert data["verdict"]["steer"] in {"fixes_gripper", "no_fix", "insufficient_data"}
+
+
+# ----------------------------------------------------------------------------- impossible-events
+
+
+def test_local_freeze_puts_back_the_most_changed_square():
+    from interpretableintelligence.worldmodel.impossible_events import local_freeze
+
+    prev = np.zeros((64, 64, 3), dtype=np.uint8)
+    nxt = prev.copy()
+    nxt[32:48, 16:32] = 200  # one patch changes, at patch (2, 1)
+    out, where = local_freeze(prev, nxt, 8)
+    assert (out == prev).all()  # the 3x3 square covering the change is back to how it was
+    r, c = where
+    assert r <= 4 < r + 3 and c <= 2 < c + 3
+
+
+def test_swap_squares_trades_contents_or_refuses_a_flat_frame():
+    from interpretableintelligence.worldmodel.impossible_events import swap_squares
+
+    rng = np.random.default_rng(0)
+    assert swap_squares(np.full((64, 64, 3), 90, np.uint8), 8, rng) is None
+    frame = rng.integers(0, 255, size=(64, 64, 3)).astype(np.uint8)
+    frame[:, :32] = 0
+    out, pair = swap_squares(frame, 8, rng)
+    (r1, c1), (r2, c2) = pair
+    assert (out[r1 * 8 : (r1 + 3) * 8, c1 * 8 : (c1 + 3) * 8] == frame[r2 * 8 : (r2 + 3) * 8, c2 * 8 : (c2 + 3) * 8]).all()
+    assert out.sum() == frame.sum() and not (out == frame).all()
+
+
+def test_impossible_events_verdicts():
+    from interpretableintelligence.worldmodel.impossible_events import verdict
+
+    def ci(v, lo, hi):
+        return {"value": v, "lo": lo, "hi": hi}
+
+    assert verdict(ci(0.9, 0.8, 0.95), ci(0.5, 0.3, 0.6)) == "caught"
+    assert verdict(ci(0.9, 0.8, 0.95), ci(0.0, -0.1, 0.1)) == "trivial"
+    assert verdict(ci(0.4, 0.3, 0.55), ci(0.4, 0.3, 0.5)) == "missed"
+    assert verdict(ci(0.7, 0.6, 0.8), ci(0.1, 0.0, 0.2)) == "mixed"
+    assert verdict(ci(0.7, float("nan"), float("nan")), ci(0, 0, 0)) == "insufficient_data"
+
+
+def test_cli_impossible_events_tiny(tmp_path):
+    clips = _clips_with_states(tmp_path, n=3)
+    out = tmp_path / "ie"
+    result = CliRunner().invoke(app, ["impossible-events", "--clips", str(clips), "--out", str(out), "--tiny", "--bootstrap", "20"])
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "impossible_events.json").read_text())
+    assert data["schema"] == "impossible-events/v1" and data["n_transitions"] > 0
+    edits = data["edits"]
+    assert set(edits) == {"freeze", "local_freeze", "reverse", "swap", "splice"}
+    # Copying the current frame never flags a frozen world: its surprise there is exactly zero.
+    assert edits["freeze"]["detected"]["copy"]["value"] == 0.0
+    assert edits["splice"]["n_episodes"] == 2  # the first clip has no earlier episode to splice from
+    assert (out / "heatmaps" / "local_freeze.png").is_file()
+
+
+def test_predict_next_with_context_matches_meta_layout():
+    import torch
+
+    model = tiny_world_model(seed=0)
+    frames = np.stack([_scene(t)[0] for t in range(4)])
+    z = model.encode_frames(frames)
+    s = torch.rand(4, 7)
+    a = torch.rand(4, 7) * 0.05
+    one = model.predict_next(z[2:3], s[2:3], a[2:3])
+    ctx = model.predict_next(z[None, :3], s[None, :3], a[None, :3])
+    assert ctx.shape == one.shape
+    assert torch.allclose(ctx, one, atol=1e-6)  # the tiny predictor reads only the last frame and action
+
+
+def test_cli_impossible_events_context(tmp_path):
+    clips = _clips_with_states(tmp_path, n=3)
+    outs = {}
+    for k in (1, 4):
+        out = tmp_path / f"ie{k}"
+        args = ["impossible-events", "--clips", str(clips), "--out", str(out), "--tiny", "--bootstrap", "20",
+                "--context", str(k), "--start", "3"]
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 0, result.output
+        outs[k] = json.loads((out / "impossible_events.json").read_text())
+    assert outs[4]["context"] == 4 and outs[4]["start"] == 3
+    assert [r["t"] for r in outs[1]["transitions"]] == [r["t"] for r in outs[4]["transitions"]]
