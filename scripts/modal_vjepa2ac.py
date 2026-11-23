@@ -379,3 +379,215 @@ def circuit(full: bool = False) -> None:
         for kind, k in payload["knockout"].items():
             print(f"  knocked {kind} drift", " ".join(f"{x:.3f}" for x in k["curve"]))
             print(f"  random {kind} drift ", " ".join(f"{x:.3f}" for x in k.get("random_curve", [])))
+
+
+# ----------------------------------------------------------------------------- screen: ii impossible-events
+
+
+def _impossible(dest: str, *extra: str, fresh: bool = False) -> dict:
+    import shutil
+
+    if fresh:
+        shutil.rmtree(dest, ignore_errors=True)
+    if not Path(dest, "impossible_events.json").exists():
+        _sh(["ii", "impossible-events", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "impossible_events.json").read_text())
+    out.pop("transitions", None)
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def ie_smoke_job() -> dict:
+    import time
+
+    t0 = time.time()
+    out = _impossible(f"{RESULTS}/ie-smoke", "--max-clips", "5", "--bootstrap", "200", fresh=True)
+    out["wall_s"] = time.time() - t0
+    return {"ie-smoke": out}
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def ie_png(name: str, fname: str) -> bytes:
+    """One heatmap file, alone: large function results go through Modal's blob store, which this network blocks."""
+    return Path(RESULTS, name, "heatmaps", fname).read_bytes()
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def ie_full_job() -> dict:
+    return {
+        "ie-trained": _impossible(f"{RESULTS}/ie-trained"),
+        "ie-random-predictor": _impossible(f"{RESULTS}/ie-random-predictor", "--random-predictor"),
+    }
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def ie_read() -> dict:
+    out = {}
+    for name in ("ie-smoke", "ie-trained", "ie-random-predictor"):
+        f = Path(RESULTS, name, "impossible_events.json")
+        if f.exists():
+            payload = json.loads(f.read_text())
+            payload.pop("transitions", None)
+            payload["heatmap_files"] = sorted(p.name for p in Path(RESULTS, name, "heatmaps").glob("*.png"))
+            out[name] = payload
+    return out
+
+
+def _ie_report(results: dict) -> None:
+    dest = Path(os.environ.get("II_H2_LOCAL", "h2-results"))
+    for name, payload in results.items():
+        for fname in payload.pop("heatmap_files", []):
+            try:
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / f"{name}-{fname}").write_bytes(ie_png.remote(name, fname))
+            except Exception as exc:  # noqa: BLE001 - a heatmap that cannot come back is not worth the run
+                print("heatmap", fname, "not fetched:", exc)
+        _save_local(name, payload, None)
+        print(name, payload["n_transitions"], "transitions", payload["n_episodes"], "episodes", "wall_s", payload.get("wall_s"))
+        for e, v in payload["edits"].items():
+            d = v["detected"]
+            print(f"  {e:13s} {v['verdict']:17s} " + "  ".join(f"{k} {d[k]['value']:.2f} [{d[k]['lo']:.2f},{d[k]['hi']:.2f}]" for k in d)
+                  + f"  ratio {v['surprise_ratio']['model']:.3f} n={v['n_transitions']}")
+
+
+@app.local_entrypoint()
+def ie_smoke() -> None:
+    ie_smoke_job.remote()
+    _ie_report({k: v for k, v in ie_read.remote().items() if k == "ie-smoke"})
+
+
+@app.local_entrypoint()
+def ie_run() -> None:
+    ie_full_job.spawn()
+    print("spawned the impossible-events screen; fetch with ::ie_fetch")
+
+
+@app.local_entrypoint()
+def ie_fetch() -> None:
+    _ie_report(ie_read.remote())
+
+
+# ----------------------------------------------------------------------------- impossible-events with more context
+
+CTX_START = "6"  # leaves room for 7 context frames (Meta trained on 8-frame clips: 7 in, 7 out), so every context scores the same transitions
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def ctx_smoke_job() -> dict:
+    return {f"ctx-smoke-{k}": _impossible(f"{RESULTS}/ctx-smoke-{k}", "--max-clips", "3", "--bootstrap", "200",
+                                          "--context", k, "--start", CTX_START, fresh=True) for k in ("1", "7")}
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def ctx_full_job(contexts: str = "1,4,7", clips: int = 50) -> dict:
+    return {f"ctx-{k}": _impossible(f"{RESULTS}/ctx-{k}", "--context", k, "--start", CTX_START, "--max-clips", str(clips))
+            for k in contexts.split(",")}
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def ctx_read() -> dict:
+    out = {}
+    for f in sorted(Path(RESULTS).glob("ctx-*/impossible_events.json")):
+        payload = json.loads(f.read_text())
+        payload.pop("transitions", None)
+        out[f.parent.name] = payload
+    return out
+
+
+@app.local_entrypoint()
+def ctx_smoke() -> None:
+    import time
+
+    t0 = time.time()
+    ctx_smoke_job.remote()
+    print("wall incl. startup", round(time.time() - t0), "s")
+    _ie_report({k: v for k, v in ctx_read.remote().items() if k in ("ctx-smoke-1", "ctx-smoke-7")})
+
+
+@app.local_entrypoint()
+def ctx_run(contexts: str = "1,4,7", clips: int = 50) -> None:
+    ctx_full_job.spawn(contexts, clips)
+    print("spawned; fetch with ::ctx_fetch")
+
+
+@app.local_entrypoint()
+def ctx_fetch() -> None:
+    _ie_report(ctx_read.remote())
+
+
+# ----------------------------------------------------------------------------- does the freeze bias hurt planning: ii plan-stall
+
+
+def _plan_stall(dest: str, *extra: str, fresh: bool = False) -> dict:
+    import shutil
+
+    if fresh:
+        shutil.rmtree(dest, ignore_errors=True)
+    if not Path(dest, "plan_stall.json").exists():
+        _sh(["ii", "plan-stall", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "plan_stall.json").read_text())
+    out.pop("transitions", None)
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def ps_smoke_job() -> dict:
+    import time
+
+    t0 = time.time()
+    out = _plan_stall(f"{RESULTS}/ps-smoke", "--max-clips", "4", "--bootstrap", "200", fresh=True)
+    out["wall_s"] = time.time() - t0
+    return {"ps-smoke": out}
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def ps_full_job(clips: int = 100) -> dict:
+    return {
+        "ps-trained": _plan_stall(f"{RESULTS}/ps-trained", "--max-clips", str(clips)),
+        "ps-random-predictor": _plan_stall(f"{RESULTS}/ps-random-predictor", "--random-predictor", "--max-clips", str(clips)),
+    }
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def ps_read() -> dict:
+    out = {}
+    for f in sorted(Path(RESULTS).glob("ps-*/plan_stall.json")):
+        payload = json.loads(f.read_text())
+        payload.pop("transitions", None)
+        out[f.parent.name] = payload
+    return out
+
+
+def _ps_report(results: dict) -> None:
+    for name, payload in results.items():
+        _save_local(name, payload, None)
+        print(name, "wall_s", payload.get("wall_s"))
+        for h, v in payload["horizons"].items():
+            print(f" goal +{h}: {v['n_transitions']} transitions {v['n_episodes']} episodes  hurt {v['hurt']}  fix {v['fix']}")
+            for s, st in v["scores"].items():
+                print(f"  {s:7s} " + "  ".join(f"{k} {x['value']:.3f} [{x['lo']:.3f},{x['hi']:.3f}]" for k, x in st.items()))
+            for k, x in {**v["paired"], **v["zero_minus_real_split"]}.items():
+                print(f"  {k:28s} {x['value']:+.4f} [{x['lo']:+.4f},{x['hi']:+.4f}]")
+
+
+@app.local_entrypoint()
+def ps_smoke() -> None:
+    import time
+
+    t0 = time.time()
+    ps_smoke_job.remote()
+    print("wall incl. startup", round(time.time() - t0), "s")
+    _ps_report({k: v for k, v in ps_read.remote().items() if k == "ps-smoke"})
+
+
+@app.local_entrypoint()
+def ps_run(clips: int = 100) -> None:
+    ps_full_job.spawn(clips)
+    print("spawned plan-stall; fetch with ::ps_fetch")
+
+
+@app.local_entrypoint()
+def ps_fetch() -> None:
+    _ps_report({k: v for k, v in ps_read.remote().items() if k != "ps-smoke"})

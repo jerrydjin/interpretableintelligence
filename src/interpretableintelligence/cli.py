@@ -1126,6 +1126,107 @@ def gripper_probe_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("impossible-events")
+def impossible_events_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for impossible_events.json and heatmaps/.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the swapped squares, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+    context: Annotated[int, typer.Option("--context", min=1, max=7, help="Real frames of context fed to the predictor (Meta trained with up to 7).")] = 1,
+    start: Annotated[int, typer.Option("--start", min=1, help="First transition scored (raised to context - 1); match it across runs.")] = 1,
+) -> None:
+    """Which impossible next frames does V-JEPA 2-AC notice? (Offline, recorded DROID video.)
+
+    Compares the predictor's surprise at the real next frame with five impossible ones (frozen world,
+    frozen moving square, time reversed, swapped squares, another episode), against a copy-the-frame
+    baseline and a zero action. The verdict rule is fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.impossible_events import run_impossible_events
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            model.predict_batch = 64
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_impossible_events(model, trajectories, out, seed=seed, context=context, start=start, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{result['n_transitions']} moving transitions ({result['n_episodes']} episodes)")
+    for e, v in result["edits"].items():
+        d = v["detected"]
+        typer.echo(
+            f"  {e:13s} {v['verdict']:17s} model {d['model']['value']:.2f} [{d['model']['lo']:.2f}, {d['model']['hi']:.2f}]"
+            f"  zero-action {d['zero_action']['value']:.2f}  copy {d['copy']['value']:.2f}  (n={v['n_transitions']})"
+        )
+    typer.echo(f"wrote {out}")
+
+
+@app.command("plan-stall")
+def plan_stall_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for plan_stall.json.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the random token sets, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Does V-JEPA 2-AC's planner rather stand still, and does scoring the moving parts help? (Offline.)
+
+    On moving DROID transitions the planner picks from the real step, its reverse, doing nothing and
+    26 other directions, under Meta's goal score, a score on the most-changed tokens, and a score on
+    random tokens. The verdict rules are fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.plan_stall import run_plan_stall
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            model.predict_batch = 32
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_plan_stall(model, trajectories, out, seed=seed, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for h, v in result["horizons"].items():
+        typer.echo(f"goal {h} step(s) ahead: {v['n_transitions']} transitions, hurt {v['hurt']}, fix {v['fix']}")
+        for s, st in v["scores"].items():
+            typer.echo("  " + f"{s:7s}" + "  ".join(f"{k} {x['value']:.3f} [{x['lo']:.3f}, {x['hi']:.3f}]" for k, x in st.items()))
+    typer.echo(f"wrote {out}")
+
+
 @app.command("gripper-trace")
 def gripper_trace_cmd(
     clips: Annotated[
