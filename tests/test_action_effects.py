@@ -565,3 +565,60 @@ def test_cli_impossible_events_context(tmp_path):
         outs[k] = json.loads((out / "impossible_events.json").read_text())
     assert outs[4]["context"] == 4 and outs[4]["start"] == 3
     assert [r["t"] for r in outs[1]["transitions"]] == [r["t"] for r in outs[4]["transitions"]]
+
+
+# ----------------------------------------------------------------------------- plan-stall
+
+
+def test_plan_stall_menu_and_masks():
+    import torch
+
+    from interpretableintelligence.worldmodel.plan_stall import MOVING_SHARE, REAL, REVERSE, ZERO, menu, token_masks
+
+    real = np.array([0.02, -0.01, 0.0, 0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+    m = menu(real)
+    assert m.shape == (29, 7)
+    assert np.allclose(m[REAL, 3:6], 0) and np.allclose(m[REAL, :3], real[:3]) and m[REAL, 6] == np.float32(0.4)
+    assert np.allclose(m[REVERSE, :3], -real[:3]) and np.allclose(m[ZERO], 0)
+    # Every move has the real step's length and no rotation.
+    assert np.allclose(np.linalg.norm(m[3:, :3], axis=1), np.linalg.norm(real[:3]), atol=1e-6)
+    assert np.allclose(m[3:, 3:6], 0)
+    z = torch.zeros(10, 4)
+    goal = z.clone()
+    goal[7] = 5.0
+    goal[2] = 3.0
+    masks = token_masks(z, goal, np.random.default_rng(0))
+    k = round(MOVING_SHARE * 10)
+    assert masks["mean"].all() and int(masks["moving"].sum()) == k == int(masks["random"].sum())
+    assert masks["moving"][7] and masks["moving"][2]
+
+
+def test_plan_stall_verdicts():
+    from interpretableintelligence.worldmodel.plan_stall import fix_verdict, hurt_verdict
+
+    def ci(v, lo, hi):
+        return {"value": v, "lo": lo, "hi": hi}
+
+    assert hurt_verdict(ci(0.3, 0.25, 0.35)) == "hurts"
+    assert hurt_verdict(ci(0.05, 0.02, 0.08)) == "harmless"
+    assert hurt_verdict(ci(0.15, 0.1, 0.2)) == "mixed"
+    good, flat = ci(0.2, 0.1, 0.3), ci(0.0, -0.01, 0.01)
+    assert fix_verdict(good, good, flat, flat) == "fixes"
+    assert fix_verdict(good, ci(0.02, -0.05, 0.08), flat, flat) == "partial"  # no better than random tokens
+    assert fix_verdict(good, good, ci(0.1, 0.05, 0.15), flat) == "partial"  # gains direction by stalling more
+    assert fix_verdict(ci(-0.1, -0.2, 0.0), good, flat, flat) == "no_fix"
+
+
+def test_cli_plan_stall_tiny(tmp_path):
+    clips = _clips_with_states(tmp_path, n=3)
+    out = tmp_path / "ps"
+    result = CliRunner().invoke(app, ["plan-stall", "--clips", str(clips), "--out", str(out), "--tiny", "--bootstrap", "20"])
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "plan_stall.json").read_text())
+    assert data["schema"] == "plan-stall/v1"
+    assert set(data["horizons"]) == {"1", "4"}
+    h1 = data["horizons"]["1"]
+    assert h1["n_transitions"] > 0 and set(h1["scores"]) == {"mean", "moving", "random"}
+    assert h1["hurt"] in {"hurts", "harmless", "mixed", "insufficient_data"}
+    rec = next(r for r in data["transitions"] if r["horizon"] == 1)
+    assert np.isfinite(rec["split_moving"]) and np.isfinite(rec["split_still"])
