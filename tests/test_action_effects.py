@@ -537,3 +537,31 @@ def test_cli_impossible_events_tiny(tmp_path):
     assert edits["freeze"]["detected"]["copy"]["value"] == 0.0
     assert edits["splice"]["n_episodes"] == 2  # the first clip has no earlier episode to splice from
     assert (out / "heatmaps" / "local_freeze.png").is_file()
+
+
+def test_predict_next_with_context_matches_meta_layout():
+    import torch
+
+    model = tiny_world_model(seed=0)
+    frames = np.stack([_scene(t)[0] for t in range(4)])
+    z = model.encode_frames(frames)
+    s = torch.rand(4, 7)
+    a = torch.rand(4, 7) * 0.05
+    one = model.predict_next(z[2:3], s[2:3], a[2:3])
+    ctx = model.predict_next(z[None, :3], s[None, :3], a[None, :3])
+    assert ctx.shape == one.shape
+    assert torch.allclose(ctx, one, atol=1e-6)  # the tiny predictor reads only the last frame and action
+
+
+def test_cli_impossible_events_context(tmp_path):
+    clips = _clips_with_states(tmp_path, n=3)
+    outs = {}
+    for k in (1, 4):
+        out = tmp_path / f"ie{k}"
+        args = ["impossible-events", "--clips", str(clips), "--out", str(out), "--tiny", "--bootstrap", "20",
+                "--context", str(k), "--start", "3"]
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 0, result.output
+        outs[k] = json.loads((out / "impossible_events.json").read_text())
+    assert outs[4]["context"] == 4 and outs[4]["start"] == 3
+    assert [r["t"] for r in outs[1]["transitions"]] == [r["t"] for r in outs[4]["transitions"]]

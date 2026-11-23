@@ -1140,6 +1140,8 @@ def impossible_events_cmd(
     max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
     seed: Annotated[int, typer.Option("--seed", help="Seed for the swapped squares, bootstrap and the random predictor.")] = 0,
     bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+    context: Annotated[int, typer.Option("--context", min=1, max=7, help="Real frames of context fed to the predictor (Meta trained with up to 7).")] = 1,
+    start: Annotated[int, typer.Option("--start", min=1, help="First transition scored (raised to context - 1); match it across runs.")] = 1,
 ) -> None:
     """Which impossible next frames does V-JEPA 2-AC notice? (Offline, recorded DROID video.)
 
@@ -1163,7 +1165,7 @@ def impossible_events_cmd(
         trajectories = load_trajectories(clips, max_clips=max_clips)
         if not trajectories:
             raise ValueError(f"no usable clips in {clips}")
-        result = run_impossible_events(model, trajectories, out, seed=seed, n_boot=bootstrap, say=typer.echo)
+        result = run_impossible_events(model, trajectories, out, seed=seed, context=context, start=start, n_boot=bootstrap, say=typer.echo)
     except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

@@ -148,13 +148,21 @@ class ACWorldModel:
 
     @torch.inference_mode()
     def predict_next(self, z: torch.Tensor, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """One step: ``z [B, P, D]``, ``states [B, 7]``, ``actions [B, 7]`` to ``[B, P, D]`` on the CPU."""
+        """One step: ``z [B, P, D]``, ``states [B, 7]``, ``actions [B, 7]`` to ``[B, P, D]`` on the CPU.
+
+        With context, ``z [B, T, P, D]``, ``states [B, T, 7]`` and ``actions [B, T, 7]`` hold the last
+        ``T`` frames, their poses and the action after each (as in Meta's teacher-forced training, where
+        the causal mask lets each frame read all earlier ones); the result is the frame after the last.
+        """
         out = []
         p = self.tokens_per_frame
-        for i in range(0, len(z), self.predict_batch):
-            zb = z[i : i + self.predict_batch].to(self.device)
-            sb = states[i : i + self.predict_batch].to(self.device, torch.float32).unsqueeze(1)
-            ab = actions[i : i + self.predict_batch].to(self.device, torch.float32).unsqueeze(1)
+        if z.dim() == 3:
+            z, states, actions = z.unsqueeze(1), states.unsqueeze(1), actions.unsqueeze(1)
+        batch = max(1, self.predict_batch // z.shape[1])
+        for i in range(0, len(z), batch):
+            zb = z[i : i + batch].flatten(1, 2).to(self.device)
+            sb = states[i : i + batch].to(self.device, torch.float32)
+            ab = actions[i : i + batch].to(self.device, torch.float32)
             with self._autocast():
                 y = self.predictor(zb, ab, sb)[:, -p:]
             y = F.layer_norm(y.float(), (y.shape[-1],))

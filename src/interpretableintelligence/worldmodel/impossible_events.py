@@ -33,6 +33,10 @@ from resampling whole episodes:
 3. ``missed`` when the model's upper end is below ``MISS`` (0.6).
 4. ``mixed`` otherwise.
 
+``--context K`` feeds the last ``K`` real frames instead of one (Meta trained the predictor
+teacher-forced on 8-frame clips, so it saw at most 7 frames of context); ``--start`` fixes the first
+transition so runs with different contexts score the same transitions.
+
 The same command with ``--random-predictor`` keeps the trained encoder and swaps in an untrained
 predictor: the floor for ``model``. Offline, on recorded video; not a rollout finding and never
 touches a scoreboard.
@@ -156,10 +160,20 @@ def screen(
     trajectories: list[Trajectory],
     *,
     seed: int = 0,
+    context: int = 1,
+    start: int = 1,
     heatmaps: Path | None = None,
     say=print,
 ) -> list[dict]:
-    """One record per transition with the surprise of the real frame and of every edit, per detector."""
+    """One record per transition with the surprise of the real frame and of every edit, per detector.
+
+    ``context`` real frames (``t - context + 1 .. t``, with their poses and actions) go into the
+    predictor; edits only ever touch the predicted frame. Transitions start at ``start``, which must
+    leave room for the context, so runs with different contexts can share one set of transitions.
+    """
+    if context < 1:
+        raise ValueError("context must be at least 1 frame")
+    start = max(start, context - 1, 1)
     rng = np.random.default_rng(seed)
     crop, patch = model.crop, model.patch
     side = crop // patch
@@ -169,7 +183,7 @@ def screen(
     for i, tr in enumerate(trajectories):
         frames = resize_frames(tr.frames, crop)
         actions = poses_to_diff(tr.states)
-        moving = [t for t in range(1, len(actions)) if np.linalg.norm(actions[t, :3]) >= MIN_MOVE_M]
+        moving = [t for t in range(start, len(actions)) if np.linalg.norm(actions[t, :3]) >= MIN_MOVE_M]
         z = model.encode_frames(frames)
         if not moving:
             prev_z = z
@@ -188,11 +202,13 @@ def screen(
             else:
                 where_sw.append(None)
         z_edit = model.encode_frames(np.stack(edited))
-        idx = torch.tensor(moving)
-        states = torch.from_numpy(tr.states[moving])
-        act = torch.from_numpy(actions[moving])
-        pred = model.predict_next(z[idx], states, act)
-        pred0 = model.predict_next(z[idx], states, torch.zeros_like(act))
+        win = torch.tensor([[t - context + 1 + c for c in range(context)] for t in moving])
+        states = torch.from_numpy(tr.states[win.numpy()])
+        act = torch.from_numpy(actions[win.numpy()])
+        act0 = act.clone()
+        act0[:, -1] = 0.0  # only the step being predicted loses its action
+        pred = model.predict_next(z[win], states, act)
+        pred0 = model.predict_next(z[win], states, act0)
         k = 0
         for j, t in enumerate(moving):
             z_lf = z_edit[k]
@@ -308,18 +324,22 @@ def run_impossible_events(
     out_dir: Path,
     *,
     seed: int = 0,
+    context: int = 1,
+    start: int = 1,
     n_boot: int = N_BOOT,
     say=print,
 ) -> dict:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    records = screen(model, trajectories, seed=seed, heatmaps=out_dir / "heatmaps", say=say)
+    records = screen(model, trajectories, seed=seed, context=context, start=start, heatmaps=out_dir / "heatmaps", say=say)
     result = {
         "schema": SCHEMA,
         "model": model.name,
         "model_info": model.info,
         "seed": seed,
         "n_boot": n_boot,
+        "context": context,
+        "start": max(start, context - 1, 1),
         "rules": {"square_patches": SQUARE, "min_move_m": MIN_MOVE_M, "min_swap_diff": MIN_SWAP_DIFF, "catch": CATCH, "miss": MISS},
         **summarize(records, n_boot=n_boot, seed=seed),
         "transitions": records,

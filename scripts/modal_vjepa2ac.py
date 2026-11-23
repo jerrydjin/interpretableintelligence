@@ -466,3 +466,51 @@ def ie_run() -> None:
 @app.local_entrypoint()
 def ie_fetch() -> None:
     _ie_report(ie_read.remote())
+
+
+# ----------------------------------------------------------------------------- impossible-events with more context
+
+CTX_START = "6"  # leaves room for 7 context frames (Meta trained on 8-frame clips: 7 in, 7 out), so every context scores the same transitions
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def ctx_smoke_job() -> dict:
+    return {f"ctx-smoke-{k}": _impossible(f"{RESULTS}/ctx-smoke-{k}", "--max-clips", "3", "--bootstrap", "200",
+                                          "--context", k, "--start", CTX_START, fresh=True) for k in ("1", "7")}
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def ctx_full_job(contexts: str = "1,4,7", clips: int = 50) -> dict:
+    return {f"ctx-{k}": _impossible(f"{RESULTS}/ctx-{k}", "--context", k, "--start", CTX_START, "--max-clips", str(clips))
+            for k in contexts.split(",")}
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def ctx_read() -> dict:
+    out = {}
+    for f in sorted(Path(RESULTS).glob("ctx-*/impossible_events.json")):
+        payload = json.loads(f.read_text())
+        payload.pop("transitions", None)
+        out[f.parent.name] = payload
+    return out
+
+
+@app.local_entrypoint()
+def ctx_smoke() -> None:
+    import time
+
+    t0 = time.time()
+    ctx_smoke_job.remote()
+    print("wall incl. startup", round(time.time() - t0), "s")
+    _ie_report({k: v for k, v in ctx_read.remote().items() if k in ("ctx-smoke-1", "ctx-smoke-7")})
+
+
+@app.local_entrypoint()
+def ctx_run(contexts: str = "1,4,7", clips: int = 50) -> None:
+    ctx_full_job.spawn(contexts, clips)
+    print("spawned; fetch with ::ctx_fetch")
+
+
+@app.local_entrypoint()
+def ctx_fetch() -> None:
+    _ie_report(ctx_read.remote())
