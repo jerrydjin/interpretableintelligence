@@ -158,32 +158,31 @@ def _redirect(path: Path, target: str) -> None:
     )
 
 
+# The home page's picture: one of the playground pack's sample pictures (demo-site/live/, hand-kept).
+HERO_PACK = "clip-b16-words"
+HERO_SAMPLE = "01-coco-14475"
+
+
 def _write_home(path: Path, summary: dict, run: dict) -> None:
-    """The front door: the world model first, then the ways in."""
-    lead = run["features"][0]
-    clip = site_explore.HERO_CLIP
-    tiles = "".join(
-        f'<span class="tile" style="{site_explore.tile_style(lead["id"], i)}"></span>' for i in range(4)
-    )
+    """The front door: ask a model what it sees, then find out why. Then the ways in."""
+    del run
+    picture = f"/live/packs/{HERO_PACK}/samples/{HERO_SAMPLE}.jpg"
     body = f"""
     <section class="hero hero-split">
       <div>
-        <h1>See what a robot's world model has learnt.</h1>
-        <p class="lede">V-JEPA 2 watches robot video and predicts what comes next. ii finds the features inside it and tests each one before it gets a name you can trust.</p>
-        <p class="actions"><a class="button" href="/explore/" data-testid="cta">Explore V-JEPA 2</a><a class="button button-quiet" href="/live/">Try your own pictures</a></p>
+        <h1>Ask a vision model what it sees, then find out why.</h1>
+        <p class="lede">Pick a picture and the model says what it sees, in words. ii shows you the features inside it that make it see that, and lets you switch them off to check.</p>
+        <p class="actions"><a class="button" href="/live/" data-testid="cta">Open the playground</a><a class="button button-quiet" href="/start/">Run it on your model</a></p>
       </div>
       <figure class="stage">
-        <video src="/explore/media/{clip}" autoplay muted loop playsinline aria-label="A robot taking the lid off a pot"></video>
-        <a class="stage-feature" href="{site_explore.feature_href(lead["id"])}" data-testid="hero-feature">
-          <span class="tiles">{tiles}</span>
-          <span>{escape(lead["name"])} <span class="id">#{lead["id"]}</span></span>
-        </a>
+        <a href="/live/#p={HERO_SAMPLE}" data-testid="hero-picture"><img src="{picture}" alt="A picture from the playground" class="stage-picture"></a>
+        <a class="stage-feature" href="/live/#p={HERO_SAMPLE}"><span>What does it see? Open this picture in the playground</span></a>
       </figure>
     </section>
     <ul class="doors" data-testid="doors">
-      <li><a class="card" href="/explore/"><span class="card-title">Explore</span><span class="card-text">Every scored V-JEPA 2 feature, with where it fires and which checks it passed.</span></a></li>
-      <li><a class="card" href="/live/"><span class="card-title">Playground</span><span class="card-text">Your own pictures or video, in your browser. Switch a feature off and see what changes.</span></a></li>
-      <li><a class="card" href="/start/"><span class="card-title">Your model</span><span class="card-text">The same tests on any Hugging Face vision or video model, on your laptop.</span></a></li>
+      <li><a class="card" href="/live/"><span class="card-title">Playground</span><span class="card-text">Your own pictures, in your browser. See what the model sees, which features make it see that, and switch them off.</span></a></li>
+      <li><a class="card" href="/start/"><span class="card-title">Your model</span><span class="card-text">The same tools on any Hugging Face vision or video model, on your laptop.</span></a></li>
+      <li><a class="card" href="/explore/"><span class="card-title">V-JEPA 2</span><span class="card-text">A robot's world model: its scored features, with where each fires and which checks it passed.</span></a></li>
     </ul>
     <section>
       <h2>Research</h2>
@@ -194,7 +193,7 @@ def _write_home(path: Path, summary: dict, run: dict) -> None:
     </section>
     """
     path.write_text(
-        _page("interpretable intelligence", "", body, "See what a robot's world model has learnt, and test every feature before trusting it.", wide=True),
+        _page("interpretable intelligence", "", body, "Ask a vision model what it sees, then find the features that make it see that and switch them off.", wide=True),
         encoding="utf-8",
     )
 

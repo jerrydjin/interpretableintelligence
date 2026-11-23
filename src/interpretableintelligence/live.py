@@ -150,11 +150,17 @@ def split_model(adapter) -> tuple[torch.nn.Module, torch.nn.Module]:
     if embeddings is None:
         raise LiveExportError(f"{type(model).__name__} has no .embeddings, so it cannot be split for the browser")
     norm = None
-    for name in ("layernorm", "post_layernorm", "norm"):
-        candidate = getattr(model, name, None)
-        if isinstance(candidate, torch.nn.Module):
-            norm = candidate
-            break
+    pre = getattr(model, "pre_layrnorm", None)
+    if isinstance(pre, torch.nn.Module):
+        # CLIP-style towers norm the embeddings before block 1, and their last_hidden_state
+        # comes before post_layernorm (which only feeds the pooled output).
+        embeddings = torch.nn.Sequential(embeddings, pre)
+    else:
+        for name in ("layernorm", "post_layernorm", "norm"):
+            candidate = getattr(model, name, None)
+            if isinstance(candidate, torch.nn.Module):
+                norm = candidate
+                break
     blocks = list(adapter._blocks)
     layer = int(adapter.layer)
     return _Front(embeddings, blocks[:layer]).eval(), _Back(blocks[layer:], norm).eval()
@@ -189,12 +195,20 @@ def export_live(
     title: str | None = None,
     log: Callable[[str], None] = lambda _msg: None,
     browser: bool = True,
+    readout: str = "tokens",
+    words_path: Path | None = None,
+    sample_dir: Path | None = None,
 ) -> LiveSummary:
     """Write a live-playground pack for ``run_dir`` into ``out_dir``. See the module docstring.
 
     ``browser=False`` writes a backend-only pack: no ONNX files and no ``decoder.bin``, only what
     the hosted backend reads (``pack.json``, ``features.json``, ``sae.safetensors``, samples).
-    Packs built from a model picked on the page (``playground.builds``) are made this way."""
+    Packs built from a model picked on the page (``playground.builds``) are made this way.
+
+    ``readout="words"`` (CLIP models) writes a version 2 pack whose readout is what the model
+    sees, in words, instead of its final tokens: ``front.onnx``, ``words.onnx``, ``text.bin`` and
+    ``vocab.json`` replace ``back.onnx`` (``live_words``). ``sample_dir`` ships the pictures in a
+    folder (with an optional ``credits.json``, file name to credit line) instead of clip frames."""
     from interpretableintelligence.adapters import get_adapter
     from interpretableintelligence.sae import load_sae
     from interpretableintelligence.artifacts import read_json
@@ -211,6 +225,10 @@ def export_live(
     adapter_name = str(model_info.get("adapter") or "")
     if not adapter_name.startswith("hf:"):
         raise LiveExportError(f"the live playground runs Hugging Face image models (hf:<model>); this run uses {adapter_name or 'no adapter'}")
+    if readout not in ("tokens", "words"):
+        raise LiveExportError(f"readout must be tokens or words, not {readout!r}")
+    if readout == "words" and not browser:
+        raise LiveExportError("the words readout runs in the browser only")
     if not (run_dir / "sae" / "weights.safetensors").is_file():
         raise LiveExportError(f"{run_dir} has no trained SAE (sae/weights.safetensors); run ii run first")
     layer = int(manifest["layer"])
@@ -238,32 +256,38 @@ def export_live(
     prefix = int(adapter._prefix)
     d_model = int(adapter.d_model)
 
-    log("exporting the model to ONNX")
-    # Plain (eager) attention: the SDPA path exports a float64 Sqrt for its scale, which
-    # ONNX Runtime Web's WebGPU build cannot run. Same maths, so the gap check below still holds.
-    if hasattr(adapter.model, "set_attn_implementation"):
-        adapter.model.set_attn_implementation("eager")
-    front, back = split_model(adapter)
-    pixels = torch.zeros(1, 3, size, size)
-    with torch.no_grad():
-        hidden = front(pixels)
-        reference = back(hidden)
-        full = adapter.model(pixel_values=pixels, **adapter._extra)
-    gap = float((reference - full.last_hidden_state).abs().max())
-    if gap > 1e-4:
-        raise LiveExportError(f"split model does not reproduce the full forward (max gap {gap:.2e})")
-    if tuple(hidden.shape) != (1, prefix + grid_h * grid_w, d_model):
-        raise LiveExportError(f"block {layer} output {tuple(hidden.shape)} is not {prefix} prefix + {grid_h}x{grid_w} patch tokens")
-    if browser:
-        _export_onnx(front, pixels, out_dir / "front.onnx", "pixel_values", "hidden")
-        _export_onnx(back, hidden, out_dir / "back.onnx", "hidden", "final")
-        _export_onnx(_SaePre(sae).eval(), torch.zeros(grid_h * grid_w, d_model), out_dir / "sae.onnx", "x", "pre", dynamic=True)
-        decoder = sae.W_dec.detach().float().cpu().T.contiguous().numpy().astype("<f2")
-        (out_dir / "decoder.bin").write_bytes(decoder.tobytes())
-    write_pack_sae(sae, out_dir)
+    words_meta = None
+    if readout == "words":
+        log("writing sample pictures")
+        samples = _pack_samples(manifest, run_dir, clips_dir, sample_dir, out_dir / "samples", n_samples)
+        words_meta = _export_words(adapter, sae, features, out_dir, samples, words_path, log)
+    else:
+        log("exporting the model to ONNX")
+        # Plain (eager) attention: the SDPA path exports a float64 Sqrt for its scale, which
+        # ONNX Runtime Web's WebGPU build cannot run. Same maths, so the gap check below still holds.
+        if hasattr(adapter.model, "set_attn_implementation"):
+            adapter.model.set_attn_implementation("eager")
+        front, back = split_model(adapter)
+        pixels = torch.zeros(1, 3, size, size)
+        with torch.no_grad():
+            hidden = front(pixels)
+            reference = back(hidden)
+            full = adapter.model(pixel_values=pixels, **adapter._extra)
+        gap = float((reference - full.last_hidden_state).abs().max())
+        if gap > 1e-4:
+            raise LiveExportError(f"split model does not reproduce the full forward (max gap {gap:.2e})")
+        if tuple(hidden.shape) != (1, prefix + grid_h * grid_w, d_model):
+            raise LiveExportError(f"block {layer} output {tuple(hidden.shape)} is not {prefix} prefix + {grid_h}x{grid_w} patch tokens")
+        if browser:
+            _export_onnx(front, pixels, out_dir / "front.onnx", "pixel_values", "hidden")
+            _export_onnx(back, hidden, out_dir / "back.onnx", "hidden", "final")
+            _export_onnx(_SaePre(sae).eval(), torch.zeros(grid_h * grid_w, d_model), out_dir / "sae.onnx", "x", "pre", dynamic=True)
+            decoder = sae.W_dec.detach().float().cpu().T.contiguous().numpy().astype("<f2")
+            (out_dir / "decoder.bin").write_bytes(decoder.tobytes())
+        write_pack_sae(sae, out_dir)
 
-    log("writing sample frames")
-    samples = _write_samples(manifest, run_dir, clips_dir, out_dir / "samples", n_samples)
+        log("writing sample frames")
+        samples = _pack_samples(manifest, run_dir, clips_dir, sample_dir, out_dir / "samples", n_samples)
 
     (out_dir / "features.json").write_text(json.dumps(features, separators=(",", ":")) + "\n", encoding="utf-8")
     scoreboard = _read_optional(run_dir / "scoreboard.json")
@@ -274,7 +298,7 @@ def export_live(
     name = str(model_info.get("name") or adapter_name[3:])
     pack = {
         "format": FORMAT,
-        "version": VERSION,
+        "version": 2 if words_meta else VERSION,
         "title": title or f"{name.split('/')[-1]} on {manifest['run_id']}",
         "run_id": manifest["run_id"],
         "model": {
@@ -290,8 +314,9 @@ def export_live(
             "d_model": d_model,
             "mean": [float(v) for v in adapter._mean],
             "std": [float(v) for v in adapter._std],
-            "resize": "squash",
-            "readout": "last_hidden_state",
+            # The words readout centre-crops, as CLIP was trained; the hf adapter squashes.
+            "resize": "crop" if words_meta else "squash",
+            "readout": "words" if words_meta else "last_hidden_state",
         },
         "sae": {
             "n_features": int(config.n_features),
@@ -303,18 +328,27 @@ def export_live(
             "loss_recovered": (sae_block or {}).get("loss_recovered") if isinstance(sae_block, dict) else None,
         },
         "n_real": n_real,
+        **({"words": words_meta["info"]} if words_meta else {}),
         "files": {
-            **({"front": "front.onnx", "back": "back.onnx", "sae": "sae.onnx", "decoder": "decoder.bin"} if browser else {}),
+            **(
+                {"front": "front.onnx", "words": "words.onnx", "sae": "sae.onnx", "decoder": "decoder.bin", "text": "text.bin", "vocab": "vocab.json"}
+                if words_meta
+                else {"front": "front.onnx", "back": "back.onnx", "sae": "sae.onnx", "decoder": "decoder.bin"} if browser else {}
+            ),
             "features": "features.json",
-            "sae_weights": SAE_WEIGHTS,
+            **({} if words_meta else {"sae_weights": SAE_WEIGHTS}),
         },
-        "runs_in": ["browser", "backend"] if browser else ["backend"],
+        # The words readout runs in the browser only; the playground backend skips it.
+        "runs_in": ["browser"] if words_meta else ["browser", "backend"] if browser else ["backend"],
         "samples": samples,
         "train_clips": sum(1 for clip in manifest.get("clips") or [] if clip.get("split") == "train"),
         "meta_source": "export" if meta_from is not None else "run",
         "evidence": False,
         "note": "Exploration only. Badges are copied from the run's scoreboard; nothing in the browser changes them.",
     }
+    if words_meta:
+        # GitHub refuses files over 100 MB and big files stall on slow links: ship parts, the page joins them.
+        pack["files"] = split_large(out_dir, pack["files"])
     pack["digests"] = file_digests(out_dir, pack["files"])
     (out_dir / "pack.json").write_text(json.dumps(pack, indent=2) + "\n", encoding="utf-8")
     files = {path.relative_to(out_dir).as_posix(): path.stat().st_size for path in sorted(out_dir.rglob("*")) if path.is_file()}
@@ -332,11 +366,40 @@ def export_live(
 SAE_WEIGHTS = "sae.safetensors"
 
 
-def file_digests(out_dir: Path, files: dict[str, str]) -> dict[str, str]:
-    """Short sha256 of each pack file, so browsers and caches never mix two exports."""
+PART_BYTES = 40_000_000
+
+
+def split_large(out_dir: Path, files: dict, part_bytes: int = PART_BYTES) -> dict:
+    """Files over ``part_bytes`` become ``name.0``, ``name.1``, ...; the entry becomes the list of parts."""
+    out = {}
+    for key, name in files.items():
+        path = Path(out_dir) / name
+        size = path.stat().st_size
+        if size <= part_bytes:
+            out[key] = name
+            continue
+        data = path.read_bytes()
+        parts = []
+        for i, start in enumerate(range(0, size, part_bytes)):
+            part = f"{name}.{i}"
+            (Path(out_dir) / part).write_bytes(data[start : start + part_bytes])
+            parts.append(part)
+        path.unlink()
+        out[key] = parts
+    return out
+
+
+def file_digests(out_dir: Path, files: dict) -> dict[str, str]:
+    """Short sha256 of each pack file (all parts of a split one), so browsers and caches never mix two exports."""
     import hashlib
 
-    return {key: hashlib.sha256((Path(out_dir) / name).read_bytes()).hexdigest()[:16] for key, name in files.items()}
+    out = {}
+    for key, name in files.items():
+        digest = hashlib.sha256()
+        for part in [name] if isinstance(name, str) else name:
+            digest.update((Path(out_dir) / part).read_bytes())
+        out[key] = digest.hexdigest()[:16]
+    return out
 
 
 def pack_sae_tensors(W_enc, b_enc, W_dec, b_dec) -> dict[str, torch.Tensor]:
@@ -521,6 +584,119 @@ def _write_samples(manifest: dict, run_dir: Path, clips_dir: Path | None, dest: 
         (dest / name).write_bytes(encode_jpeg(frame))
         out.append({"file": f"samples/{name}", "clip_id": str(clip["clip_id"]), "split": clip.get("split"), "frame": len(frames) // 2})
     return out
+
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+SEES_PICTURES = 8
+
+
+def _pack_samples(manifest: dict, run_dir: Path, clips_dir: Path | None, sample_dir: Path | None, dest: Path, n_samples: int) -> list[dict]:
+    if sample_dir is None:
+        return _write_samples(manifest, run_dir, clips_dir, dest, n_samples)
+    return _samples_from_dir(Path(sample_dir), dest, n_samples)
+
+
+def _samples_from_dir(sample_dir: Path, dest: Path, n_samples: int) -> list[dict]:
+    """Up to ``n_samples`` pictures from a folder, in name order, with credits from ``credits.json``."""
+    if not sample_dir.is_dir():
+        raise LiveExportError(f"{sample_dir} is not a folder of pictures")
+    credits = _read_optional(sample_dir / "credits.json") or {}
+    files = sorted(p for p in sample_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)[:n_samples]
+    if not files:
+        raise LiveExportError(f"{sample_dir} has no .jpg, .png or .webp pictures")
+    dest.mkdir(parents=True, exist_ok=True)
+    out = []
+    for path in files:
+        name = f"{path.stem}.jpg"
+        (dest / name).write_bytes(encode_jpeg(read_image(path)))
+        entry = {"file": f"samples/{name}", "clip_id": path.stem, "split": "sample"}
+        credit = credits.get(path.name) if isinstance(credits, dict) else None
+        if isinstance(credit, str) and credit:
+            entry["credit"] = credit
+        out.append(entry)
+    return out
+
+
+def read_image(path: Path) -> np.ndarray:
+    """A picture file as ``[H, W, 3]`` uint8, through PyAV (no imaging dependency)."""
+    import av
+
+    with av.open(str(path)) as container:
+        for frame in container.decode(video=0):
+            return frame.to_ndarray(format="rgb24")
+    raise LiveExportError(f"{path} holds no picture")
+
+
+def _export_words(adapter, sae, features: list[dict], out_dir: Path, samples: list[dict], words_path: Path | None, log) -> dict:
+    """The words readout's files (see ``live_words``), and each feature's ``sees``."""
+    from interpretableintelligence import live_words as lw
+
+    try:
+        import onnxscript  # noqa: F401
+    except ImportError as exc:
+        raise LiveExportError("the words readout needs onnxscript: uv sync --extra live") from exc
+    words = lw.load_words(words_path)
+    layer = int(adapter.layer)
+    log(f"loading the image-text model and embedding {len(words)} words")
+    try:
+        model, tokenizer = lw.load_image_text_model(adapter)
+    except lw.WordsError as exc:
+        raise LiveExportError(str(exc)) from exc
+    table = lw.text_table(model, tokenizer, words)
+    scale = float(model.logit_scale.exp())
+    front = lw.Front(model.vision_model, layer).eval()
+    head = lw.WordsHead(model, layer).eval()
+    size = int(adapter._size)
+    pixels = torch.randn(1, 3, size, size, generator=torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        full = model.vision_model(pixel_values=pixels, output_hidden_states=True)
+        hidden = front(pixels)
+        gap = float((hidden - full.hidden_states[layer]).abs().max())
+        reference = model.visual_projection(full.pooler_output)
+        gap = max(gap, float((head.embed(hidden) - reference).abs().max()))
+    if gap > 1e-4:
+        raise LiveExportError(f"split model does not reproduce the full forward (max gap {gap:.2e})")
+    log("exporting the model to ONNX (the second half with its gradient)")
+    lw.export_front_onnx(front, pixels, out_dir / "front.onnx")
+    lw.export_words_onnx(head, hidden, out_dir / "words.onnx")
+    for name in ("front.onnx", "words.onnx"):
+        lw.halve_onnx(out_dir / name)
+        lw.int8_onnx(out_dir / name)
+        lw.check_no_float64(out_dir / name)
+    grid = int(adapter._h) * int(adapter._w)
+    _export_onnx(_SaePre(sae).eval(), torch.zeros(grid, int(adapter.d_model)), out_dir / "sae.onnx", "x", "pre", dynamic=True)
+    decoder = sae.W_dec.detach().float().cpu().T.contiguous()
+    (out_dir / "decoder.bin").write_bytes(decoder.numpy().astype("<f2").tobytes())
+    (out_dir / "text.bin").write_bytes(table.astype("<f2").tobytes())
+    (out_dir / "vocab.json").write_text(json.dumps(words, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    if samples:
+        # The first few samples are enough to see what a feature pushes towards, and keep this to minutes on a CPU.
+        used = samples[:SEES_PICTURES]
+        frames = np.stack([_square(read_image(out_dir / s["file"]), size) for s in used])
+        with torch.no_grad():
+            hiddens = front(adapter._preprocess(frames))
+        peaks = torch.tensor([float(f.get("max") or 0.0) for f in features])
+        found = lw.sees(head, hiddens, decoder, peaks, torch.from_numpy(table), scale, int(adapter._prefix), words, log=log)
+        for feature, rows in zip(features, found):
+            if rows:
+                feature["sees"] = rows
+    return {
+        "info": {
+            "n": len(words),
+            "dim": int(table.shape[1]),
+            "logit_scale": round(scale, 4),
+            "prompt": lw.PROMPT,
+            "sees": {"strength": 2.0, "pictures": min(len(samples), SEES_PICTURES)},
+        }
+    }
+
+
+def _square(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Resize a picture to ``size`` x ``size`` (squashed, as the page and the hf adapter do)."""
+    x = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1)[None].float()
+    x = torch.nn.functional.interpolate(x, size=(size, size), mode="bilinear", antialias=True, align_corners=False)
+    return x[0].permute(1, 2, 0).clamp(0, 255).round().to(torch.uint8).numpy()
 
 
 def encode_jpeg(rgb: np.ndarray, max_edge: int = SAMPLE_PX, quality: int = 4) -> bytes:

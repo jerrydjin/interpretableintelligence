@@ -206,3 +206,53 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 .fold summary { cursor: pointer; color: var(--ink-2); font-size: var(--t-small); }
 .fold summary:hover { color: var(--ink); }
 .fold[open] summary { margin-bottom: 4px; }
+
+/* ------------------------------------------------------------ words first (index.html, see.js) */
+.stage.square { aspect-ratio: 1 / 1; max-width: 640px; cursor: default; }
+.stage.square img, .stage.square video { object-fit: cover; }
+.see .stage-col { max-width: 640px; }
+.see .work { grid-template-columns: minmax(0, 640px) minmax(320px, 1fr); }
+body.working { cursor: progress; }
+
+.words { display: flex; flex-direction: column; gap: 2px; margin: 8px 0 12px; }
+.wrow {
+  display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) 7.5rem; gap: 12px; align-items: center;
+  padding: 7px 10px; margin: 0 -10px; width: calc(100% + 20px);
+  border: 0; border-radius: var(--radius-sm); background: none; text-align: left; font: inherit; color: var(--ink);
+}
+button.wrow { cursor: pointer; }
+button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
+.wrow.on { background: var(--signal-wash); }
+.wname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbar { position: relative; height: 6px; border-radius: 999px; background: var(--well); overflow: hidden; }
+.wbar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; }
+.wbar .now { background: var(--steer); }
+.wbar .was { background: var(--line-2); }
+.wpct { font-size: var(--t-small); color: var(--ink-2); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.why-head { margin-top: 28px; }
+.frow.why { grid-template-columns: auto minmax(0, 1fr) 22%; cursor: default; }
+.frow.why.off .fname, .frow.why.off .also { color: var(--ink-3); text-decoration: line-through; text-decoration-color: var(--line-2); }
+.fname-btn { display: flex; align-items: center; gap: 10px; min-width: 0; border: 0; background: none; padding: 0; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.fthumb { width: 44px; height: 44px; flex: none; border-radius: 6px; background: var(--well); }
+.frow.why.off .fthumb { opacity: 0.35; }
+.frow.why .fname { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.fname-btn:hover .fname { text-decoration: underline; text-underline-offset: 3px; }
+.also { font-size: var(--t-small); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.switch { position: relative; width: 34px; height: 20px; flex: none; border: 0; border-radius: 999px; background: var(--signal); cursor: pointer; padding: 0; transition: background 0.15s ease; }
+.switch span { position: absolute; top: 3px; left: 17px; width: 14px; height: 14px; border-radius: 50%; background: var(--sheet); transition: left 0.15s ease; }
+.switch[aria-checked="false"] { background: var(--line-2); }
+.switch[aria-checked="false"] span { left: 3px; }
+.row-actions { margin: 12px 0 0; }
+.see .find { margin: 4px 0 0; }
+.see .find input { font: inherit; font-size: var(--t-small); }
+.see .gallery { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 980px) {
+  .see .work { grid-template-columns: minmax(0, 1fr); }
+  .see .stage-col, .stage.square { max-width: none; }
+}
+.see .panel { position: static; max-height: none; overflow: visible; }
+.see .result { margin: 4px 0 8px; }
+.see .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.see .how .fine { margin-top: 12px; }
+#credit { overflow-wrap: anywhere; }

@@ -240,7 +240,7 @@ def test_page_runs_on_the_backend(served, tmp_path):
     direct = served["client"].post(
         "/v1/packs/tiny/steer", json={"image_id": expected["image_id"], "features": [feature], "kind": "scale", "value": 3}
     ).json()
-    url = f"http://127.0.0.1:{httpd.server_address[1]}/live/?pack=packs/tiny/&api=http://127.0.0.1:{port}"
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/live/features.html?pack=packs/tiny/&api=http://127.0.0.1:{port}"
     try:
         with sync_api.sync_playwright() as playwright:
             browser = playwright.chromium.launch(executable_path=chrome, headless=True, args=["--no-sandbox"])

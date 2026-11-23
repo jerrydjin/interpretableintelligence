@@ -121,15 +121,19 @@ def test_cut_pages_forward_to_where_they_went():
         assert sorted(p.name for p in (ROOT / old).iterdir()) == ["index.html"], old
 
 
-def test_home_leads_with_the_world_model():
+def test_home_leads_with_the_playground():
     page = (ROOT / "index.html").read_text(encoding="utf-8")
     text = _text(page)
-    assert 'href="/explore/" data-testid="cta"' in page
-    assert 'href="/live/"' in page and 'href="/start/"' in page
+    assert 'href="/live/" data-testid="cta"' in page
+    assert 'href="/start/"' in page and 'href="/explore/"' in page
     assert 'href="/blog/groot-1028/" data-testid="post-link"' in page
-    assert "world model" in text
-    assert 'src="/explore/media/droid_ep068.mp4"' in page
-    assert 'href="/explore/vjepa2-vitl/L16/270/" data-testid="hero-feature"' in page
+    assert "what it sees" in text
+    from interpretableintelligence.export_site import HERO_PACK, HERO_SAMPLE
+
+    # The picture is one of the playground pack's own samples, and it opens there.
+    samples = json.loads((ROOT / "live" / "packs" / HERO_PACK / "pack.json").read_text(encoding="utf-8"))["samples"]
+    assert HERO_SAMPLE in {s["clip_id"] for s in samples}
+    assert f'href="/live/#p={HERO_SAMPLE}" data-testid="hero-picture"' in page
     for gone in ("/droid/", "/results/", "/demos/", "/fake/", "/picker/", "Synthetic"):
         assert gone not in page
     assert "\u2014" not in page

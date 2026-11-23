@@ -1,0 +1,197 @@
+{
+  "format": "ii-live-pack",
+  "version": 2,
+  "title": "CLIP ViT-B/16 on photos and robot video",
+  "run_id": "clip-words",
+  "model": {
+    "name": "openai/clip-vit-base-patch16",
+    "adapter": "hf:openai/clip-vit-base-patch16",
+    "sha": "d58b4f44ecd818cc1f823392ce6d5225a818b65366a4852155ac17c394e4b7ad",
+    "layer": 8,
+    "n_layers": 12,
+    "image_size": 224,
+    "patch_px": 16,
+    "grid": {
+      "h": 14,
+      "w": 14
+    },
+    "prefix_tokens": 1,
+    "d_model": 768,
+    "mean": [
+      0.48145466,
+      0.4578275,
+      0.40821073
+    ],
+    "std": [
+      0.26862954,
+      0.26130258,
+      0.27577711
+    ],
+    "resize": "crop",
+    "readout": "words"
+  },
+  "sae": {
+    "n_features": 6144,
+    "activation": "topk",
+    "k": 32,
+    "threshold": null,
+    "usable": false,
+    "ev_heldout": null,
+    "loss_recovered": null
+  },
+  "n_real": 0,
+  "words": {
+    "n": 625,
+    "dim": 512,
+    "logit_scale": 100.0,
+    "prompt": "a photo of {article} {word}.",
+    "sees": {
+      "strength": 2.0,
+      "pictures": 8
+    }
+  },
+  "files": {
+    "front": [
+      "front.onnx.0",
+      "front.onnx.1"
+    ],
+    "words": "words.onnx",
+    "sae": "sae.onnx",
+    "decoder": "decoder.bin",
+    "text": "text.bin",
+    "vocab": "vocab.json",
+    "features": "features.json"
+  },
+  "runs_in": [
+    "browser"
+  ],
+  "samples": [
+    {
+      "file": "samples/00-droid-029.jpg",
+      "clip_id": "00-droid-029",
+      "split": "sample",
+      "credit": "DROID (lerobot/droid_100, MIT licence), a robot video the dictionary never saw"
+    },
+    {
+      "file": "samples/01-coco-14475.jpg",
+      "clip_id": "01-coco-14475",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm3.staticflickr.com/2147/2220387342_da5417768e_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/02-coco-17179.jpg",
+      "clip_id": "02-coco-17179",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm4.staticflickr.com/3265/3141931713_06086fc831_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/03-droid-032.jpg",
+      "clip_id": "03-droid-032",
+      "split": "sample",
+      "credit": "DROID (lerobot/droid_100, MIT licence), a robot video the dictionary never saw"
+    },
+    {
+      "file": "samples/04-coco-3742.jpg",
+      "clip_id": "04-coco-3742",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm6.staticflickr.com/5336/8952581835_b006c30817_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/05-coco-7762.jpg",
+      "clip_id": "05-coco-7762",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm8.staticflickr.com/7008/6489247567_00dce3135f_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/06-droid-083.jpg",
+      "clip_id": "06-droid-083",
+      "split": "sample",
+      "credit": "DROID (lerobot/droid_100, MIT licence), a robot video the dictionary never saw"
+    },
+    {
+      "file": "samples/07-coco-4796.jpg",
+      "clip_id": "07-coco-4796",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm7.staticflickr.com/6238/6289252033_aa4fac47d6_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/08-coco-15811.jpg",
+      "clip_id": "08-coco-15811",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm8.staticflickr.com/7066/7153633891_0794d258e8_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/09-droid-061.jpg",
+      "clip_id": "09-droid-061",
+      "split": "sample",
+      "credit": "DROID (lerobot/droid_100, MIT licence), a robot video the dictionary never saw"
+    },
+    {
+      "file": "samples/10-coco-8934.jpg",
+      "clip_id": "10-coco-8934",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm5.staticflickr.com/4033/4645631946_d735b7ced1_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/11-coco-12902.jpg",
+      "clip_id": "11-coco-12902",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm2.staticflickr.com/1229/532373063_c1707545ae_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/12-droid-092.jpg",
+      "clip_id": "12-droid-092",
+      "split": "sample",
+      "credit": "DROID (lerobot/droid_100, MIT licence), a robot video the dictionary never saw"
+    },
+    {
+      "file": "samples/13-coco-15984.jpg",
+      "clip_id": "13-coco-15984",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm8.staticflickr.com/7317/8724587023_7ee0aec4c7_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/14-coco-10432.jpg",
+      "clip_id": "14-coco-10432",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm6.staticflickr.com/5457/9690393462_ba33edf573_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/15-droid-073.jpg",
+      "clip_id": "15-droid-073",
+      "split": "sample",
+      "credit": "DROID (lerobot/droid_100, MIT licence), a robot video the dictionary never saw"
+    },
+    {
+      "file": "samples/16-coco-17180.jpg",
+      "clip_id": "16-coco-17180",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm9.staticflickr.com/8183/8098878067_7313cf8d03_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/17-coco-8187.jpg",
+      "clip_id": "17-coco-8187",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm8.staticflickr.com/7301/9371864980_04993d270e_z.jpg), CC BY 2.0"
+    },
+    {
+      "file": "samples/18-coco-8531.jpg",
+      "clip_id": "18-coco-8531",
+      "split": "sample",
+      "credit": "COCO 2017, from Flickr (http://farm9.staticflickr.com/8348/8270728392_d003266d40_z.jpg), CC BY 2.0"
+    }
+  ],
+  "train_clips": 374,
+  "meta_source": "run",
+  "evidence": false,
+  "note": "Exploration only. Badges are copied from the run's scoreboard; nothing in the browser changes them.",
+  "digests": {
+    "front": "5e09e375890914c7",
+    "words": "f45d3db7a4952949",
+    "sae": "9849fcb3167280d1",
+    "decoder": "3e70c13ce8da4de3",
+    "text": "be5a88b7555171e4",
+    "vocab": "e338dd1032ceb8da",
+    "features": "ddeff899baf47c35"
+  }
+}
