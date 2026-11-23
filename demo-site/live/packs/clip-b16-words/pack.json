@@ -53,13 +53,9 @@
   "files": {
     "front": [
       "front.onnx.0",
-      "front.onnx.1",
-      "front.onnx.2"
+      "front.onnx.1"
     ],
-    "words": [
-      "words.onnx.0",
-      "words.onnx.1"
-    ],
+    "words": "words.onnx",
     "sae": "sae.onnx",
     "decoder": "decoder.bin",
     "text": "text.bin",
@@ -190,8 +186,8 @@
   "evidence": false,
   "note": "Exploration only. Badges are copied from the run's scoreboard; nothing in the browser changes them.",
   "digests": {
-    "front": "82b406a81808ecd7",
-    "words": "cff8703fd566b633",
+    "front": "5e09e375890914c7",
+    "words": "f45d3db7a4952949",
     "sae": "9849fcb3167280d1",
     "decoder": "3e70c13ce8da4de3",
     "text": "be5a88b7555171e4",

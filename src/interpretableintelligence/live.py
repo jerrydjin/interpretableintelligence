@@ -661,6 +661,7 @@ def _export_words(adapter, sae, features: list[dict], out_dir: Path, samples: li
     lw.export_words_onnx(head, hidden, out_dir / "words.onnx")
     for name in ("front.onnx", "words.onnx"):
         lw.halve_onnx(out_dir / name)
+        lw.int8_onnx(out_dir / name)
         lw.check_no_float64(out_dir / name)
     grid = int(adapter._h) * int(adapter._w)
     _export_onnx(_SaePre(sae).eval(), torch.zeros(grid, int(adapter.d_model)), out_dir / "sae.onnx", "x", "pre", dynamic=True)

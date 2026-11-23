@@ -123,10 +123,10 @@ def test_words_graph_matches_torch_gradient(words_run):
     def rel(a, b):
         return float(np.linalg.norm(a - b) / max(np.linalg.norm(a), 1e-12))
 
-    # Weights are stored as float16, so expect agreement to about 1e-3.
-    assert rel(hidden.numpy(), got_hidden) < 1e-2
-    assert rel(e.numpy(), got_e) < 1e-2
-    assert rel(grad.numpy(), got_grad) < 2e-2
+    # Weight matrices are stored as int8 per channel (vectors as float16), so expect about 1e-2.
+    assert rel(hidden.numpy(), got_hidden) < 3e-2
+    assert rel(e.numpy(), got_e) < 3e-2
+    assert rel(grad.numpy(), got_grad) < 5e-2
     # The text table is the model's own normalised text embeddings of the prompts.
     tokenizer = __import__("transformers").AutoTokenizer.from_pretrained(words_run["model"])
     table = lw.text_table(model, tokenizer, WORDS)

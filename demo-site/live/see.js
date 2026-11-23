@@ -10,6 +10,7 @@ const EMBER = [232, 88, 42];
 const FIRST = "01-coco-14475"; // the picture the page opens on
 const N_WORDS = 6; // words shown
 const N_WHY = 6; // features shown for a word
+const THUMB = 44; // px, the crop of the picture shown beside each feature
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
@@ -38,6 +39,8 @@ const ui = {
   strength: { scale: 3, clamp: 2 },
   detail: null, // words after the detail edit
   hover: null,
+  crop: null, // the square the model sees, for the feature thumbnails
+  background: new Set(), // features that fire on every picture, left out of "why"
   gallery: [],
   busy: 0,
   timings: {},
@@ -78,6 +81,10 @@ async function boot() {
   $("layer").textContent = String(pack.model.layer);
   $("n-features").textContent = pack.sae.n_features.toLocaleString("en-GB");
   $("n-words").textContent = `${engine.vocab.length} everyday things`;
+  // CLIP keeps a few always-on features: very strong, on the same few patches of every picture
+  // (or on nearly every patch), carrying the whole picture rather than what sits under them.
+  // Switching them off moves any word, so "why" leaves them out and ranks the rest.
+  ui.background = new Set(engine.features.filter((f) => (f.mean || 0) >= 3 || (f.freq || 0) >= 0.5).map((f) => f.id));
   $("loader").hidden = true;
   $("work").hidden = false;
   buildThumbs();
@@ -129,6 +136,7 @@ async function showPicture(img, { word = null, off = [] } = {}) {
   photo.src = img.src;
   photo.hidden = false;
   $("cam").hidden = true;
+  ui.crop = cropOf(img);
   await busy(async () => {
     const t0 = performance.now();
     ui.state = await engine.encode(img);
@@ -174,7 +182,45 @@ async function explain(word, off = []) {
 }
 
 function reasons() {
-  return ui.why ? ui.why.ranked.filter((r) => r.score > 0).slice(0, N_WHY) : [];
+  return ui.why ? ui.why.ranked.filter((r) => r.score > 0 && !ui.background.has(r.id)).slice(0, N_WHY) : [];
+}
+
+// The middle square of the picture, as the model sees it.
+function cropOf(img) {
+  const s = engine.size;
+  const c = el("canvas", { width: s, height: s });
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  const side = Math.min(w, h);
+  c.getContext("2d").drawImage(img, (w - side) / 2, (h - side) / 2, side, side, 0, 0, s, s);
+  return c;
+}
+
+// A small crop around the patches where a feature fires most on this picture.
+function thumbOf(id) {
+  const dpr = window.devicePixelRatio || 1;
+  const c = el("canvas", { class: "fthumb", width: THUMB * dpr, height: THUMB * dpr, "aria-hidden": "true" });
+  if (!ui.crop) return c;
+  const map = engine.featureMap(ui.state, id);
+  const W = engine.gridW;
+  const H = engine.gridH;
+  let peak = 0;
+  for (const v of map) if (v > peak) peak = v;
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  map.forEach((v, t) => {
+    if (peak && v >= 0.4 * peak) {
+      const x = t % W, y = Math.floor(t / W);
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+  });
+  if (x1 < 0) [x0, y0, x1, y1] = [0, 0, W - 1, H - 1];
+  let side = Math.min(W, Math.max(4, x1 - x0 + 3, y1 - y0 + 3));
+  const cx = (x0 + x1 + 1) / 2, cy = (y0 + y1 + 1) / 2;
+  const sx = Math.min(W - side, Math.max(0, cx - side / 2));
+  const sy = Math.min(H - side, Math.max(0, cy - side / 2));
+  const px = engine.size / W;
+  c.getContext("2d").drawImage(ui.crop, sx * px, sy * px, side * px, side * px, 0, 0, c.width, c.height);
+  return c;
 }
 
 async function toggle(id) {
@@ -203,7 +249,7 @@ async function runOff() {
     ui.result = await engine.see(ui.state, ids.map((id) => ({ id, kind: "ablate" })));
     ui.timings.edit = performance.now() - t0;
     const ranked = new Set(ui.why.ranked.slice(0, 50).map((r) => r.id));
-    const pool = ui.why.ranked.map((r) => r.id).filter((id) => !ranked.has(id) && !ui.off.has(id));
+    const pool = ui.why.ranked.map((r) => r.id).filter((id) => !ranked.has(id) && !ui.off.has(id) && !ui.background.has(id));
     const picked = seeded(pool, ids.length, hashOf(ui.picture, ui.word, ids.length));
     ui.control = picked.length ? { ids: picked, seen: await engine.see(ui.state, picked.map((id) => ({ id, kind: "ablate" }))) } : null;
   });
@@ -408,7 +454,8 @@ function mainView() {
           el(
             "button",
             { class: "fname-btn", type: "button", onclick: () => openFeature(r.id) },
-            el("span", { class: "fname" }, `Feature ${r.id}`),
+            thumbOf(r.id),
+            el("span", { class: "fname" }, String(r.id)),
           ),
           el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / total) * 100))}%` })),
         );
