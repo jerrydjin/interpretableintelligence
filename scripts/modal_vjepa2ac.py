@@ -680,3 +680,16 @@ def nt_encoder_job(clips: int = 100) -> dict:
 @app.local_entrypoint()
 def nt_encoder(clips: int = 100) -> None:
     _nt_report(nt_encoder_job.remote(clips))
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def nt_pair_job(clips: int = 100, smoke: bool = True) -> dict:
+    """The encoder sees each frame with the one before it as a real 2-frame clip (only the encoder trace matters)."""
+    name = "nt-pair-smoke" if smoke else "nt-pair"
+    extra = ["--tubelet", "pair", "--max-clips", str(clips)] + (["--bootstrap", "200"] if smoke else [])
+    return {name: _novelty(f"{RESULTS}/{name}", *extra, fresh=smoke)}
+
+
+@app.local_entrypoint()
+def nt_pair(clips: int = 100, full: bool = False) -> None:
+    _nt_report(nt_pair_job.remote(clips if full else 20, not full))

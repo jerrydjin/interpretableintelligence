@@ -732,3 +732,18 @@ def test_ridge_error_from_sums_matches_direct_and_inner_cv_prefers_shrinkage_on_
     assert abs(b.sst(mean) - float(((y[150:] - mean) ** 2).sum())) < 1e-3 * direct
     _, ridge = fit_inner_cv(a, b)
     assert ridge >= 10.0  # pure noise: the heaviest penalties win
+
+
+def test_pair_tubelet_feeds_the_previous_frame():
+    model = tiny_world_model(seed=0)
+    frames = np.stack([_scene(t)[0] for t in range(5)])
+    rep = model.encode_frames(frames)
+    model.tubelet = "pair"
+    pair = model.encode_frames(frames)
+    # The tiny encoder reads the first frame of each tubelet: in pair mode that is the previous frame.
+    assert np.allclose(pair[1:].numpy(), rep[:-1].numpy(), atol=1e-5) and np.allclose(pair[0].numpy(), rep[0].numpy(), atol=1e-5)
+    model.encode_batch = 2  # chunked like the encoder trace, with the previous frame carried across chunks
+    from interpretableintelligence.worldmodel.novelty_trace import encode_with_trace
+
+    z, _ = encode_with_trace(model, frames, [], {})
+    assert np.allclose(z.numpy(), pair.numpy(), atol=1e-5)

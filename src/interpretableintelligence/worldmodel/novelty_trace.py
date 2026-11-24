@@ -308,7 +308,8 @@ def encode_with_trace(
     pix = _pixel_tokens(frames, model.patch)
     try:
         for s in range(0, len(frames), chunk):
-            z = model.encode_frames(frames[s : s + chunk])
+            prev = np.concatenate([frames[max(s - 1, 0) : s], frames[s : s + chunk]])[: len(frames[s : s + chunk])] if s else None
+            z = model.encode_frames(frames[s : s + chunk], prev=prev)
             zs.append(z)
             raw = (
                 [pix[s : s + chunk].to(model.device)]
@@ -726,6 +727,7 @@ def run_novelty_trace(
         "schema": SCHEMA,
         "model": model.name,
         "model_info": model.info,
+        "tubelet": model.tubelet,
         "seed": seed,
         "n_boot": n_boot,
         "rules": {
