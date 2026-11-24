@@ -669,3 +669,14 @@ def nt_run(clips: int = 100) -> None:
 @app.local_entrypoint()
 def nt_fetch() -> None:
     _nt_report({k: v for k, v in nt_read.remote().items() if not k.startswith("nt-smoke")})
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def nt_encoder_job(clips: int = 100) -> dict:
+    """The untrained-encoder control for the encoder trace (the predictor numbers of this run mean nothing)."""
+    return {"nt-random-encoder": _novelty(f"{RESULTS}/nt-random-encoder", "--random-encoder", "--max-clips", str(clips))}
+
+
+@app.local_entrypoint()
+def nt_encoder(clips: int = 100) -> None:
+    _nt_report(nt_encoder_job.remote(clips))
