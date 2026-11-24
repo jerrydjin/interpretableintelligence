@@ -622,3 +622,113 @@ def test_cli_plan_stall_tiny(tmp_path):
     assert h1["hurt"] in {"hurts", "harmless", "mixed", "insufficient_data"}
     rec = next(r for r in data["transitions"] if r["horizon"] == 1)
     assert np.isfinite(rec["split_moving"]) and np.isfinite(rec["split_still"])
+
+
+# ----------------------------------------------------------------------------- novelty-trace
+
+
+def test_ridge_stats_recover_a_linear_map_and_find_nothing_in_noise():
+    import torch
+
+    from interpretableintelligence.worldmodel.novelty_trace import RidgeStats
+
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(4000, 6, generator=g)
+    w = torch.randn(6, 3, generator=g)
+    y = x @ w + 0.5
+    fit = RidgeStats(6, 3, torch.device("cpu"))
+    fit.add(x[:2000], y[:2000])
+    wh, b, my = fit.solve(1e-6)
+    assert torch.allclose(wh, w, atol=1e-3) and torch.allclose(b, torch.full((3,), 0.5), atol=1e-3)
+    noise = RidgeStats(6, 3, torch.device("cpu"))
+    yn = torch.randn(4000, 3, generator=g)
+    noise.add(x[:2000], yn[:2000])
+    wn, bn, mn = noise.solve()
+    test = ((x[2000:] @ wn + bn - yn[2000:]) ** 2).sum() / ((yn[2000:] - mn) ** 2).sum()
+    assert 0.98 < float(test) < 1.02  # cross-fitted R squared about 0
+
+
+def test_region_masks_split_by_pixel_change():
+    from interpretableintelligence.worldmodel.novelty_trace import MOVING_SHARE, region_masks
+
+    change = np.arange(20, dtype=np.float32)
+    mov, still = region_masks(change)
+    assert mov.sum() == round(MOVING_SHARE * 20) and mov[-1] and not mov[0]
+    assert still[0] and not still[-1] and not (mov & still).any()
+
+
+def test_forward_layers_sees_where_the_tiny_model_mixes_the_action():
+    import torch
+
+    from interpretableintelligence.worldmodel.novelty_trace import forward_layers, source_names
+
+    model = tiny_world_model(seed=0)
+    side = model.grid[0]
+    z = model.encode_frames(np.stack([_scene(t)[0] for t in range(2)]))
+    s = torch.zeros(2, 7)
+    a = torch.zeros(2, 7)
+    a[:, 0] = 0.05
+    moved = forward_layers(model, z, s, a)
+    still = forward_layers(model, z, s, torch.zeros_like(a))
+    assert list(moved) == source_names(4)
+    assert torch.allclose(moved["L0"], still["L0"]) and torch.allclose(moved["L1"], still["L1"])
+    diff = (moved["L2"] - still["L2"]).abs().sum(-1)
+    assert (diff[:, :side] > 0).all() and torch.allclose(diff[:, side:], torch.zeros_like(diff[:, side:]), atol=1e-5)
+
+
+def test_novelty_trace_verdicts():
+    from interpretableintelligence.worldmodel.novelty_trace import encoder_verdict, verdict
+
+    def ci(v, lo, hi):
+        return {"value": v, "lo": lo, "hi": hi}
+
+    gain, small = ci(0.2, 0.15, 0.25), ci(0.01, 0.0, 0.015)
+    lost, kept, half = ci(0.8, 0.7, 0.9), ci(0.1, 0.0, 0.2), ci(0.5, 0.3, 0.7)
+    none = ci(0.0, -0.01, 0.01)
+    assert verdict(small, lost, none, None) == "never_added"
+    assert verdict(gain, lost, none, ci(0.0, -0.05, 0.05)) == "never_added"  # no better than an untrained predictor
+    assert verdict(gain, lost, none, ci(0.1, 0.05, 0.15)) == "lost_inside"
+    assert verdict(gain, kept, ci(0.18, 0.15, 0.2), None) == "lost_at_output"
+    assert verdict(gain, kept, none, None) == "kept"
+    assert verdict(gain, half, none, None) == "mixed"
+    assert verdict(ci(0.2, float("nan"), float("nan")), lost, none, None) == "insufficient_data"
+    assert encoder_verdict(ci(0.2, 0.1, 0.3)) == "damps"
+    assert encoder_verdict(ci(0.95, 0.9, 1.0)) == "keeps"
+    assert encoder_verdict(ci(0.7, 0.4, 0.9)) == "mixed"
+
+
+def test_cli_novelty_trace_tiny_with_control(tmp_path):
+    clips = _clips_with_states(tmp_path, n=6, frames_per_clip=20)
+    ctl, out = tmp_path / "ctl", tmp_path / "nt"
+    runner = CliRunner()
+    result = runner.invoke(app, ["novelty-trace", "--clips", str(clips), "--out", str(ctl), "--tiny", "--seed", "1", "--bootstrap", "20"])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(app, ["novelty-trace", "--clips", str(clips), "--out", str(out), "--tiny", "--seed", "1", "--bootstrap", "20", "--control", str(ctl)])
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "novelty_trace.json").read_text())
+    assert data["schema"] == "novelty-trace/v1" and data["n_transitions"] > 0 and min(data["n_per_fold"]) > 0
+    assert set(data["curves"]["moving"]) == {"input", "L0", "L1", "L2", "L3", "L4", "output", "native"}
+    assert set(data["ridge"]) == {"input", "L0", "L1", "L2", "L3", "L4", "output"}
+    assert data["verdict"] in {"never_added", "lost_inside", "lost_at_output", "kept", "mixed", "insufficient_data"}
+    # Same model as its control: the trained peak gain cannot beat it.
+    assert abs(data["stats"]["peak_gain_minus_control"]["value"]) < 1e-6 and data["verdict"] == "never_added"
+    assert data["encoder"]["layers"] == ["pixels", "latent"] and data["encoder_verdict"] in {"damps", "keeps", "mixed", "insufficient_data"}
+    assert (out / "transitions.npz").is_file()
+
+
+def test_ridge_error_from_sums_matches_direct_and_inner_cv_prefers_shrinkage_on_noise():
+    import torch
+
+    from interpretableintelligence.worldmodel.novelty_trace import RidgeStats, fit_inner_cv
+
+    g = torch.Generator().manual_seed(1)
+    x, y = torch.randn(300, 40, generator=g), torch.randn(300, 2, generator=g)
+    a, b = RidgeStats(40, 2, torch.device("cpu")), RidgeStats(40, 2, torch.device("cpu"))
+    a.add(x[:150], y[:150])
+    b.add(x[150:], y[150:])
+    w, bias, mean = a.solve(0.1)
+    direct = float(((x[150:] @ w + bias - y[150:]) ** 2).sum())
+    assert abs(b.sse(w, bias) - direct) < 1e-3 * direct
+    assert abs(b.sst(mean) - float(((y[150:] - mean) ** 2).sum())) < 1e-3 * direct
+    _, ridge = fit_inner_cv(a, b)
+    assert ridge >= 10.0  # pure noise: the heaviest penalties win
