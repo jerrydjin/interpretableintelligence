@@ -8,6 +8,7 @@ const PARAMS = new URLSearchParams(location.search);
 const PACK = PARAMS.get("pack") || "packs/clip-b16-words/";
 const EMBER = [232, 88, 42];
 const FIRST = "01-coco-14475"; // the picture the page opens on
+const BAKE = PARAMS.has("bake");
 const N_WORDS = 6; // words shown
 const N_WHY = 6; // features shown for a word
 const THUMB = 44; // px, the crop of the picture shown beside each feature
@@ -44,6 +45,9 @@ const ui = {
   gallery: [],
   busy: 0,
   timings: {},
+  live: false, // the model is running; until then the page shows answers baked ahead of time
+  baked: null, // the baked answer for the picture on show (instant.json), if any
+  pendingFeature: null, // a feature to open once the model is ready
 };
 window.__ii = { ui };
 
@@ -52,9 +56,26 @@ window.__ii = { ui };
 async function boot() {
   const fill = $("loader-fill");
   const text = $("loader-text");
+  engine = new Engine(new URL(PACK, location.href).href);
+  window.__ii.engine = engine;
+  // A first answer for each example picture, worked out ahead of time by this same page
+  // (ii bake-live), so the page answers at once while the model downloads.
+  if (!BAKE) {
+    try {
+      await engine.loadMeta();
+      if (engine.wordsMode) ui.instant = await engine.loadInstant();
+    } catch {
+      ui.instant = null;
+    }
+    if (ui.instant) {
+      showMeta();
+      $("work").hidden = false;
+      buildThumbs();
+      wireInputs();
+      if (!(await restoreFromLink())) await showSample(engine.pack.samples.find((s) => s.clip_id === FIRST) || engine.pack.samples[0]);
+    }
+  }
   try {
-    engine = new Engine(new URL(PACK, location.href).href);
-    window.__ii.engine = engine;
     await engine.load({
       preferGpu: !PARAMS.has("cpu"),
       onProgress: ({ phase, loaded, total, cached }) => {
@@ -78,20 +99,124 @@ async function boot() {
   }
   const pack = engine.pack;
   $("model-pill").textContent = `${pack.model.name.split("/").pop()} · ${engine.backend === "webgpu" ? "on your GPU" : "on your CPU"}`;
-  $("layer").textContent = String(pack.model.layer);
-  $("n-features").textContent = pack.sae.n_features.toLocaleString("en-GB");
-  $("n-words").textContent = `${engine.vocab.length} everyday things`;
+  showMeta();
   // CLIP keeps a few always-on features: very strong, on the same few patches of every picture
   // (or on nearly every patch), carrying the whole picture rather than what sits under them.
   // Switching them off moves any word, so "why" leaves them out and ranks the rest.
   ui.background = new Set(engine.features.filter((f) => (f.mean || 0) >= 3 || (f.freq || 0) >= 0.5).map((f) => f.id));
   $("loader").hidden = true;
-  $("work").hidden = false;
-  buildThumbs();
-  wireInputs();
-  if (!(await restoreFromLink())) await showSample(pack.samples.find((s) => s.clip_id === FIRST) || pack.samples[0]);
+  ui.live = true;
+  if (ui.instant) await goLive();
+  else {
+    $("work").hidden = false;
+    buildThumbs();
+    wireInputs();
+    if (!(await restoreFromLink())) await showSample(pack.samples.find((s) => s.clip_id === FIRST) || pack.samples[0]);
+  }
   renderPerf();
+  if (BAKE) return bake();
   encodeGallery();
+}
+
+function showMeta() {
+  const pack = engine.pack;
+  $("layer").textContent = String(pack.model.layer);
+  $("n-features").textContent = pack.sae.n_features.toLocaleString("en-GB");
+  $("n-words").textContent = `${engine.vocab.length} everyday things`;
+}
+
+// The model is ready: work out for real what the page has shown so far (the baked answer, or a
+// picture, word or switch chosen while it loaded), keeping the same picture, word and switches.
+async function goLive() {
+  const feature = ui.pendingFeature;
+  ui.pendingFeature = null;
+  ui.baked = null;
+  if (!ui.cam && ui.picture) {
+    const img = ui.picture.sample ? await loadImage(engine.base + sampleOf(ui.picture.sample).file) : ui.picture.img;
+    await showPicture(img, { word: ui.word, off: [...ui.off] });
+  }
+  if (feature != null) await openFeature(feature);
+}
+
+const sampleOf = (key) => engine.pack.samples.find((s) => s.clip_id === key);
+
+// ------------------------------------------------------------------ baked answers (instant.json)
+
+const unq8 = (b64, peak) => Float32Array.from(atob(b64), (c) => (c.charCodeAt(0) / 255) * peak);
+const q8 = (values) => {
+  let peak = 0;
+  for (const v of values) if (v > peak) peak = v;
+  const bytes = Array.from(values, (v) => Math.round((Math.max(0, v) / (peak || 1)) * 255));
+  return [btoa(String.fromCharCode(...bytes)), +peak.toPrecision(5)];
+};
+const probs = (sparse) => {
+  const prob = new Float32Array(engine.vocab.length);
+  for (const [w, p] of Object.entries(sparse)) prob[w] = p;
+  return { prob };
+};
+const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+
+// Show the baked answer for an example picture; false when there is none for this word.
+function showBaked(key, { word = null, off = [] } = {}) {
+  const rec = ui.instant?.samples?.[key];
+  if (!rec || (word != null && word !== rec.word)) return false;
+  ui.baked = rec;
+  ui.state = { baked: true, seen: probs(rec.prob), maps: new Map(Object.entries(rec.maps).map(([id, [b64, peak]]) => [Number(id), unq8(b64, peak)])) };
+  ui.feature = null;
+  ui.detail = null;
+  ui.word = rec.word;
+  ui.off = new Set(off);
+  bakedWhy();
+  bakedOff();
+  render();
+  return true;
+}
+
+function bakedWhy() {
+  const rec = ui.baked;
+  ui.why = rec && ui.word === rec.word ? { word: rec.word, ranked: rec.why.map(([id, score]) => ({ id, score })), patches: unq8(...rec.patches) } : null;
+}
+
+function bakedOff() {
+  const rec = ui.baked;
+  ui.result = ui.control = null;
+  if (rec && ui.word === rec.word && ui.off.size && sameSet([...ui.off], rec.off.ids)) {
+    ui.result = probs(rec.off.prob);
+    const control = probs({ [rec.word]: rec.off.control.p });
+    ui.control = { ids: rec.off.control.ids, seen: control };
+  }
+}
+
+// ?bake: work out the first answer (and "switch them all off") for every example picture, for
+// ii bake-live to save as instant.json. Runs the same code as a visitor's click.
+async function bake() {
+  const all = engine.pack.digests || {};
+  const digests = Object.fromEntries(["front", "sae", "decoder", "words", "text", "vocab"].filter((k) => all[k]).map((k) => [k, all[k]]));
+  const out = { version: 1, digests, backend: engine.backend, samples: {} };
+  for (const sample of engine.pack.samples) {
+    await showSample(sample);
+    const word = ui.word;
+    const list = reasons();
+    const seen = ui.state.seen;
+    const maps = {};
+    for (const r of list) maps[r.id] = q8(engine.featureMap(ui.state, r.id));
+    const rec = { word, why: list.map((r) => [r.id, +r.score.toPrecision(5)]), patches: q8(ui.why.patches), maps };
+    const keep = new Set([word]);
+    const top = (prob) => [...prob.keys()].sort((a, b) => prob[b] - prob[a]).slice(0, 12);
+    top(seen.prob).forEach((w) => keep.add(w));
+    if (list.length) {
+      await setAll(false);
+      top(ui.result.prob).forEach((w) => keep.add(w));
+      const sparse = (prob) => Object.fromEntries([...keep].map((w) => [w, +prob[w].toPrecision(5)]));
+      rec.off = { ids: [...ui.off], prob: sparse(ui.result.prob), control: { ids: ui.control.ids, p: +ui.control.seen.prob[word].toPrecision(5) } };
+      rec.prob = sparse(seen.prob);
+    } else {
+      rec.off = { ids: [], prob: {}, control: { ids: [], p: 0 } };
+      rec.prob = Object.fromEntries([...keep].map((w) => [w, +seen.prob[w].toPrecision(5)]));
+    }
+    out.samples[sample.clip_id] = rec;
+  }
+  window.__ii.baked = out;
 }
 
 // ------------------------------------------------------------------ pictures
@@ -119,12 +244,23 @@ function loadImage(src) {
   });
 }
 
-async function showSample(sample) {
+async function showSample(sample, opts = {}) {
   stopCam();
   ui.picture = { sample: sample.clip_id };
   markThumb(sample.clip_id);
   $("credit").textContent = sample.credit || "";
-  await showPicture(await loadImage(engine.base + sample.file));
+  const img = await loadImage(engine.base + sample.file);
+  if (!ui.live && showPhoto(img) && showBaked(sample.clip_id, opts)) return;
+  await showPicture(img, opts);
+}
+
+function showPhoto(img) {
+  const photo = $("photo");
+  photo.src = img.src;
+  photo.hidden = false;
+  $("cam").hidden = true;
+  ui.crop = cropOf(img);
+  return true;
 }
 
 function markThumb(key) {
@@ -132,11 +268,12 @@ function markThumb(key) {
 }
 
 async function showPicture(img, { word = null, off = [] } = {}) {
-  const photo = $("photo");
-  photo.src = img.src;
-  photo.hidden = false;
-  $("cam").hidden = true;
-  ui.crop = cropOf(img);
+  showPhoto(img);
+  if (!ui.live) {
+    // Read for real once the model is ready (goLive), with this word and these switches.
+    Object.assign(ui, { state: null, why: null, result: null, control: null, baked: null, feature: null, word, off: new Set(off) });
+    return render();
+  }
   await busy(async () => {
     const t0 = performance.now();
     ui.state = await engine.encode(img);
@@ -171,6 +308,11 @@ async function explain(word, off = []) {
   ui.off = new Set(off);
   ui.result = null;
   ui.control = null;
+  if (!ui.live) {
+    bakedWhy();
+    bakedOff();
+    return render();
+  }
   ui.why = await busy(async () => {
     const t0 = performance.now();
     const why = await engine.why(ui.state, word);
@@ -239,6 +381,10 @@ async function setAll(on) {
 // Switch the chosen features off, and as many random features that also fire here (not among
 // the ones ranked for this word), so the drop can be told apart from what any edit would do.
 async function runOff() {
+  if (!ui.live) {
+    bakedOff();
+    return syncAddress();
+  }
   if (!ui.off.size) {
     ui.result = ui.control = null;
     return;
@@ -276,6 +422,10 @@ function seeded(pool, n, seed) {
 // ------------------------------------------------------------------ one feature
 
 async function openFeature(id) {
+  if (!ui.live) {
+    ui.pendingFeature = id;
+    return flash(`Feature ${id} opens as soon as the model is ready.`);
+  }
   ui.feature = id;
   ui.detail = null;
   ui.hover = null;
@@ -359,7 +509,10 @@ function render() {
 
 function renderPanel() {
   const body = $("panel-body");
-  if (!ui.state) return;
+  if (!ui.state) {
+    if (!ui.live) body.replaceChildren(el("div", { class: "view" }, el("p", { class: "muted" }, "It reads this picture as soon as the model is ready.")));
+    return;
+  }
   body.replaceChildren(ui.feature != null ? featureView() : mainView());
 }
 
@@ -412,6 +565,7 @@ function mainView() {
   const list = reasons();
   const total = list.reduce((a, r) => a + r.score, 0) || 1;
   const allOff = list.length && list.every((r) => ui.off.has(r.id));
+  const waiting = !ui.live && ui.off.size && !ui.result;
   return el(
     "div",
     { class: "view" },
@@ -420,7 +574,9 @@ function mainView() {
     wordList(now, ui.result ? seen : null),
     wordPicker(),
     el("h2", { class: "why-head" }, `Why it sees “${word}”`),
-    list.length
+    !ui.why
+      ? el("p", { class: "muted" }, "It works this out as soon as the model is ready.")
+      : list.length
       ? el(
           "p",
           { class: "muted" },
@@ -466,9 +622,10 @@ function mainView() {
           "p",
           { class: "row-actions" },
           el("button", { class: "pill-btn", type: "button", "data-testid": "all-off", onclick: () => setAll(allOff) }, allOff ? "Switch them back on" : `Switch all ${list.length} off`),
-          ui.result ? el("button", { class: "pill-btn", type: "button", onclick: copyLink }, "Copy a link to this") : null,
+          el("button", { class: "pill-btn", type: "button", onclick: copyLink }, "Copy a link to this"),
         )
       : null,
+    waiting ? el("p", { class: "muted small" }, "Switching them off as soon as the model is ready.") : null,
   );
 }
 
@@ -751,12 +908,8 @@ async function restoreFromLink() {
   const word = engine.vocab.indexOf(q.get("w") || "");
   const off = (q.get("off") || "").split(",").map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < engine.nFeatures);
   try {
-    if (sample) {
-      ui.picture = { sample: sample.clip_id };
-      markThumb(sample.clip_id);
-      $("credit").textContent = sample.credit || "";
-      await showPicture(await loadImage(engine.base + sample.file), { word: word >= 0 ? word : null, off });
-    } else if (q.get("img")) {
+    if (sample) await showSample(sample, { word: word >= 0 ? word : null, off });
+    else if (q.get("img")) {
       const img = await loadImage(`data:image/jpeg;base64,${q.get("img").replace(/-/g, "+").replace(/_/g, "/")}`);
       ui.picture = { img };
       await showPicture(img, { word: word >= 0 ? word : null, off });
@@ -773,6 +926,7 @@ async function restoreFromLink() {
 // ------------------------------------------------------------------ footer
 
 function renderPerf() {
+  if (!ui.live) return;
   const t = ui.timings;
   const parts = [engine.backend === "webgpu" ? "Running on WebGPU" : `Running on WebAssembly (${self.crossOriginIsolated ? "multi-threaded" : "one thread"})`, `ready in ${fmtMs(engine.timings.ready)}`];
   if (t.read != null) parts.push(`reading a picture ${fmtMs(t.read)}`);
