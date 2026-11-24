@@ -192,6 +192,12 @@
     "decoder": "3e70c13ce8da4de3",
     "text": "be5a88b7555171e4",
     "vocab": "e338dd1032ceb8da",
-    "features": "ddeff899baf47c35"
+    "features": "f0eee1c44590ce1a"
+  },
+  "names": {
+    "pictures": 8,
+    "strength": 2.0,
+    "z_min": 3.0,
+    "named": 1251
   }
 }

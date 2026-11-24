@@ -236,7 +236,7 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 .fname-btn { display: flex; align-items: center; gap: 10px; min-width: 0; border: 0; background: none; padding: 0; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
 .fthumb { width: 44px; height: 44px; flex: none; border-radius: 6px; background: var(--well); }
 .frow.why.off .fthumb { opacity: 0.35; }
-.frow.why .fname { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.frow.why .fname.unnamed { font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .fname-btn:hover .fname { text-decoration: underline; text-underline-offset: 3px; }
 .also { font-size: var(--t-small); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .switch { position: relative; width: 34px; height: 20px; flex: none; border: 0; border-radius: 999px; background: var(--signal); cursor: pointer; padding: 0; transition: background 0.15s ease; }
