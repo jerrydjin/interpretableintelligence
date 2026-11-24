@@ -128,12 +128,12 @@ def probe(model: ACWorldModel, trajectories: list[Trajectory], *, seed: int = 0,
             batch = np.concatenate([cand, acts[t][None], other[None]]).astype(np.float32)
             n = len(batch)
             preds = model.predict_next(z[t].unsqueeze(0).expand(n, -1, -1), torch.from_numpy(tr.states[t]).view(1, 7).expand(n, -1),
-                                       torch.from_numpy(batch))
+                                       torch.from_numpy(batch)).to(model.device)  # amplify and score on the GPU
             menu_preds, p_real, p_other = preds[: len(cand)], preds[-2], preds[-1]
             p_zero = menu_preds[ZERO]
             rec = {"clip_id": tr.clip_id, "episode": tr.episode, "fold": folds[tr.episode], "t": int(t),
                    "real_step_m": float(np.linalg.norm(acts[t, :3]))}
-            nxt, cur = z[t + 1], z[t]
+            nxt, cur = z[t + 1].to(model.device), z[t].to(model.device)
             for arm in ARMS:
                 errs, closer = [], []
                 for a in ALPHAS:
@@ -151,7 +151,7 @@ def probe(model: ACWorldModel, trajectories: list[Trajectory], *, seed: int = 0,
             for h in HORIZONS:
                 if t + h >= len(z):
                     continue
-                goal = z[t + h]
+                goal = z[t + h].to(model.device)
                 for arm in PLAN_ARMS:
                     cos, stall = [], []
                     for a in ALPHAS:
