@@ -1227,6 +1227,62 @@ def plan_stall_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("action-amp")
+def action_amp_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for action_amp.json.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the shuffled actions, bootstrap and the random predictor.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Does V-JEPA 2-AC know the motion but hold it back? Amplify the action's effect and see. (Offline.)
+
+    On moving DROID transitions the prediction becomes pred(a) + alpha * (pred(a) - pred(0)), against
+    a shuffled-action control: does it get closer to the real next frame, and does the planner aim
+    the arm better? Alpha is picked on the other half of the episodes. The verdict rules are fixed in
+    the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_amp import ALPHAS, run_action_amp
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            model.predict_batch = 32
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_action_amp(model, trajectories, out, seed=seed, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    pr = result["prediction"]
+    typer.echo(f"{result['n_transitions']} transitions, {result['n_episodes']} episodes; alphas {list(ALPHAS)}")
+    typer.echo(f"prediction: {result['verdicts']['prediction']}")
+    for arm in ("action", "shuffled", "change"):
+        g = pr[arm]["gain"]
+        typer.echo(f"  {arm:8s} err gain {g['value']:+.4f} [{g['lo']:+.4f}, {g['hi']:+.4f}]  alpha {pr[arm]['alpha_per_fold']}"
+                   f"  closer-to-real {pr[arm]['closer_real_alpha0']['value']:.2f} -> {pr[arm]['closer_real_held_out']['value']:.2f}")
+    for h, v in result["planning"].items():
+        g = v["action"]["gain"]
+        typer.echo(f"planning goal +{h}: {v['verdict']}  cos {v['action']['cos_alpha0']['value']:.3f} gain {g['value']:+.3f}"
+                   f" [{g['lo']:+.3f}, {g['hi']:+.3f}]  alpha {v['action']['alpha_per_fold']}")
+    typer.echo(f"wrote {out}")
+
+
 @app.command("gripper-trace")
 def gripper_trace_cmd(
     clips: Annotated[

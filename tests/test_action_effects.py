@@ -622,3 +622,57 @@ def test_cli_plan_stall_tiny(tmp_path):
     assert h1["hurt"] in {"hurts", "harmless", "mixed", "insufficient_data"}
     rec = next(r for r in data["transitions"] if r["horizon"] == 1)
     assert np.isfinite(rec["split_moving"]) and np.isfinite(rec["split_still"])
+
+
+# ----------------------------------------------------------------------------- action-amp
+
+
+def test_action_amp_amplify_and_cross_fit():
+    import torch
+
+    from interpretableintelligence.worldmodel.action_amp import ALPHAS, amplify, cross_fit
+
+    pred, base = torch.randn(5, 8), torch.randn(5, 8)
+    assert torch.equal(amplify(pred, base, 0.0), pred)
+    y = amplify(pred, base, 2.0)
+    assert torch.allclose(y.mean(-1), torch.zeros(5), atol=1e-5)  # layer-normed again
+    # With delta given, the base is ignored.
+    assert torch.allclose(amplify(pred, base, 1.0, delta=pred - base), amplify(pred, base, 1.0))
+    n = len(ALPHAS)
+    # Fold 0 likes alpha index 3, fold 1 likes index 1: each fold gets the other's choice.
+    recs = [{"fold": 0, "e": [1.0 if j != 3 else 0.0 for j in range(n)]}, {"fold": 1, "e": [1.0 if j != 1 else 0.0 for j in range(n)]}]
+    assert cross_fit(recs, "e", lower_is_better=True) == {0: 1, 1: 3}
+
+
+def test_action_amp_verdicts():
+    from interpretableintelligence.worldmodel.action_amp import planning_verdict, prediction_verdict
+
+    def ci(v, lo, hi):
+        return {"value": v, "lo": lo, "hi": hi}
+
+    good, flat, zero = ci(0.1, 0.05, 0.15), ci(0.0, -0.01, 0.01), ci(0.0, 0.0, 0.0)
+    assert prediction_verdict(good, good) == "under_commits"
+    assert prediction_verdict(good, flat) == "mixed"  # any action's change helps as much: not this motion
+    assert prediction_verdict(zero, flat) == "absent"  # alpha 0 chosen on both folds
+    assert prediction_verdict(ci(-0.1, -0.2, -0.05), good) == "absent"
+    assert planning_verdict(good) == "aims_better"
+    assert planning_verdict(zero) == "no_aim"
+    assert planning_verdict(flat) == "mixed"
+
+
+def test_cli_action_amp_tiny(tmp_path):
+    from interpretableintelligence.worldmodel.action_amp import ALPHAS
+
+    clips = _clips_with_states(tmp_path, n=4)
+    out = tmp_path / "aa"
+    result = CliRunner().invoke(app, ["action-amp", "--clips", str(clips), "--out", str(out), "--tiny", "--bootstrap", "20"])
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "action_amp.json").read_text())
+    assert data["schema"] == "action-amp/v1" and data["n_transitions"] > 0
+    assert data["verdicts"]["prediction"] in {"under_commits", "absent", "mixed", "insufficient_data"}
+    assert set(data["planning"]) == {"1", "4"}
+    rec = data["transitions"][0]
+    assert len(rec["err_action"]) == len(ALPHAS)
+    # At alpha 0 every arm is the unamplified prediction.
+    assert rec["err_action"][0] == rec["err_shuffled"][0] == rec["err_change"][0]
+    assert rec["plan1_cos_action"][0] == rec["plan1_cos_change"][0]
