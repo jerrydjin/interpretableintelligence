@@ -11,6 +11,7 @@ const FIRST = "01-coco-14475"; // the picture the page opens on
 const BAKE = PARAMS.has("bake");
 const N_WORDS = 6; // words shown
 const N_WHY = 6; // features shown for a word
+const N_ON = 3; // features offered to turn on
 const THUMB = 44; // px, the crop of the picture shown beside each feature
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
@@ -48,6 +49,11 @@ const ui = {
   live: false, // the model is running; until then the page shows answers baked ahead of time
   baked: null, // the baked answer for the picture on show (instant.json), if any
   pendingFeature: null, // a feature to open once the model is ready
+  toward: null, // engine.toward() for the word, when it is not the top word: features to turn on
+  on: new Set(), // features turned on (written onto every patch)
+  push: 0.5, // how strongly, in units of each feature's training peak
+  boost: null, // words with them on
+  boostControl: null, // words with as many random features turned on the same way
 };
 window.__ii = { ui };
 
@@ -133,7 +139,7 @@ async function goLive() {
   ui.baked = null;
   if (!ui.cam && ui.picture) {
     const img = ui.picture.sample ? await loadImage(engine.base + sampleOf(ui.picture.sample).file) : ui.picture.img;
-    await showPicture(img, { word: ui.word, off: [...ui.off] });
+    await showPicture(img, { word: ui.word, off: [...ui.off], on: [...ui.on] });
   }
   if (feature != null) await openFeature(feature);
 }
@@ -157,7 +163,7 @@ const probs = (sparse) => {
 const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
 // Show the baked answer for an example picture; false when there is none for this word.
-function showBaked(key, { word = null, off = [] } = {}) {
+function showBaked(key, { word = null, off = [], on = [] } = {}) {
   const rec = ui.instant?.samples?.[key];
   if (!rec || (word != null && word !== rec.word)) return false;
   ui.baked = rec;
@@ -166,6 +172,7 @@ function showBaked(key, { word = null, off = [] } = {}) {
   ui.detail = null;
   ui.word = rec.word;
   ui.off = new Set(off);
+  ui.on = new Set(on);
   bakedWhy();
   bakedOff();
   render();
@@ -267,11 +274,11 @@ function markThumb(key) {
   document.querySelectorAll(".thumb").forEach((t) => t.classList.toggle("on", t.dataset.key === key));
 }
 
-async function showPicture(img, { word = null, off = [] } = {}) {
+async function showPicture(img, { word = null, off = [], on = [] } = {}) {
   showPhoto(img);
   if (!ui.live) {
     // Read for real once the model is ready (goLive), with this word and these switches.
-    Object.assign(ui, { state: null, why: null, result: null, control: null, baked: null, feature: null, word, off: new Set(off) });
+    Object.assign(ui, { state: null, why: null, result: null, control: null, baked: null, feature: null, word, off: new Set(off), on: new Set(on) });
     return render();
   }
   await busy(async () => {
@@ -281,7 +288,18 @@ async function showPicture(img, { word = null, off = [] } = {}) {
   });
   ui.feature = null;
   ui.detail = null;
-  await explain(word ?? topWord(ui.state.seen), off);
+  if (ui.wantWord) {
+    // A link to a word off the list: read it first.
+    const typed = ui.wantWord;
+    ui.wantWord = null;
+    try {
+      word = await busy(() => engine.addWord(typed));
+      ui.state.seen = engine.wordsFrom(ui.state.seen.embed);
+    } catch {
+      word = null;
+    }
+  }
+  await explain(word ?? topWord(ui.state.seen), off, on);
 }
 
 async function busy(fn) {
@@ -303,11 +321,13 @@ function topWord(seen) {
 
 // ------------------------------------------------------------------ the loop: word, why, switch off
 
-async function explain(word, off = []) {
+async function explain(word, off = [], on = []) {
   ui.word = word;
   ui.off = new Set(off);
+  ui.on = new Set(on);
   ui.result = null;
   ui.control = null;
+  ui.toward = ui.boost = ui.boostControl = null;
   if (!ui.live) {
     bakedWhy();
     bakedOff();
@@ -319,8 +339,48 @@ async function explain(word, off = []) {
     ui.timings.why = performance.now() - t0;
     return why;
   });
+  // A word it does not mostly see: also find what would make it see it.
+  if (word !== topWord(ui.state.seen)) {
+    ui.toward = await busy(() => engine.toward(ui.state, word, ui.background));
+    // A word it barely sees needs a stronger push (measured on the example pictures).
+    if (!on.length) ui.push = ui.state.seen.prob[word] < 0.01 ? 1 : 0.5;
+  }
   if (ui.off.size) await runOff();
+  if (ui.on.size && ui.toward) await runOn();
   render();
+}
+
+function boosters() {
+  return ui.toward ? ui.toward.ranked.filter((r) => r.score > 0).slice(0, N_ON) : [];
+}
+
+async function toggleOn(id) {
+  if (ui.off.size) {
+    ui.off = new Set();
+    ui.result = ui.control = null;
+  }
+  if (ui.on.has(id)) ui.on.delete(id);
+  else ui.on.add(id);
+  await runOn();
+  render();
+}
+
+// Write the chosen features onto every patch at `push` times their training peak, and as many
+// random features the same way (from those ranked far down for this word), as the control.
+async function runOn() {
+  if (!ui.on.size) {
+    ui.boost = ui.boostControl = null;
+    return syncAddress();
+  }
+  const ids = [...ui.on];
+  const edits = (list) => list.map((id) => ({ id, kind: "add", value: ui.push * (engine.features[id].max || 0) }));
+  await busy(async () => {
+    ui.boost = await engine.see(ui.state, edits(ids));
+    const pool = ui.toward.ranked.slice(200).map((r) => r.id).filter((id) => !ui.on.has(id));
+    const picked = seeded(pool, ids.length, hashOf(ui.picture, ui.word, "on", ids.length));
+    ui.boostControl = { ids: picked, seen: await engine.see(ui.state, edits(picked)) };
+  });
+  syncAddress();
 }
 
 // A feature's name (the word writing it in makes the model see, ii name-live), else its number.
@@ -371,6 +431,10 @@ function thumbOf(id) {
 }
 
 async function toggle(id) {
+  if (ui.on.size) {
+    ui.on = new Set();
+    ui.boost = ui.boostControl = null;
+  }
   if (ui.off.has(id)) ui.off.delete(id);
   else ui.off.add(id);
   await runOff();
@@ -378,6 +442,8 @@ async function toggle(id) {
 }
 
 async function setAll(on) {
+  ui.on = new Set();
+  ui.boost = ui.boostControl = null;
   ui.off = on ? new Set() : new Set(reasons().map((r) => r.id));
   await runOff();
   render();
@@ -494,7 +560,7 @@ function drawHeat() {
   if (id != null) {
     paintMap(engine.featureMap(ui.state, id), EMBER);
     key.replaceChildren(el("span", { class: "swatch ember" }), engine.features[id]?.name ? `Where “${engine.features[id].name}” fires` : `Where feature ${id} fires`);
-  } else if (ui.why) {
+  } else if (ui.why && !faint()) {
     paintMap(ui.why.patches, EMBER);
     key.replaceChildren(el("span", { class: "swatch ember" }), `Where it finds “${engine.vocab[ui.word]}”`);
   } else {
@@ -554,19 +620,46 @@ function wordList(seen, before = null, { pick = true } = {}) {
 
 function wordPicker() {
   const list = el("datalist", { id: "vocab" }, engine.vocab.map((w) => el("option", { value: w })));
-  const input = el("input", { type: "search", placeholder: "Or type a word: cat, cup, robot arm…", list: "vocab", autocomplete: "off", "aria-label": "Pick a word" });
-  input.addEventListener("change", () => {
-    const w = engine.vocab.indexOf(input.value.trim().toLowerCase());
+  const input = el("input", { type: "search", placeholder: engine.readsAnyWord ? "Or type any word: cat, red cup, robot arm…" : "Or type a word: cat, cup, robot arm…", list: "vocab", autocomplete: "off", "aria-label": "Pick a word" });
+  input.addEventListener("change", async () => {
+    const typed = input.value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60);
+    if (!typed) return;
+    let w = engine.vocab.indexOf(typed);
+    if (w < 0 && engine.readsAnyWord) {
+      if (!ui.live || !ui.state?.seen?.embed) return flash("Words off the list work as soon as the model is ready.");
+      if (!engine.tokenizer) flash("Getting the part of the model that reads words. Only the first time.");
+      try {
+        w = await busy(() => engine.addWord(typed));
+      } catch (err) {
+        console.error(err);
+        return flash("That word could not be read here.");
+      }
+      // The new word joins the list: read the same picture's probabilities over the longer list.
+      ui.state.seen = engine.wordsFrom(ui.state.seen.embed);
+    }
     if (w >= 0) explain(w);
-    else if (input.value.trim()) flash(`“${input.value.trim()}” is not on the list of ${engine.vocab.length} words yet.`);
+    else flash(`“${typed}” is not on the list of ${engine.vocab.length} words.`);
   });
   return el("div", { class: "find" }, input, list);
 }
 
+// A word it barely sees: nothing here pushes it much, so "why" would only list noise.
+const faint = () => Boolean(ui.toward && ui.state?.seen && ui.state.seen.prob[ui.word] < 0.01);
+
 function mainView() {
+  const view = mainViewAll();
+  if (faint()) {
+    const head = view.querySelector(":scope > .why-head");
+    while (head?.nextSibling) head.nextSibling.remove();
+    head?.remove();
+  }
+  return view;
+}
+
+function mainViewAll() {
   const word = engine.vocab[ui.word];
   const seen = ui.state.seen;
-  const now = ui.result || seen;
+  const now = ui.boost || ui.result || seen;
   const list = reasons();
   const total = list.reduce((a, r) => a + r.score, 0) || 1;
   const allOff = list.length && list.every((r) => ui.off.has(r.id));
@@ -574,10 +667,12 @@ function mainView() {
   return el(
     "div",
     { class: "view" },
-    el("h2", {}, ui.result ? "Now it sees" : "It sees"),
+    el("h2", {}, ui.result || ui.boost ? "Now it sees" : "It sees"),
     resultCard(word),
-    wordList(now, ui.result ? seen : null),
+    boostCard(word),
+    wordList(now, ui.result || ui.boost ? seen : null),
     wordPicker(),
+    towardView(word),
     el("h2", { class: "why-head" }, `Why it sees “${word}”`),
     !ui.why
       ? el("p", { class: "muted" }, "It works this out as soon as the model is ready.")
@@ -631,6 +726,68 @@ function mainView() {
         )
       : null,
     waiting ? el("p", { class: "muted small" }, "Switching them off as soon as the model is ready.") : null,
+  );
+}
+
+// Features that would make it see the word if they were there: turn one on and watch.
+function towardView(word) {
+  const list = boosters();
+  if (!list.length) return null;
+  const total = list.reduce((a, r) => a + r.score, 0) || 1;
+  return el(
+    "div",
+    { class: "toward", "data-testid": "toward" },
+    el("h2", { class: "why-head" }, `Make it see “${word}”`),
+    el("p", { class: "muted" }, `These features would push it towards “${word}” the most. Turn one on: it is written onto every patch, at this many times its usual peak.`),
+    el(
+      "div",
+      { class: "flist" },
+      list.map((r) => {
+        const on = ui.on.has(r.id);
+        const f = engine.features[r.id];
+        const sees = (f.sees || []).filter((x) => x.rise >= 0.05 && x.top_on * 2 > x.of).map((x) => x.word);
+        return el(
+          "div",
+          { class: `frow push${on ? " on" : ""}`, "data-feature": r.id },
+          el(
+            "button",
+            { class: "switch", type: "button", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": `Feature ${r.id} ${on ? "on" : "off"}`, onclick: () => toggleOn(r.id) },
+            el("span", {}),
+          ),
+          el(
+            "button",
+            { class: "fname-btn", type: "button", onclick: () => openFeature(r.id) },
+            el("span", { class: "fname" }, f.name || String(r.id)),
+            sees.length && !f.name ? el("span", { class: "muted small" }, ` ${sees.slice(0, 2).join(", ")}`) : null,
+          ),
+          el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / total) * 100))}%` })),
+        );
+      }),
+    ),
+    slider("Strength", 0.25, 2, 0.25, ui.push, (v) => `× ${v}`, (v) => (ui.push = v), async () => {
+      if (ui.on.size) {
+        await runOn();
+        render();
+      }
+    }),
+  );
+}
+
+function boostCard(word) {
+  if (!ui.boost) return null;
+  const w = ui.word;
+  const n = ui.on.size;
+  const control = ui.boostControl;
+  return el(
+    "div",
+    { class: "result", "data-testid": "boost" },
+    el("p", { class: "lead-num" }, `“${word}”: ${pct(ui.state.seen.prob[w])} → ${pct(ui.boost.prob[w])}`),
+    el(
+      "p",
+      { class: "muted small" },
+      `With ${n} feature${n === 1 ? "" : "s"} turned on. `,
+      control?.ids.length ? `Turning on ${control.ids.length} random feature${control.ids.length === 1 ? "" : "s"} the same way instead leaves it at ${pct(control.seen.prob[w])}.` : "",
+    ),
   );
 }
 
@@ -729,7 +886,7 @@ function featureView() {
   );
 }
 
-function slider(label, min, max, step, value, fmt, set) {
+function slider(label, min, max, step, value, fmt, set, run = runDetail) {
   const out = el("output", {}, fmt(value));
   const input = el("input", { type: "range", min, max, step, value, "aria-label": label });
   let queued = false;
@@ -743,7 +900,7 @@ function slider(label, min, max, step, value, fmt, set) {
     }
     do {
       queued = false;
-      await runDetail();
+      await run();
     } while (queued);
   });
   return el("label", { class: "slider" }, el("span", {}, label), input, out);
@@ -881,6 +1038,10 @@ function linkParams({ withPicture = false } = {}) {
   else if (withPicture && ui.picture?.img) q.set("img", pictureCode(ui.picture.img));
   if (ui.word != null) q.set("w", engine.vocab[ui.word]);
   if (ui.off.size) q.set("off", [...ui.off].join(","));
+  if (ui.on.size) {
+    q.set("on", [...ui.on].join(","));
+    q.set("s", String(ui.push));
+  }
   if (ui.feature != null) q.set("f", String(ui.feature));
   return q;
 }
@@ -913,13 +1074,18 @@ async function restoreFromLink() {
   const q = new URLSearchParams(location.hash.slice(1));
   const sample = engine.pack.samples.find((s) => s.clip_id === q.get("p"));
   const word = engine.vocab.indexOf(q.get("w") || "");
-  const off = (q.get("off") || "").split(",").filter(Boolean).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < engine.nFeatures);
+  if (word < 0 && q.get("w") && engine.readsAnyWord) ui.wantWord = q.get("w").slice(0, 60);
+  const ids = (key) => (q.get(key) || "").split(",").filter(Boolean).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < engine.nFeatures);
+  const off = ids("off");
+  const on = ids("on");
+  const push = Number(q.get("s"));
+  if (push > 0 && push <= 2) ui.push = push;
   try {
-    if (sample) await showSample(sample, { word: word >= 0 ? word : null, off });
+    if (sample) await showSample(sample, { word: word >= 0 ? word : null, off, on });
     else if (q.get("img")) {
       const img = await loadImage(`data:image/jpeg;base64,${q.get("img").replace(/-/g, "+").replace(/_/g, "/")}`);
       ui.picture = { img };
-      await showPicture(img, { word: word >= 0 ? word : null, off });
+      await showPicture(img, { word: word >= 0 ? word : null, off, on });
     } else return false;
   } catch {
     flash("That link's picture could not be opened.");

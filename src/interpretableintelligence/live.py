@@ -331,7 +331,7 @@ def export_live(
         **({"words": words_meta["info"]} if words_meta else {}),
         "files": {
             **(
-                {"front": "front.onnx", "words": "words.onnx", "sae": "sae.onnx", "decoder": "decoder.bin", "text": "text.bin", "vocab": "vocab.json"}
+                {"front": "front.onnx", "words": "words.onnx", "sae": "sae.onnx", "decoder": "decoder.bin", "text": "text.bin", "vocab": "vocab.json", **words_meta["files"]}
                 if words_meta
                 else {"front": "front.onnx", "back": "back.onnx", "sae": "sae.onnx", "decoder": "decoder.bin"} if browser else {}
             ),
@@ -669,6 +669,10 @@ def _export_words(adapter, sae, features: list[dict], out_dir: Path, samples: li
     (out_dir / "decoder.bin").write_bytes(decoder.numpy().astype("<f2").tobytes())
     (out_dir / "text.bin").write_bytes(table.astype("<f2").tobytes())
     (out_dir / "vocab.json").write_text(json.dumps(words, ensure_ascii=False) + "\n", encoding="utf-8")
+    try:
+        text_files = lw.write_text_encoder(model, tokenizer, out_dir, words, table, log=log)
+    except lw.WordsError as exc:
+        raise LiveExportError(str(exc)) from exc
 
     if samples:
         # The first few samples are enough to see what a feature pushes towards, and keep this to minutes on a CPU.
@@ -682,6 +686,7 @@ def _export_words(adapter, sae, features: list[dict], out_dir: Path, samples: li
             if rows:
                 feature["sees"] = rows
     return {
+        "files": text_files,
         "info": {
             "n": len(words),
             "dim": int(table.shape[1]),

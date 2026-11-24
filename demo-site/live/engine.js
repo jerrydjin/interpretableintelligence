@@ -567,6 +567,79 @@ export class Engine {
     return { word, ranked, patches, ms: now() - t0 };
   }
 
+  // ---------------------------------------------------------------- any word (ii export-text)
+
+  get readsAnyWord() {
+    return Boolean(this.wordsMode && this.pack.files.text_encoder && this.pack.files.tokenizer);
+  }
+
+  // The text half and its tokenizer, fetched the first time a word off the list is asked for.
+  loadText(onProgress = () => {}) {
+    if (!this._text) {
+      this._text = (async () => {
+        const { Tokenizer } = await import("./text.js");
+        const files = this.pack.files;
+        const digests = this.pack.digests || {};
+        const [bytes, spec] = await Promise.all([
+          fetchFile(this.base, files.text_encoder, digests.text_encoder || "", (seen, total) => onProgress(seen, total)),
+          fetch(this.base + files.tokenizer).then((r) => r.json()),
+        ]);
+        this.tokenizer = new Tokenizer(spec);
+        this.textSession = await this._serial(() => this.ort.InferenceSession.create(bytes, this._options("wasm")));
+      })();
+      this._text.catch(() => (this._text = null));
+    }
+    return this._text;
+  }
+
+  // Add a word (or a short phrase) to the list; returns its index. Probabilities are then over
+  // the longer list, so callers read them again with wordsFrom(state.seen.embed).
+  async addWord(word, onProgress) {
+    const known = this.vocab.indexOf(word);
+    if (known >= 0) return known;
+    await this.loadText(onProgress);
+    const { promptFor } = await import("./text.js");
+    const ids = this.tokenizer.encode(promptFor(this.pack.words.prompt, word));
+    const vec = await this._serial(async () => {
+      const out = await this.textSession.run({ input_ids: new this.ort.Tensor("int64", BigInt64Array.from(ids, BigInt), [1, ids.length]) });
+      return out.embed.data instanceof Float32Array ? out.embed.data : await out.embed.getData();
+    });
+    const text = new Float32Array(this.text.length + this.textDim);
+    text.set(this.text);
+    text.set(vec.subarray(0, this.textDim), this.text.length);
+    this.text = text;
+    this.vocab.push(word);
+    return this.vocab.length - 1;
+  }
+
+  toward(state, word, skip = new Set()) {
+    return this._serial(() => this._toward(state, word, skip));
+  }
+
+  // Every feature, scored by how much writing it onto every patch at its training peak would
+  // raise `word` (first order: the patch-summed gradient along its direction, times its peak).
+  // Features that never fired in training (no peak) and `skip` are left out.
+  async _toward(state, word, skip) {
+    const { d, nTok, prefix, nFeatures } = this;
+    const { grad } = await this._wordsRun(state.hidden, this._uFor(state.seen, word));
+    const g = new Float32Array(d);
+    for (let t = 0; t < nTok; t++) {
+      const off = (prefix + t) * d;
+      for (let i = 0; i < d; i++) g[i] += grad[off + i];
+    }
+    const ranked = [];
+    for (let f = 0; f < nFeatures; f++) {
+      const peak = this.features[f].max || 0;
+      if (!peak || skip.has(f)) continue;
+      let dot = 0;
+      const dir = f * d;
+      for (let i = 0; i < d; i++) dot += g[i] * this.decoder[dir + i];
+      ranked.push({ id: f, score: dot * peak });
+    }
+    ranked.sort((a, b) => b.score - a.score);
+    return { word, ranked };
+  }
+
   see(state, edits) {
     return this._serial(async () => {
       const t0 = now();

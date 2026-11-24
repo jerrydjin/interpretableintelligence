@@ -61,7 +61,12 @@
     "text": "text.bin",
     "vocab": "vocab.json",
     "features": "features.json",
-    "instant": "instant.json"
+    "instant": "instant.json",
+    "text_encoder": [
+      "text_encoder.onnx.0",
+      "text_encoder.onnx.1"
+    ],
+    "tokenizer": "tokenizer.json"
   },
   "runs_in": [
     "browser"
@@ -193,7 +198,9 @@
     "decoder": "3e70c13ce8da4de3",
     "text": "be5a88b7555171e4",
     "vocab": "e338dd1032ceb8da",
-    "features": "f0eee1c44590ce1a"
+    "features": "f0eee1c44590ce1a",
+    "text_encoder": "0b0028d3060e43d1",
+    "tokenizer": "71f7ceb7b3d5bb3c"
   },
   "names": {
     "pictures": 8,

@@ -256,3 +256,59 @@ def test_bake_live_saves_the_pages_first_answer(words_run, tmp_path):
         assert abs(sum(rec["prob"].values()) - 1) < 0.05  # the 5 words, all kept
         assert set(rec["maps"]) == {str(i) for i, _ in rec["why"]}
         assert sorted(rec["off"]["ids"]) == sorted(i for i, _ in rec["why"])
+
+
+def test_words_pack_reads_any_word(words_run):
+    """export-live also ships the text half: it reproduces the pack's own word embeddings from token ids."""
+    ort = pytest.importorskip("onnxruntime")
+    from transformers import AutoTokenizer
+
+    from interpretableintelligence.live_words import prompt
+
+    pack_dir = words_run["pack"]
+    pack = json.loads((pack_dir / "pack.json").read_text(encoding="utf-8"))
+    assert pack["files"]["text_encoder"] == "text_encoder.onnx" and pack["files"]["tokenizer"] == "tokenizer.json"
+    spec = json.loads((pack_dir / "tokenizer.json").read_text(encoding="utf-8"))
+    tokenizer = AutoTokenizer.from_pretrained(words_run["model"])
+    assert spec["vocab"][spec["bos"]] == "<|startoftext|>" and spec["vocab"][spec["eos"]] == "<|endoftext|>"
+    table = np.frombuffer((pack_dir / "text.bin").read_bytes(), dtype="<f2").astype(np.float32).reshape(len(WORDS), 16)
+    session = ort.InferenceSession(str(pack_dir / "text_encoder.onnx"))
+    for i, word in enumerate(WORDS):
+        ids = tokenizer([prompt(word)])["input_ids"][0]
+        got = session.run(None, {"input_ids": np.asarray([ids], dtype=np.int64)})[0][0]
+        assert float(table[i] @ got) > 0.99
+
+
+def test_page_tokenizer_matches_clip_tokenizer(tmp_path):
+    """demo-site/live/text.js tokenises like Hugging Face's CLIPTokenizer (byte-level BPE with merges)."""
+    import shutil
+    import subprocess
+
+    from transformers import CLIPTokenizer
+
+    from interpretableintelligence.live_words import tokenizer_spec
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    keep = [*range(33, 127), *range(161, 173), *range(174, 256)]
+    chars, extra = [], 0
+    for b in range(256):
+        chars.append(chr(b) if b in keep else chr(256 + extra))
+        extra += b not in keep
+    merges = ["t h", "th e</w>", "o f</w>", "p h", "ph o", "pho t", "phot o</w>", "c a", "ca t</w>", "r o", "ro b", "rob o", "robo t</w>", "e r</w>", "t er</w>"]
+    vocab = chars + [c + "</w>" for c in chars] + ["".join(m.split()) for m in merges] + ["<|startoftext|>", "<|endoftext|>"]
+    (tmp_path / "vocab.json").write_text(json.dumps({t: i for i, t in enumerate(vocab)}), encoding="utf-8")
+    (tmp_path / "merges.txt").write_text("#version: 0.2\n" + "\n".join(merges) + "\n", encoding="utf-8")
+    tokenizer = CLIPTokenizer(str(tmp_path / "vocab.json"), str(tmp_path / "merges.txt"))
+    spec = tokenizer_spec(tokenizer)
+    texts = ["a photo of a cat.", "A photo of a ROBOT arm.", "a photo of an otter's  tail!", "a photo of a crème brûlée 42.", "the  thermometer, then the cat"]
+    want = [tokenizer(t)["input_ids"] for t in texts]
+    page = Path(__file__).resolve().parents[1] / "demo-site" / "live" / "text.js"
+    program = (
+        f"import({json.dumps(page.as_uri())}).then(({{ Tokenizer }}) => {{"
+        f" const t = new Tokenizer({json.dumps(spec)});"
+        f" console.log(JSON.stringify({json.dumps(texts)}.map((x) => t.encode(x)))); }});"
+    )
+    got = json.loads(subprocess.run([node, "--input-type=module", "-e", program], check=True, capture_output=True, text=True).stdout)
+    assert got == want

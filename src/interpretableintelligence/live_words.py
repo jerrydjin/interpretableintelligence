@@ -30,6 +30,7 @@ here sets a badge.
 
 from __future__ import annotations
 
+import json
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -201,7 +202,55 @@ def halve_onnx(path: Path, min_elems: int = 1024) -> None:
     onnx.save(model, str(path))
 
 
-def int8_onnx(path: Path) -> int:
+class TextHead(torch.nn.Module):
+    """Token ids of one prompt to its normalised text embedding (CLIP's text half and projection)."""
+
+    def __init__(self, model) -> None:
+        super().__init__()
+        self.text = model.text_model
+        self.proj = model.text_projection
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        t = self.proj(self.text(input_ids=input_ids).pooler_output)
+        return t / t.norm(dim=-1, keepdim=True)
+
+
+def export_text_onnx(head: TextHead, ids: torch.Tensor, path: Path) -> None:
+    """The text half for any number of tokens; matrices and the token table stored as int8."""
+    with torch.no_grad(), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        torch.onnx.export(
+            head, (ids,), str(path), input_names=["input_ids"], output_names=["embed"],
+            dynamic_axes={"input_ids": {1: "tokens"}}, opset_version=18, dynamo=False, do_constant_folding=True,
+        )
+    halve_onnx(path)
+    int8_onnx(path, embeddings=True)
+    check_no_float64(path)
+
+
+def tokenizer_spec(tokenizer) -> dict:
+    """What the page's tokenizer (demo-site/live/text.js) needs: tokens by id, merges by rank, start and end ids."""
+    import tempfile
+
+    vocab = tokenizer.get_vocab()
+    tokens = [None] * (max(vocab.values()) + 1)
+    for token, i in vocab.items():
+        tokens[i] = token
+    with tempfile.TemporaryDirectory() as tmp:
+        tokenizer.save_pretrained(tmp)
+        merges_txt = Path(tmp) / "merges.txt"
+        if merges_txt.is_file():
+            lines = merges_txt.read_text(encoding="utf-8").splitlines()
+            merges = [line for line in lines[1:] if line and not line.startswith("#version")]
+        else:
+            raw = json.loads((Path(tmp) / "tokenizer.json").read_text(encoding="utf-8"))["model"]["merges"]
+            merges = [m if isinstance(m, str) else " ".join(m) for m in raw]
+    bos = tokenizer.convert_tokens_to_ids("<|startoftext|>")
+    eos = tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    return {"vocab": tokens, "merges": merges, "bos": int(bos), "eos": int(eos)}
+
+
+def int8_onnx(path: Path, embeddings: bool = False) -> int:
     """Store every float16 matrix of ``path`` (after :func:`halve_onnx`) as int8 with one scale per channel.
 
     Each ``Cast`` from a float16 weight of two or more dimensions becomes a ``DequantizeLinear``
@@ -222,9 +271,11 @@ def int8_onnx(path: Path) -> int:
             continue
         name = node.input[0]
         array = numpy_helper.to_array(inits[name]).astype(np.float32)
-        if array.ndim < 2 or "embedding" in name:
+        table = "embedding" in name
+        if array.ndim < 2 or (table and not embeddings):
             continue
-        axis = 1 if array.ndim == 2 else 0
+        # A lookup table (embeddings=True) gets one scale per row: each token's own vector.
+        axis = 0 if table else 1 if array.ndim == 2 else 0
         others = tuple(i for i in range(array.ndim) if i != axis)
         scale = np.abs(array).max(axis=others) / 127.0
         scale[scale == 0] = 1.0
@@ -301,3 +352,69 @@ def sees(
             rows = [{"word": words[int(i)], "rise": round(float(mean[i]), 4), "top_on": int(firsts[i]), "of": n} for i in order]
             found[f] = [row for row in rows if row["rise"] > 0]
     return [found.get(f, []) for f in range(decoder.shape[0])]
+
+
+TEXT_ENCODER = "text_encoder.onnx"
+TOKENIZER = "tokenizer.json"
+
+
+def write_text_encoder(model, tokenizer, out_dir: Path, words: list[str], table: np.ndarray, log: Callable[[str], None] = lambda _m: None) -> dict:
+    """Write the text half (``text_encoder.onnx``) and ``tokenizer.json`` so the page can read any word.
+
+    Checked against ``table`` (the pack's own word embeddings): every word, tokenised without
+    padding as the page does, must come out of the int8 graph within cosine 0.99 of its row,
+    and the top match must be itself. Returns the pack ``files`` entries.
+    """
+    head = TextHead(model).eval()
+    ids = tokenizer([prompt(words[0])], return_tensors="pt")["input_ids"]
+    log("exporting the text half to ONNX")
+    export_text_onnx(head, ids, out_dir / TEXT_ENCODER)
+    spec = tokenizer_spec(tokenizer)
+    (out_dir / TOKENIZER).write_text(json.dumps(spec, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        log("onnxruntime is not installed: the text half was not checked against the word list")
+        return {"text_encoder": TEXT_ENCODER, "tokenizer": TOKENIZER}
+    session = ort.InferenceSession(str(out_dir / TEXT_ENCODER))
+    worst = 1.0
+    wrong = []
+    for i, word in enumerate(words):
+        ids = tokenizer([prompt(word)])["input_ids"][0]
+        got = session.run(None, {"input_ids": np.asarray([ids], dtype=np.int64)})[0][0]
+        sims = table @ (got / np.linalg.norm(got))
+        worst = min(worst, float(sims[i]))
+        if int(np.argmax(sims)) != i and sims.max() - sims[i] > 1e-3:
+            wrong.append(word)
+    log(f"text half: worst cosine to the pack's own word embeddings {worst:.4f}; {len(wrong)} words closer to another")
+    if worst < 0.99 or len(wrong) > max(1, len(words) // 100):
+        raise WordsError(f"the exported text half does not reproduce the pack's words (worst cosine {worst:.4f}, {wrong[:5]})")
+    return {"text_encoder": TEXT_ENCODER, "tokenizer": TOKENIZER}
+
+
+def add_text_encoder(pack_dir: Path, model_source: str | None = None, log: Callable[[str], None] = print) -> dict:
+    """Add the text half to an existing words pack (``ii export-text``); returns the new ``files`` entries."""
+    from transformers import AutoModel, AutoTokenizer
+
+    from interpretableintelligence.live import file_digests, split_large
+
+    pack_dir = Path(pack_dir)
+    meta = json.loads((pack_dir / "pack.json").read_text(encoding="utf-8"))
+    if (meta.get("model") or {}).get("readout") != "words":
+        raise WordsError("only a words pack (ii export-live --readout words) reads words")
+    source = model_source or meta["model"]["name"]
+    words = json.loads((pack_dir / meta["files"]["vocab"]).read_text(encoding="utf-8"))
+    dim = int(meta["words"]["dim"])
+    table = np.frombuffer((pack_dir / meta["files"]["text"]).read_bytes(), dtype="<f2").astype(np.float32).reshape(-1, dim)
+    log(f"loading {source}")
+    model = AutoModel.from_pretrained(source, dtype=torch.float32).eval()
+    if not hasattr(model, "text_model") or not hasattr(model, "text_projection"):
+        raise WordsError(f"{source} has no text half (it is not a CLIP-style model)")
+    model.requires_grad_(False)
+    tokenizer = AutoTokenizer.from_pretrained(source)
+    files = write_text_encoder(model, tokenizer, pack_dir, words, table, log=log)
+    files = split_large(pack_dir, files)
+    meta["files"].update(files)
+    meta["digests"] = {**meta.get("digests", {}), **file_digests(pack_dir, files)}
+    (pack_dir / "pack.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    return files
