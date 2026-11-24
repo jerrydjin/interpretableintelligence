@@ -383,6 +383,11 @@ async function runOn() {
   syncAddress();
 }
 
+// A feature's name (the word writing it in makes the model see, ii name-live), else its number.
+function fname(id) {
+  return engine.features[id]?.name || `Feature ${id}`;
+}
+
 function reasons() {
   return ui.why ? ui.why.ranked.filter((r) => r.score > 0 && !ui.background.has(r.id)).slice(0, N_WHY) : [];
 }
@@ -554,7 +559,7 @@ function drawHeat() {
   const id = ui.hover ?? ui.feature;
   if (id != null) {
     paintMap(engine.featureMap(ui.state, id), EMBER);
-    key.replaceChildren(el("span", { class: "swatch ember" }), `Where feature ${id} fires`);
+    key.replaceChildren(el("span", { class: "swatch ember" }), engine.features[id]?.name ? `Where “${engine.features[id].name}” fires` : `Where feature ${id} fires`);
   } else if (ui.why && !faint()) {
     paintMap(ui.why.patches, EMBER);
     key.replaceChildren(el("span", { class: "swatch ember" }), `Where it finds “${engine.vocab[ui.word]}”`);
@@ -699,14 +704,14 @@ function mainViewAll() {
           },
           el(
             "button",
-            { class: "switch", type: "button", role: "switch", "aria-checked": off ? "false" : "true", "aria-label": `Feature ${r.id} ${off ? "off" : "on"}`, onclick: () => toggle(r.id) },
+            { class: "switch", type: "button", role: "switch", "aria-checked": off ? "false" : "true", "aria-label": `${fname(r.id)} ${off ? "off" : "on"}`, onclick: () => toggle(r.id) },
             el("span", {}),
           ),
           el(
             "button",
             { class: "fname-btn", type: "button", onclick: () => openFeature(r.id) },
             thumbOf(r.id),
-            el("span", { class: "fname" }, String(r.id)),
+            el("span", { class: engine.features[r.id]?.name ? "fname" : "fname unnamed" }, engine.features[r.id]?.name || String(r.id)),
           ),
           el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / total) * 100))}%` })),
         );
@@ -859,14 +864,16 @@ function featureView() {
       },
       `← Why it sees “${engine.vocab[ui.word]}”`,
     ),
-    el("h2", { class: "ftitle" }, `Feature ${id}`),
+    el("h2", { class: "ftitle" }, fname(id)),
     el(
       "p",
       { class: "muted" },
       fired
         ? `It fires on ${fired} of ${engine.nTok} patches of this picture.`
         : "It is silent on this picture, so turning it up does nothing here. Write it everywhere instead.",
-      sees.length
+      f.name
+        ? ` Written onto every patch of ${engine.pack.names?.pictures ?? "a few"} pictures, it makes the model see “${f.name}” more than other features do.`
+        : sees.length
         ? ` Written onto every patch of ${sees[0].of} pictures it had not trained on, it made the model see ${sees.map((r) => `“${r.word}”`).join(", ")} more.`
         : "",
     ),

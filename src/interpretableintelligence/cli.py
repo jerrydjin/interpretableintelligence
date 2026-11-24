@@ -1495,6 +1495,24 @@ def export_live_cmd(
     )
 
 
+@app.command("name-live")
+def name_live_cmd(
+    pack: Annotated[Path, typer.Argument(help="A words pack (ii export-live --readout words), e.g. demo-site/live/packs/clip-b16-words.")],
+    pictures: Annotated[int, typer.Option("--pictures", min=2, help="Sample pictures to write each feature onto (split in two halves that must agree).")] = 8,
+    z_min: Annotated[float, typer.Option("--z-min", help="How far above other features a word must rise to name a feature (z, averaged over pictures).")] = 3.0,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="An .npz file to save progress to and resume from.")] = None,
+) -> None:
+    """Name each feature of a words pack by the word it makes the model see, measured through the pack's own model."""
+    from interpretableintelligence.live_names import name_pack
+
+    try:
+        out = name_pack(pack, n_pictures=pictures, z_min=z_min, log=typer.echo, checkpoint=checkpoint)
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"named {out['named']} of {out['features']} features on {len(out['pictures'])} pictures")
+
+
 @app.command("bake-live")
 def bake_live_cmd(
     pack: Annotated[Path, typer.Argument(help="A words pack inside the playground folder, e.g. demo-site/live/packs/clip-b16-words.")],

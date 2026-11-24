@@ -188,6 +188,40 @@ def test_backend_skips_browser_only_packs(words_run, tmp_path):
         load_packs(packs)
 
 
+def test_assign_names_needs_a_word_that_stands_out_on_both_halves():
+    from interpretableintelligence.live_names import assign_names
+
+    rng = np.random.default_rng(0)
+    vocab = [f"w{i}" for i in range(20)]
+    deltas = rng.normal(0, 1, size=(60, 4, 20)).astype(np.float16)
+    deltas[0, :, 7] += 12  # feature 0 pushes w7 on every picture
+    deltas[1, 0::2, 3] += 24  # feature 1 pushes w3 on half the pictures only
+    deltas[2, :, 5] += 12  # always-on: never named
+    skip = np.zeros(60, bool)
+    skip[2] = True
+    names = assign_names(deltas, skip, vocab)
+    assert names[0] == "w7"
+    assert names[1] is None and names[2] is None
+    assert sum(n is not None for n in names) <= 3
+
+
+def test_name_live_writes_names_through_the_pack(words_run, tmp_path):
+    import shutil
+
+    pytest.importorskip("onnxruntime")
+    pack = tmp_path / "pack"
+    shutil.copytree(words_run["pack"], pack)
+    before = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+    result = CliRunner().invoke(app, ["name-live", str(pack), "--pictures", "2", "--z-min", "0"])
+    assert result.exit_code == 0, result.output
+    meta = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+    features = json.loads((pack / "features.json").read_text(encoding="utf-8"))
+    named = [f for f in features if f.get("name")]
+    assert meta["names"]["named"] == len(named) > 0
+    assert all(f["name"] in WORDS for f in named)
+    assert meta["digests"]["features"] != before["digests"]["features"]
+
+
 def test_bake_live_saves_the_pages_first_answer(words_run, tmp_path):
     """ii bake-live runs the playground on every example picture and saves its answer; the page reads it back."""
     import os
