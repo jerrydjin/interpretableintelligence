@@ -413,6 +413,61 @@ class _TinyCircuitPredictor(nn.Module):
         return x[:, 2:]
 
 
+class _TinyNeuronMLP(nn.Module):
+    """``fc2(act(fc1(x)))`` with Meta's attribute names, so ``ii action-neurons`` can hook its hidden neurons."""
+
+    def __init__(self, dim: int, hidden: int) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(dim, hidden, bias=False)
+        self.act = nn.Identity()
+        self.fc2 = nn.Linear(hidden, dim, bias=False)
+        nn.init.zeros_(self.fc1.weight)
+        nn.init.zeros_(self.fc2.weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fc2(self.act(self.fc1(x)))
+
+
+class _TinyNeuronPredictor(_TinyCircuitPredictor):
+    """Planted arm-action neurons, for ``ii action-neurons``' tests.
+
+    Block 1's head 0 copies the arm x step from the action token into frame dim 8. Block 2's MLP
+    neurons ``ARM_NEURONS`` read dim 8 and each write it into dim 10 too, so the action's effect on
+    the output is mostly carried by those three neurons. Every other weight is zero.
+    """
+
+    ARM_NEURONS = (5, 17, 40)
+
+    def __init__(self, dim: int, n_tokens: int) -> None:
+        super().__init__(dim, n_tokens)
+        with torch.no_grad():
+            e = self.predictor_blocks[3].attn
+            e.qkv.weight.zero_()
+            e.proj.weight.zero_()
+            self.predictor_blocks[1].attn.proj.weight[9].zero_()  # drop the gripper copy
+            for blk in self.predictor_blocks:
+                blk.mlp = _TinyNeuronMLP(dim, 4 * dim)
+            mlp = self.predictor_blocks[2].mlp
+            for j in self.ARM_NEURONS:
+                mlp.fc1.weight[j, 8] = 1.0
+                mlp.fc2.weight[10, j] = 1.0
+
+
+def tiny_neuron_model(*, seed: int = 0, crop: int = 128, patch: int = 16, dim: int = 16) -> ACWorldModel:
+    """Random CPU encoder plus ``_TinyNeuronPredictor``: three known arm-action neurons in block 2."""
+    torch.manual_seed(seed)
+    side = crop // patch
+    return ACWorldModel(
+        encoder=_TinyEncoder(dim, patch).eval(),
+        predictor=_TinyNeuronPredictor(dim, side * side).eval(),
+        device=torch.device("cpu"),
+        crop=crop,
+        patch=patch,
+        name="tiny-neuron",
+        info={"arm_neurons": [f"b2.n{j}" for j in _TinyNeuronPredictor.ARM_NEURONS]},
+    )
+
+
 def tiny_circuit_model(*, seed: int = 0, crop: int = 128, patch: int = 16, dim: int = 16) -> ACWorldModel:
     """Random CPU encoder plus ``_TinyCircuitPredictor``: a known gripper eraser at block 3, head 1."""
     torch.manual_seed(seed)

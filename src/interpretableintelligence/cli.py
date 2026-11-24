@@ -1283,6 +1283,54 @@ def action_amp_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("action-neurons")
+def action_neurons_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for action_neurons.json.")],
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    tiny: Annotated[bool, typer.Option("--tiny", help="CPU stand-in with three planted arm neurons (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the random neuron sets and the bootstrap.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Do a few predictor neurons carry V-JEPA 2-AC's arm action? Pick them on half the episodes, ablate them on the other. (Offline.)
+
+    Neurons are the hidden units of each predictor block's MLP. The top 10, 100 and 1000 by action
+    effect lose their action (they get their zero-action values) against matched random neurons of
+    the same block and activity. The verdict rule is fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_neuron_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.action_neurons import run_action_neurons
+
+    try:
+        if tiny:
+            model = tiny_neuron_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, seed=seed)
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_action_neurons(model, trajectories, out, seed=seed, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{result['n_transitions']} transitions, {result['n_episodes']} episodes, {result['n_neurons']} neurons;"
+               f" verdict {result['verdict']} (k_carry {result['k_carry']})")
+    for k, v in result["per_k"].items():
+        t = v["top_remain"]
+        typer.echo(f"  top {k:>5s}: remain {t['value']:.3f} [{t['lo']:.3f}, {t['hi']:.3f}]  random {v['random_remain_mean']:.3f}"
+                   f" (min {min(v['random_remain_per_set']):.3f})  err rise {v['top_err_rise']['value']:+.4f}")
+    typer.echo(f"wrote {out}")
+
+
 @app.command("gripper-trace")
 def gripper_trace_cmd(
     clips: Annotated[

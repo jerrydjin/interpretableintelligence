@@ -676,3 +676,34 @@ def test_cli_action_amp_tiny(tmp_path):
     # At alpha 0 every arm is the unamplified prediction.
     assert rec["err_action"][0] == rec["err_shuffled"][0] == rec["err_change"][0]
     assert rec["plan1_cos_action"][0] == rec["plan1_cos_change"][0]
+
+
+# ----------------------------------------------------------------------------- action-neurons
+
+
+def test_action_neurons_verdict():
+    from interpretableintelligence.worldmodel.action_neurons import verdict
+
+    def k(v, lo, hi, rand):
+        return {"top_remain": {"value": v, "lo": lo, "hi": hi}, "random_remain_per_set": rand}
+
+    assert verdict({"10": k(0.9, 0.85, 0.95, [1.0]), "100": k(0.3, 0.2, 0.4, [0.95, 0.9])}) == ("few_carry", 100)
+    assert verdict({"10": k(0.3, 0.2, 0.4, [0.2])}) == ("mixed", None)  # random neurons do as well
+    assert verdict({"10": k(0.95, 0.9, 1.0, [1.0]), "1000": k(0.9, 0.85, 0.95, [1.0])}) == ("spread", None)
+
+
+def test_cli_action_neurons_finds_planted_neurons(tmp_path):
+    clips = _clips_with_states(tmp_path, n=4)
+    out = tmp_path / "an"
+    result = CliRunner().invoke(app, ["action-neurons", "--clips", str(clips), "--out", str(out), "--tiny", "--bootstrap", "20"])
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "action_neurons.json").read_text())
+    assert data["schema"] == "action-neurons/v1" and data["n_transitions"] > 0
+    planted = set(data["model_info"]["arm_neurons"])
+    for names in data["top_neurons_by_test_fold"].values():
+        assert set(names[:3]) == planted
+    # The planted neurons write 3x what the attention path does: removing them leaves ~1/sqrt(10) of the effect.
+    top = data["per_k"]["10"]["top_remain"]["value"]
+    assert 0.2 < top < 0.45
+    assert min(data["per_k"]["10"]["random_remain_per_set"]) > 0.99
+    assert data["verdict"] == "few_carry" and data["k_carry"] == 10

@@ -68,7 +68,7 @@ from interpretableintelligence.worldmodel.plan_probe import _boot
 from interpretableintelligence.worldmodel.plan_stall import REAL, ZERO, menu
 
 SCHEMA = "action-amp/v1"
-ALPHAS = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
+ALPHAS = (0.0, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
 ARMS = ("action", "shuffled", "change")
 PLAN_ARMS = ("action", "change")
 HORIZONS = (1, 4)
@@ -95,8 +95,10 @@ def _cos(a: np.ndarray, b: np.ndarray) -> float:
     return float(a @ b / (na * nb)) if na > 0 and nb > 0 else 0.0
 
 
-def fold_of(episode: int) -> int:
-    return zlib.crc32(str(episode).encode()) % 2
+def balanced_folds(episodes, salt: str = "action-amp") -> dict:
+    """Two episode folds of equal size (within one): episodes ordered by a hash, then alternated."""
+    eps = sorted(set(episodes), key=lambda e: (zlib.crc32(f"{salt}:{e}".encode()), str(e)))
+    return {e: i % 2 for i, e in enumerate(eps)}
 
 
 def _moving_steps(tr: Trajectory) -> tuple[np.ndarray, list[int]]:
@@ -111,6 +113,7 @@ def probe(model: ACWorldModel, trajectories: list[Trajectory], *, seed: int = 0,
     for tr in trajectories:
         acts, steps = _moving_steps(tr)
         pool += [(tr.episode, acts[t]) for t in steps]
+    folds = balanced_folds(tr.episode for tr in trajectories)
     records = []
     for i, tr in enumerate(trajectories):
         acts, steps = _moving_steps(tr)
@@ -128,7 +131,7 @@ def probe(model: ACWorldModel, trajectories: list[Trajectory], *, seed: int = 0,
                                        torch.from_numpy(batch))
             menu_preds, p_real, p_other = preds[: len(cand)], preds[-2], preds[-1]
             p_zero = menu_preds[ZERO]
-            rec = {"clip_id": tr.clip_id, "episode": tr.episode, "fold": fold_of(tr.episode), "t": int(t),
+            rec = {"clip_id": tr.clip_id, "episode": tr.episode, "fold": folds[tr.episode], "t": int(t),
                    "real_step_m": float(np.linalg.norm(acts[t, :3]))}
             nxt, cur = z[t + 1], z[t]
             for arm in ARMS:
