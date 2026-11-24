@@ -591,3 +591,81 @@ def ps_run(clips: int = 100) -> None:
 @app.local_entrypoint()
 def ps_fetch() -> None:
     _ps_report({k: v for k, v in ps_read.remote().items() if k != "ps-smoke"})
+
+
+# ----------------------------------------------------------------------------- ii novelty-trace: where the new information goes
+
+
+def _novelty(dest: str, *extra: str, fresh: bool = False) -> dict:
+    import shutil
+
+    if fresh:
+        shutil.rmtree(dest, ignore_errors=True)
+    if not Path(dest, "novelty_trace.json").exists():
+        _sh(["ii", "novelty-trace", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    return json.loads(Path(dest, "novelty_trace.json").read_text())
+
+
+def _novelty_pair(prefix: str, *extra: str, fresh: bool = False) -> dict:
+    """The untrained-predictor control first, then the trained predictor scored against it."""
+    ctl = f"{RESULTS}/{prefix}-random-predictor"
+    out = {f"{prefix}-random-predictor": _novelty(ctl, "--random-predictor", *extra, fresh=fresh)}
+    out[f"{prefix}-trained"] = _novelty(f"{RESULTS}/{prefix}-trained", "--control", ctl, *extra, fresh=fresh)
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1500, memory=32768)
+def nt_smoke_job() -> dict:
+    import time
+
+    t0 = time.time()
+    out = _novelty_pair("nt-smoke", "--max-clips", "20", "--bootstrap", "200", fresh=True)
+    out["wall_s"] = time.time() - t0
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def nt_full_job(clips: int = 100) -> dict:
+    return _novelty_pair("nt", "--max-clips", str(clips))
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def nt_read() -> dict:
+    return {f.parent.name: json.loads(f.read_text()) for f in sorted(Path(RESULTS).glob("nt-*/novelty_trace.json"))}
+
+
+def _nt_report(results: dict) -> None:
+    for name, payload in results.items():
+        if not isinstance(payload, dict):
+            print(name, payload)
+            continue
+        _save_local(name, payload, None)
+        print(f"{name}: {payload['n_transitions']} transitions, {payload['n_episodes']} episodes, peak {payload['peak']}, "
+              f"verdict {payload['verdict']}, encoder {payload['encoder_verdict']}")
+        for k, x in payload["stats"].items():
+            print(f"  {k:24s} {x['value']:+.4f} [{x['lo']:+.4f},{x['hi']:+.4f}]")
+        print("  moving R2 by layer:", " ".join(f"{k}:{v:.3f}" for k, v in payload["curves"]["moving"].items()))
+        if payload.get("encoder"):
+            e = payload["encoder"]
+            print("  encoder motion signal:", " ".join(f"{k}:{v:.3f}" for k, v in zip(e["layers"], e["motion_signal"])))
+
+
+@app.local_entrypoint()
+def nt_smoke() -> None:
+    import time
+
+    t0 = time.time()
+    _nt_report(nt_smoke_job.remote())
+    print("wall incl. startup", round(time.time() - t0), "s")
+
+
+@app.local_entrypoint()
+def nt_run(clips: int = 100) -> None:
+    nt_full_job.spawn(clips)
+    print("spawned novelty-trace; fetch with ::nt_fetch")
+
+
+@app.local_entrypoint()
+def nt_fetch() -> None:
+    _nt_report({k: v for k, v in nt_read.remote().items() if not k.startswith("nt-smoke")})
