@@ -256,3 +256,12 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 .see .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .see .how .fine { margin-top: 12px; }
 #credit { overflow-wrap: anywhere; }
+
+/* Make it see a word: features to turn on (written onto every patch). */
+.toward { margin-top: 28px; }
+.frow.push { grid-template-columns: auto minmax(0, 1fr) 22%; cursor: default; }
+.frow.push .fname { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.frow.push.on .fname { color: var(--ink); }
+.frow.push .fname-btn .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toward .slider { margin-top: 12px; }
+.frow.push .fname-btn .muted { line-height: 1; }

@@ -1515,6 +1515,22 @@ def bake_live_cmd(
     typer.echo(f"wrote {summary.path}: {summary.samples} pictures, {summary.bytes / 1e3:.0f} KB (baked on {summary.backend})")
 
 
+@app.command("export-text")
+def export_text_cmd(
+    pack: Annotated[Path, typer.Argument(help="A words pack, e.g. demo-site/live/packs/clip-b16-words.")],
+    model: Annotated[str | None, typer.Option("--model", help="Hugging Face id or local folder of the CLIP model (default: the one pack.json names).")] = None,
+) -> None:
+    """Add CLIP's text half to a words pack, so the playground can read any word, not only its list (ii export-live does this for new packs)."""
+    from interpretableintelligence.live_words import WordsError, add_text_encoder
+
+    try:
+        files = add_text_encoder(pack, model, log=typer.echo)
+    except (WordsError, OSError, ValueError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {', '.join(str(v) for v in files.values())} into {pack}")
+
+
 LIVE_DIR = Path("demo-site/live")
 
 
