@@ -156,13 +156,48 @@ export class Engine {
     return run;
   }
 
+  // The pack's description (and, for a words pack, its word list): enough to draw a baked answer
+  // (`instant`) before any model file arrives. load() calls it too.
+  async loadMeta() {
+    if (this._meta) return this._meta;
+    this._meta = (async () => {
+      const pack = await (await fetch(this.base + "pack.json")).json();
+      if (pack.format !== "ii-live-pack" || ![1, 2].includes(pack.version)) throw new Error("this pack is not an ii live pack");
+      this.pack = pack;
+      this.wordsMode = pack.model.readout === "words";
+      if (this.wordsMode) this.vocab = await (await fetch(this.base + pack.files.vocab)).json();
+      this.nFeatures = pack.sae.n_features;
+      this.d = pack.model.d_model;
+      this.gridH = pack.model.grid.h;
+      this.gridW = pack.model.grid.w;
+      this.nTok = this.gridH * this.gridW;
+      this.prefix = pack.model.prefix_tokens;
+      this.size = pack.model.image_size;
+      return pack;
+    })();
+    return this._meta;
+  }
+
+  // The first answer for each sample picture, worked out by this page ahead of time (ii bake-live),
+  // or null. Ignored when the model files changed since.
+  async loadInstant() {
+    const pack = await this.loadMeta();
+    if (!pack.files.instant) return null;
+    try {
+      const baked = await (await fetch(this.base + pack.files.instant)).json();
+      // Only the files that change the numbers count (new feature names do not).
+      const digests = Object.entries(baked.digests || {});
+      const same = digests.length && digests.every(([key, digest]) => (pack.digests || {})[key] === digest);
+      return same && baked.version === 1 ? baked : null;
+    } catch {
+      return null;
+    }
+  }
+
   // onProgress({ phase, loaded, total, cached })
   async load({ onProgress = () => {}, preferGpu = true } = {}) {
     const t0 = now();
-    const pack = await (await fetch(this.base + "pack.json")).json();
-    if (pack.format !== "ii-live-pack" || ![1, 2].includes(pack.version)) throw new Error("this pack is not an ii live pack");
-    this.pack = pack;
-    this.wordsMode = pack.model.readout === "words";
+    const pack = await this.loadMeta();
     const { ort, backend } = await loadOrt(preferGpu);
     this.ort = ort;
     this.backend = backend;
@@ -187,7 +222,6 @@ export class Engine {
       this._backBytes = fetchBytes(this.base + files.back, backKey, (seen) => (backSeen = seen));
       this._backBytes.catch(() => {}); // surfaced by the first edit, not here
     }
-    const vocab = this.wordsMode ? fetch(this.base + files.vocab).then((r) => r.json()) : null;
     const [bytes, features] = await Promise.all([
       Promise.all(
         want.map((name) =>
@@ -208,18 +242,10 @@ export class Engine {
     this._bytes = { front: bytes[0], sae: bytes[1], words: this.wordsMode ? bytes[3] : null };
     this.features = features;
     if (this.wordsMode) {
-      this.vocab = await vocab;
       this.textDim = pack.words.dim;
       this.text = halfToFloat(new Uint16Array(bytes[4].buffer, bytes[4].byteOffset, bytes[4].byteLength / 2)); // [n_words, dim]
       this.logitScale = pack.words.logit_scale;
     }
-    this.nFeatures = pack.sae.n_features;
-    this.d = pack.model.d_model;
-    this.gridH = pack.model.grid.h;
-    this.gridW = pack.model.grid.w;
-    this.nTok = this.gridH * this.gridW;
-    this.prefix = pack.model.prefix_tokens;
-    this.size = pack.model.image_size;
     try {
       await this.startSessions(backend);
     } catch (err) {
@@ -435,6 +461,7 @@ export class Engine {
 
   // Map of one feature over the patches.
   featureMap(state, id) {
+    if (state.maps) return state.maps.get(id) || new Float32Array(this.nTok); // a baked answer
     const out = new Float32Array(this.nTok);
     state.rows.forEach((row, t) => {
       const j = row.idx.indexOf(id);

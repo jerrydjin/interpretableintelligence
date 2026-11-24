@@ -1513,6 +1513,26 @@ def name_live_cmd(
     typer.echo(f"named {out['named']} of {out['features']} features on {len(out['pictures'])} pictures")
 
 
+@app.command("bake-live")
+def bake_live_cmd(
+    pack: Annotated[Path, typer.Argument(help="A words pack inside the playground folder, e.g. demo-site/live/packs/clip-b16-words.")],
+    page: Annotated[Path | None, typer.Option("--page", help="The playground folder (default: the folder holding packs/).")] = None,
+    ort_dir: Annotated[
+        Path | None,
+        typer.Option("--ort-dir", help="Serve ONNX Runtime Web from this local dist/ folder instead of cdn.jsdelivr.net."),
+    ] = None,
+) -> None:
+    """Work out the playground's first answer for each example picture ahead of time (instant.json), so the page answers before the model loads."""
+    from interpretableintelligence.live_bake import BakeError, bake_live
+
+    try:
+        summary = bake_live(pack, page=page, ort_dir=ort_dir, log=typer.echo)
+    except (BakeError, OSError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {summary.path}: {summary.samples} pictures, {summary.bytes / 1e3:.0f} KB (baked on {summary.backend})")
+
+
 LIVE_DIR = Path("demo-site/live")
 
 

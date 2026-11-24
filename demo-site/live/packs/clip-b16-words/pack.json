@@ -60,7 +60,8 @@
     "decoder": "decoder.bin",
     "text": "text.bin",
     "vocab": "vocab.json",
-    "features": "features.json"
+    "features": "features.json",
+    "instant": "instant.json"
   },
   "runs_in": [
     "browser"

@@ -220,3 +220,39 @@ def test_name_live_writes_names_through_the_pack(words_run, tmp_path):
     assert meta["names"]["named"] == len(named) > 0
     assert all(f["name"] in WORDS for f in named)
     assert meta["digests"]["features"] != before["digests"]["features"]
+
+
+def test_bake_live_saves_the_pages_first_answer(words_run, tmp_path):
+    """ii bake-live runs the playground on every example picture and saves its answer; the page reads it back."""
+    import os
+    import shutil
+
+    pytest.importorskip("playwright.sync_api")
+    from test_live import LIVE, REPO, _cdn_reachable
+
+    from interpretableintelligence.live_bake import bake_live, find_chrome
+
+    if find_chrome() is None:
+        pytest.skip("Chrome is not installed; baking runs the page in it")
+    ort_dir = os.environ.get("II_ORT_DIR")  # a local onnxruntime-web dist/, for machines without the CDN
+    if not ort_dir and not _cdn_reachable():
+        pytest.skip("cdn.jsdelivr.net is not reachable; the page loads ONNX Runtime Web from it")
+
+    site = tmp_path / "site"
+    shutil.copytree(LIVE, site / "live", ignore=shutil.ignore_patterns("packs"))
+    shutil.copytree(REPO / "demo-site" / "static", site / "static")
+    pack = site / "live" / "packs" / "tiny"
+    shutil.copytree(words_run["pack"], pack)
+    summary = bake_live(pack, ort_dir=Path(ort_dir) if ort_dir else None, log=lambda *_: None)
+
+    baked = json.loads((pack / "instant.json").read_text(encoding="utf-8"))
+    meta = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+    assert summary.samples == len(meta["samples"]) == len(baked["samples"]) == 3
+    assert meta["files"]["instant"] == "instant.json"
+    # Only the files that change the numbers are pinned, so new feature names keep it valid.
+    assert baked["digests"] == {k: meta["digests"][k] for k in ("front", "sae", "decoder", "words", "text", "vocab")}
+    for rec in baked["samples"].values():
+        assert 0 <= rec["word"] < len(WORDS)
+        assert abs(sum(rec["prob"].values()) - 1) < 0.05  # the 5 words, all kept
+        assert set(rec["maps"]) == {str(i) for i, _ in rec["why"]}
+        assert sorted(rec["off"]["ids"]) == sorted(i for i, _ in rec["why"])
