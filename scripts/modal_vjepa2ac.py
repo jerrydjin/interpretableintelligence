@@ -591,3 +591,164 @@ def ps_run(clips: int = 100) -> None:
 @app.local_entrypoint()
 def ps_fetch() -> None:
     _ps_report({k: v for k, v in ps_read.remote().items() if k != "ps-smoke"})
+
+
+# ----------------------------------------------------------------------------- does it hold the motion back: ii action-amp
+
+
+def _action_amp(dest: str, *extra: str, fresh: bool = False) -> dict:
+    import shutil
+
+    if fresh:
+        shutil.rmtree(dest, ignore_errors=True)
+    if not Path(dest, "action_amp.json").exists():
+        _sh(["ii", "action-amp", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "action_amp.json").read_text())
+    out.pop("transitions", None)
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def aa_smoke_job() -> dict:
+    import time
+
+    t0 = time.time()
+    out = _action_amp(f"{RESULTS}/aa-smoke", "--max-clips", "4", "--bootstrap", "200", fresh=True)
+    out["wall_s"] = time.time() - t0
+    return {"aa-smoke": out}
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def aa_full_job(clips: int = 60) -> dict:
+    return {
+        "aa-trained": _action_amp(f"{RESULTS}/aa-trained", "--max-clips", str(clips)),
+        "aa-random-predictor": _action_amp(f"{RESULTS}/aa-random-predictor", "--random-predictor", "--max-clips", str(clips)),
+    }
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def aa_read() -> dict:
+    out = {}
+    for f in sorted(Path(RESULTS).glob("aa-*/action_amp.json")):
+        payload = json.loads(f.read_text())
+        payload.pop("transitions", None)
+        out[f.parent.name] = payload
+    return out
+
+
+def _aa_report(results: dict) -> None:
+    for name, payload in results.items():
+        _save_local(name, payload, None)
+        print(name, "wall_s", payload.get("wall_s"), payload["n_transitions"], "transitions", payload["n_episodes"], "episodes")
+        print(" verdicts", payload["verdicts"])
+        for arm in ("action", "shuffled", "change"):
+            v = payload["prediction"][arm]
+            g = v["gain"]
+            print(f"  {arm:8s} gain {g['value']:+.4f} [{g['lo']:+.4f},{g['hi']:+.4f}] alpha {v['alpha_per_fold']}"
+                  f" err {[round(x, 4) for x in v['err_by_alpha']]} closer {[round(x, 2) for x in v['closer_real_by_alpha']]}")
+        for k, x in payload["prediction"]["paired"].items():
+            print(f"  {k:22s} {x['value']:+.4f} [{x['lo']:+.4f},{x['hi']:+.4f}]")
+        for h, v in payload["planning"].items():
+            for arm in ("action", "change"):
+                a = v[arm]
+                print(f"  plan +{h} {arm:7s} gain {a['gain']['value']:+.3f} [{a['gain']['lo']:+.3f},{a['gain']['hi']:+.3f}]"
+                      f" alpha {a['alpha_per_fold']} cos {[round(x, 3) for x in a['cos_by_alpha']]}"
+                      f" stall {[round(x, 2) for x in a['stall_by_alpha']]}")
+
+
+@app.local_entrypoint()
+def aa_smoke() -> None:
+    import time
+
+    t0 = time.time()
+    aa_smoke_job.remote()
+    print("wall incl. startup", round(time.time() - t0), "s")
+    _aa_report({k: v for k, v in aa_read.remote().items() if k == "aa-smoke"})
+
+
+@app.local_entrypoint()
+def aa_run(clips: int = 60) -> None:
+    aa_full_job.spawn(clips)
+    print("spawned action-amp; fetch with ::aa_fetch")
+
+
+@app.local_entrypoint()
+def aa_fetch() -> None:
+    _aa_report({k: v for k, v in aa_read.remote().items() if k != "aa-smoke"})
+
+
+# ----------------------------------------------------------------------------- do a few neurons carry the arm action: ii action-neurons
+
+
+def _action_neurons(dest: str, *extra: str, fresh: bool = False) -> dict:
+    import shutil
+
+    if fresh:
+        shutil.rmtree(dest, ignore_errors=True)
+    if not Path(dest, "action_neurons.json").exists():
+        _sh(["ii", "action-neurons", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "action_neurons.json").read_text())
+    out.pop("transitions", None)
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def an_smoke_job() -> dict:
+    import time
+
+    t0 = time.time()
+    out = _action_neurons(f"{RESULTS}/an-smoke", "--max-clips", "4", "--bootstrap", "200", fresh=True)
+    out["wall_s"] = time.time() - t0
+    return {"an-smoke": out}
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(HOURS * 3600), memory=32768)
+def an_full_job(clips: int = 40) -> dict:
+    return {"an-trained": _action_neurons(f"{RESULTS}/an-trained", "--max-clips", str(clips))}
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def an_read() -> dict:
+    out = {}
+    for f in sorted(Path(RESULTS).glob("an-*/action_neurons.json")):
+        payload = json.loads(f.read_text())
+        payload.pop("transitions", None)
+        out[f.parent.name] = payload
+    return out
+
+
+def _an_report(results: dict) -> None:
+    for name, payload in results.items():
+        _save_local(name, payload, None)
+        print(name, "wall_s", payload.get("wall_s"), payload["n_transitions"], "transitions", payload["n_episodes"], "episodes",
+              payload["n_neurons"], "neurons; verdict", payload["verdict"], "k_carry", payload["k_carry"])
+        for k, v in payload["per_k"].items():
+            t = v["top_remain"]
+            print(f"  top {k:>5s} remain {t['value']:.3f} [{t['lo']:.3f},{t['hi']:.3f}] random mean {v['random_remain_mean']:.3f}"
+                  f" min {min(v['random_remain_per_set']):.3f}  err rise top {v['top_err_rise']['value']:+.4f}"
+                  f" random {v['random_err_rise_mean']:+.4f}")
+        print("  top-1000 blocks per test fold", payload["top_blocks_by_test_fold"])
+        print("  top-10 per test fold", payload["top_neurons_by_test_fold"])
+
+
+@app.local_entrypoint()
+def an_smoke() -> None:
+    import time
+
+    t0 = time.time()
+    an_smoke_job.remote()
+    print("wall incl. startup", round(time.time() - t0), "s")
+    _an_report({k: v for k, v in an_read.remote().items() if k == "an-smoke"})
+
+
+@app.local_entrypoint()
+def an_run(clips: int = 40) -> None:
+    an_full_job.spawn(clips)
+    print("spawned action-neurons; fetch with ::an_fetch")
+
+
+@app.local_entrypoint()
+def an_fetch() -> None:
+    _an_report({k: v for k, v in an_read.remote().items() if k != "an-smoke"})
