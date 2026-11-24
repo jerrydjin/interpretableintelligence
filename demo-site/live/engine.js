@@ -19,6 +19,7 @@
 //                        the word's log-probability along each feature's direction, summed
 //                        over patches (a first-order estimate; switching off measures it).
 //   see(state, edits)    the words after an edit, e.g. [{id, kind: "ablate"}, ...].
+//   clearPatches(state, patches)  the words with the features taken off some patches.
 
 const ORT_VERSION = "1.31.1";
 const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
@@ -165,7 +166,10 @@ export class Engine {
       if (pack.format !== "ii-live-pack" || ![1, 2].includes(pack.version)) throw new Error("this pack is not an ii live pack");
       this.pack = pack;
       this.wordsMode = pack.model.readout === "words";
-      if (this.wordsMode) this.vocab = await (await fetch(this.base + pack.files.vocab)).json();
+      if (this.wordsMode) {
+        // The words and the feature names, so a baked answer can show names before the model.
+        [this.vocab, this.features] = await Promise.all([pack.files.vocab, pack.files.features].map((f) => fetch(this.base + f).then((r) => r.json())));
+      }
       this.nFeatures = pack.sae.n_features;
       this.d = pack.model.d_model;
       this.gridH = pack.model.grid.h;
@@ -233,7 +237,7 @@ export class Engine {
           }),
         ),
       ),
-      fetch(this.base + files.features).then((r) => r.json()),
+      this.features || fetch(this.base + files.features).then((r) => r.json()),
     ]);
     this.timings.download = now() - t0;
     onProgress({ phase: "compile" });
@@ -646,6 +650,27 @@ export class Engine {
       const seen = await this._see(this.applyEdits(state, edits));
       seen.ms = now() - t0;
       return seen;
+    });
+  }
+
+  // The words with every feature (but `skip`) taken off the given patches: what the model loses
+  // when that part of the picture loses its features.
+  clearPatches(state, patches, skip = new Set()) {
+    return this._serial(async () => {
+      const { d, prefix } = this;
+      const hidden = state.hidden.slice();
+      for (const t of patches) {
+        const row = state.rows[t];
+        const off = (prefix + t) * d;
+        for (let j = 0; j < row.idx.length; j++) {
+          const f = row.idx[j];
+          if (skip.has(f)) continue;
+          const v = row.val[j];
+          const dir = f * d;
+          for (let i = 0; i < d; i++) hidden[off + i] -= v * this.decoder[dir + i];
+        }
+      }
+      return this._see(hidden);
     });
   }
 

@@ -3,6 +3,7 @@
 // engine.js, in the browser. Exploration only: nothing here can change a feature's badge.
 
 import { Engine } from "./engine.js";
+import { conceptRegions } from "./regions.js";
 
 const PARAMS = new URLSearchParams(location.search);
 const PACK = PARAMS.get("pack") || "packs/clip-b16-words/";
@@ -13,6 +14,12 @@ const N_WORDS = 6; // words shown
 const N_WHY = 6; // features shown for a word
 const N_ON = 3; // features offered to turn on
 const THUMB = 44; // px, the crop of the picture shown beside each feature
+// Naming concept regions (findConcepts).
+const CONCEPT_P = 0.05;
+const CONCEPT_LEAD = 1;
+const CONCEPT_WORDS = 30; // names come from the words it most sees in the whole picture
+// One colour per concept region, in the warm look (ember first).
+const HUES = [[232, 88, 42], [52, 120, 214], [46, 154, 92], [214, 162, 28], [142, 91, 208], [24, 160, 160], [214, 72, 126], [138, 106, 74]];
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
@@ -54,6 +61,9 @@ const ui = {
   push: 0.5, // how strongly, in units of each feature's training peak
   boost: null, // words with them on
   boostControl: null, // words with as many random features turned on the same way
+  concepts: null, // the picture's concept regions: {state, regions: [{word, patches}], owner}
+  showConcepts: false, // the picture shows its concept regions instead of the word's map
+  conceptHover: null, // the region pointed at
 };
 window.__ii = { ui };
 
@@ -286,6 +296,8 @@ async function showPicture(img, { word = null, off = [], on = [] } = {}) {
     ui.state = await engine.encode(img);
     ui.timings.read = performance.now() - t0;
   });
+  ui.concepts = null;
+  if (ui.showConcepts) findConcepts();
   ui.feature = null;
   ui.detail = null;
   if (ui.wantWord) {
@@ -555,8 +567,12 @@ function paintMap(values, rgb) {
 
 function drawHeat() {
   const key = $("stage-key");
-  if (!ui.state) return paintMap(null);
+  if (!ui.state) {
+    key.replaceChildren();
+    return paintMap(null);
+  }
   const id = ui.hover ?? ui.feature;
+  if (id == null && ui.showConcepts) return drawConcepts();
   if (id != null) {
     paintMap(engine.featureMap(ui.state, id), EMBER);
     key.replaceChildren(el("span", { class: "swatch ember" }), engine.features[id]?.name ? `Where “${engine.features[id].name}” fires` : `Where feature ${id} fires`);
@@ -567,6 +583,142 @@ function drawHeat() {
     paintMap(null);
     key.replaceChildren();
   }
+  if (ui.live) key.append(conceptsButton());
+}
+
+function conceptsButton() {
+  return el(
+    "button",
+    {
+      class: `pill-btn small concepts-btn${ui.showConcepts ? " on" : ""}`,
+      type: "button",
+      "aria-pressed": ui.showConcepts ? "true" : "false",
+      "data-testid": "concepts",
+      onclick: () => {
+        ui.showConcepts = !ui.showConcepts;
+        ui.conceptHover = null;
+        if (ui.showConcepts && !ui.concepts) findConcepts();
+        drawHeat();
+      },
+    },
+    "Concepts",
+  );
+}
+
+// The picture split into a few concept regions, each painted in its own colour and named by
+// the word the model sees in that region alone (findConcepts).
+function drawConcepts() {
+  const key = $("stage-key");
+  const c = ui.concepts?.state === ui.state ? ui.concepts : null;
+  if (!c || !c.regions) {
+    paintRegions(null);
+    key.replaceChildren(el("span", { class: "muted" }, c ? "Finding the concepts…" : ""), conceptsButton());
+    return;
+  }
+  paintRegions(c);
+  key.replaceChildren(
+    el(
+      "span",
+      { class: "chips" },
+      c.regions.length
+        ? c.regions.map((r, n) =>
+            el(
+              "button",
+              {
+                class: `chip${r.word === ui.word ? " on" : ""}`,
+                type: "button",
+                "data-word": engine.vocab[r.word],
+                onmouseenter: () => {
+                  ui.conceptHover = n;
+                  paintRegions(c);
+                },
+                onmouseleave: () => {
+                  ui.conceptHover = null;
+                  paintRegions(c);
+                },
+                onclick: () => explain(r.word),
+              },
+              el("span", { class: "swatch", style: `background:rgb(${HUES[n % HUES.length].join(",")})` }),
+              engine.vocab[r.word],
+            ),
+          )
+        : el("span", { class: "muted" }, "No clear concepts in this picture."),
+    ),
+    conceptsButton(),
+  );
+}
+
+function paintRegions(c) {
+  const canvas = $("heat");
+  const g = sizeCanvas(canvas);
+  g.clearRect(0, 0, canvas.width, canvas.height);
+  $("stage").classList.toggle("mapping", Boolean(c));
+  if (!c) return;
+  const W = engine.gridW;
+  const H = engine.gridH;
+  const small = new ImageData(W, H);
+  for (let t = 0; t < W * H; t++) {
+    const n = c.owner[t];
+    if (n < 0) continue;
+    const faded = ui.conceptHover != null && ui.conceptHover !== n;
+    const [r, gr, b] = HUES[n % HUES.length];
+    small.data.set([r, gr, b, faded ? 40 : 170], t * 4);
+  }
+  const tmp = paintRegions._tmp || (paintRegions._tmp = document.createElement("canvas"));
+  tmp.width = W;
+  tmp.height = H;
+  tmp.getContext("2d").putImageData(small, 0, 0);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tmp, 0, 0, canvas.width, canvas.height);
+}
+
+// Group the features on this picture into concepts (regions.js), then name each by what the
+// model sees in its region alone (every other patch loses its features): the word, among those
+// it most sees in the whole picture, that this region alone gives at least CONCEPT_P and that
+// leads the other regions' mean log-probability by the most (at least CONCEPT_LEAD nats).
+// Regions without such a word stay unpainted; regions with the same word merge.
+async function findConcepts() {
+  const state = ui.state;
+  if (!state || state.baked || ui.concepts?.state === state) return;
+  ui.concepts = { state, regions: null };
+  const t0 = performance.now();
+  const { regions } = conceptRegions(state.rows, engine.features.map((f) => f.max || 0), { skip: ui.background, gridW: engine.gridW });
+  const base = state.seen;
+  // What the model sees in each region alone: every other patch loses its features.
+  const alone = [];
+  for (const r of regions) {
+    const inside = new Set(r.patches);
+    const rest = [];
+    for (let t = 0; t < engine.nTok; t++) if (!inside.has(t)) rest.push(t);
+    const seen = await busy(() => engine.clearPatches(state, rest, ui.background));
+    if (ui.state !== state) return;
+    alone.push(seen.logp);
+  }
+  const named = [];
+  const words = [...base.prob.keys()].sort((a, b) => base.prob[b] - base.prob[a]).slice(0, CONCEPT_WORDS);
+  regions.forEach((r, i) => {
+    let best = -1;
+    let bestLead = CONCEPT_LEAD;
+    for (const w of words) {
+      if (alone[i][w] < Math.log(CONCEPT_P)) continue;
+      let other = 0;
+      alone.forEach((lp, j) => j !== i && (other += lp[w] / (alone.length - 1)));
+      if (alone[i][w] - other >= bestLead) {
+        bestLead = alone[i][w] - other;
+        best = w;
+      }
+    }
+    if (best < 0) return;
+    const same = named.find((x) => x.word === best);
+    if (same) same.patches.push(...r.patches);
+    else named.push({ word: best, patches: [...r.patches] });
+  });
+  named.sort((a, b) => b.patches.length - a.patches.length);
+  const owner = new Int32Array(engine.nTok).fill(-1);
+  named.forEach((r, i) => r.patches.forEach((t) => (owner[t] = i)));
+  ui.concepts = { state, regions: named, owner };
+  ui.timings.concepts = performance.now() - t0;
+  if (ui.showConcepts) drawHeat();
 }
 
 function render() {

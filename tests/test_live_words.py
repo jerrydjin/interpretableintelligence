@@ -257,6 +257,46 @@ def test_bake_live_saves_the_pages_first_answer(words_run, tmp_path):
         assert set(rec["maps"]) == {str(i) for i, _ in rec["why"]}
         assert sorted(rec["off"]["ids"]) == sorted(i for i, _ in rec["why"])
 
+    # The page with that answer: it shows it at once, goes live without an error, and splits the
+    # picture into concept regions.
+    import functools
+    import http.server
+    import threading
+
+    from playwright.sync_api import sync_playwright
+
+    from interpretableintelligence.live_bake import ORT_URL, _Quiet
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Quiet, directory=str(site)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    errors: list[str] = []
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=find_chrome(), headless=True, args=["--no-sandbox", "--disable-gpu"])
+            context = browser.new_context(viewport={"width": 1280, "height": 900})
+            if ort_dir:
+
+                def serve_ort(route):
+                    path = Path(ort_dir) / ORT_URL.match(route.request.url).group(1)
+                    kind = "application/wasm" if path.name.endswith(".wasm") else "text/javascript"
+                    route.fulfill(status=200, body=path.read_bytes(), headers={"content-type": kind, "access-control-allow-origin": "*"})
+
+                context.route(ORT_URL, serve_ort)
+            tab = context.new_page()
+            tab.on("pageerror", lambda exc: errors.append(str(exc)))
+            tab.goto(f"http://127.0.0.1:{httpd.server_address[1]}/live/index.html?cpu&pack=packs/tiny/")
+            tab.wait_for_function("() => document.querySelector('[data-testid=concepts]') && !window.__ii.ui.busy && !window.__ii.ui.state.baked", timeout=180_000)
+            tab.click("[data-testid=concepts]")
+            tab.wait_for_function("() => window.__ii.ui.concepts && window.__ii.ui.concepts.regions", timeout=120_000)
+            concepts = tab.evaluate("() => ({ n: window.__ii.ui.concepts.regions.length, owner: [...window.__ii.ui.concepts.owner], tok: window.__ii.engine.nTok })")
+            browser.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert not errors, errors
+    assert len(concepts["owner"]) == concepts["tok"]
+    assert all(-1 <= o < concepts["n"] for o in concepts["owner"])
+
 
 def test_words_pack_reads_any_word(words_run):
     """export-live also ships the text half: it reproduces the pack's own word embeddings from token ids."""
@@ -312,3 +352,49 @@ def test_page_tokenizer_matches_clip_tokenizer(tmp_path):
     )
     got = json.loads(subprocess.run([node, "--input-type=module", "-e", program], check=True, capture_output=True, text=True).stdout)
     assert got == want
+
+
+def test_page_concept_regions_find_planted_regions():
+    """demo-site/live/regions.js splits a picture's features into the regions they were planted in."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    # A 14 x 14 grid: left half fires features 1-3, right half features 7-9, a 4 x 4 corner
+    # also fires 20-22 (on top of the right half), and every patch fires always-on feature 0.
+    rows = []
+    for t in range(196):
+        x, y = t % 14, t // 14
+        idx, val = [0], [5.0]
+        if x < 7:
+            idx += [1, 2, 3]
+            val += [1.0, 0.8, 0.6]
+        else:
+            idx += [7, 8, 9]
+            val += [0.9, 0.7, 1.0]
+        if x >= 10 and y >= 10:
+            idx += [20, 21, 22]
+            val += [2.0, 1.5, 1.8]
+        rows.append({"idx": idx, "val": val})
+    page = Path(__file__).resolve().parents[1] / "demo-site" / "live" / "regions.js"
+    program = (
+        f"import({json.dumps(page.as_uri())}).then(({{ conceptRegions }}) => {{"
+        f" const rows = {json.dumps(rows)}.map((r) => ({{ idx: Int32Array.from(r.idx), val: Float32Array.from(r.val) }}));"
+        " const peaks = new Float32Array(30).fill(2);"
+        " const a = conceptRegions(rows, peaks, { k: 4, skip: new Set([0]), gridW: 14 });"
+        " const b = conceptRegions(rows, peaks, { k: 4, skip: new Set([0]), gridW: 14 });"
+        " console.log(JSON.stringify({ owner: [...a.owner], same: a.owner.join() === b.owner.join(),"
+        " tops: a.regions.map((r) => r.features[0].id), skipped: a.regions.some((r) => r.features.some((f) => f.id === 0)) })); });"
+    )
+    got = json.loads(subprocess.run([node, "--input-type=module", "-e", program], check=True, capture_output=True, text=True).stdout)
+    assert got["same"] and not got["skipped"]
+    owner = got["owner"]
+    left = {owner[y * 14 + x] for y in range(14) for x in range(5)}
+    right = {owner[y * 14 + x] for y in range(8) for x in range(9, 14)}
+    corner = {owner[y * 14 + x] for y in range(11, 14) for x in range(11, 14)}
+    assert len(left) == len(right) == len(corner) == 1
+    assert len(left | right | corner) == 3 and -1 not in left | right | corner
+    tops = got["tops"]
+    assert tops[owner[0]] in (1, 2, 3) and tops[owner[13]] in (7, 8, 9) and tops[owner[195]] in (20, 21, 22)

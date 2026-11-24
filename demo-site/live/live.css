@@ -72,6 +72,16 @@ body.dragging .drop-hint { display: grid; }
 .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 .swatch.ember { background: var(--signal); }
 .swatch.cobalt { background: var(--steer); }
+.stage-key { align-items: flex-start; }
+.concepts-btn { margin-left: auto; flex: none; padding: 3px 12px; }
+.concepts-btn.on { background: var(--ink); border-color: var(--ink); color: var(--sheet); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px 14px; min-width: 0; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; border: 0; background: none;
+  font: inherit; color: var(--ink-2); cursor: pointer;
+}
+.chip:hover, .chip.on { color: var(--ink); }
+.chip.on { text-decoration: underline; text-underline-offset: 3px; }
 
 .tray { margin-top: 14px; }
 .tray-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
