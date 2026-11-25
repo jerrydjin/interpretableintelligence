@@ -693,3 +693,79 @@ def nt_pair_job(clips: int = 100, smoke: bool = True) -> dict:
 @app.local_entrypoint()
 def nt_pair(clips: int = 100, full: bool = False) -> None:
     _nt_report(nt_pair_job.remote(clips if full else 20, not full))
+
+
+# ----------------------------------------------------------------------------- can one failure feature fix the planner: ii plan-fix
+
+
+def _plan_fix(dest: str, *extra: str, fresh: bool = False) -> dict:
+    import shutil
+
+    if fresh:
+        shutil.rmtree(dest, ignore_errors=True)
+    if not Path(dest, "plan_fix.json").exists():
+        _sh(["ii", "plan-fix", "--clips", CLIPS, "--out", dest, "--code-dir", CODE, "--checkpoint", CKPT, *extra])
+        volume.commit()
+    out = json.loads(Path(dest, "plan_fix.json").read_text())
+    out.pop("steps", None)
+    return out
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=1200, memory=32768)
+def pf_smoke_job() -> dict:
+    import time
+
+    t0 = time.time()
+    out = _plan_fix(f"{RESULTS}/pf-smoke", "--max-clips", "8", "--steps", "300", "--max-fail", "10", "--max-good", "4",
+                    "--bootstrap", "200", fresh=True)
+    out["wall_s"] = time.time() - t0
+    return {"pf-smoke": out}
+
+
+@app.function(volumes={VOL: volume}, gpu=GPU, timeout=int(os.environ.get("II_PF_MINUTES", "75")) * 60, memory=49152)
+def pf_full_job(*extra: str) -> dict:
+    import time
+
+    t0 = time.time()
+    out = _plan_fix(f"{RESULTS}/pf-trained", *extra)
+    out["wall_s"] = time.time() - t0
+    return {"pf-trained": out}
+
+
+@app.function(volumes={VOL: volume}, timeout=300)
+def pf_read() -> dict:
+    out = {}
+    for f in sorted(Path(RESULTS).glob("pf-*/plan_fix.json")):
+        payload = json.loads(f.read_text())
+        payload.pop("steps", None)
+        out[f.parent.name] = payload
+    return out
+
+
+def _pf_report(results: dict) -> None:
+    for name, payload in results.items():
+        _save_local(name, payload, None)
+        print(name, "verdict", payload["verdict"], "wall_s", payload.get("wall_s"), "seconds", payload["seconds"])
+        print(f" steps {payload['n_steps']} failing {payload['n_failing']} good {payload['n_good']}; test failing "
+              f"{payload['n_test_failing']} good {payload['n_test_good']} in {payload['n_test_episodes']} episodes; "
+              f"FVU {payload['sae']['final_fvu']:.4f}; token norm {payload['residual_norm']:.3f}")
+        for arm, v in payload["arms"].items():
+            f, k = v["fix"], v["kept"]
+            print(f"  {arm:18s} {v['latents']} edit {v['edit_norm']:.3f} fix {f['value']:.3f} [{f['lo']:.3f},{f['hi']:.3f}] "
+                  f"kept {k['value']:.3f} [{k['lo']:.3f},{k['hi']:.3f}]")
+
+
+@app.local_entrypoint()
+def pf_smoke() -> None:
+    _pf_report(pf_smoke_job.remote())
+
+
+@app.local_entrypoint()
+def pf_run(args: str = "") -> None:
+    pf_full_job.spawn(*args.split())
+    print("spawned plan-fix; fetch with ::pf_fetch")
+
+
+@app.local_entrypoint()
+def pf_fetch() -> None:
+    _pf_report({k: v for k, v in pf_read.remote().items() if k != "pf-smoke"})
