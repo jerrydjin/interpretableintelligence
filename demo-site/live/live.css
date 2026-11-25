@@ -73,8 +73,6 @@ body.dragging .drop-hint { display: grid; }
 .swatch.ember { background: var(--signal); }
 .swatch.cobalt { background: var(--steer); }
 .stage-key { align-items: flex-start; }
-.concepts-btn { margin-left: auto; flex: none; padding: 3px 12px; }
-.concepts-btn.on { background: var(--ink); border-color: var(--ink); color: var(--sheet); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px 14px; min-width: 0; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; border: 0; background: none;
@@ -275,3 +273,21 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 .frow.push .fname-btn .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toward .slider { margin-top: 12px; }
 .frow.push .fname-btn .muted { line-height: 1; }
+
+/* Find the switch: "Make it see ___", then before, switch on, random switch. */
+.see-label { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-family: var(--serif); font-size: var(--t-head); letter-spacing: var(--serif-track); line-height: 1.2; }
+.see-input {
+  flex: 1 1 8ch; min-width: 8ch; padding: 0 0 2px; border: 0; border-bottom: 1px solid var(--line-2); border-radius: 0;
+  background: none; font: inherit; color: var(--signal);
+}
+.see-input:focus { outline: none; border-bottom-color: var(--ink); }
+.see-input::-webkit-search-cancel-button { display: none; }
+.see-head .chips { margin: 10px 0 0; }
+.flip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 20px 0 4px; }
+.fcol { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--well); min-width: 0; }
+.fcol.after { background: var(--signal-wash); }
+.flab { font-size: var(--t-small); color: var(--ink-2); }
+.fnum { font-family: var(--serif); font-size: 34px; line-height: 1.1; letter-spacing: var(--serif-track); font-variant-numeric: tabular-nums; }
+.fcol.after .fnum { color: var(--signal); }
+.ftop { font-size: var(--t-small); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 520px) { .fcol { padding: 10px; } .fnum { font-size: 26px; } .ftop { white-space: normal; overflow-wrap: anywhere; } }

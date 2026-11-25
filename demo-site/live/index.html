@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
   <title>Playground · ii</title>
-  <meta name="description" content="Ask a vision model what it sees in your picture, then find the features inside it that make it see that, and switch them off. Runs in your browser.">
+  <meta name="description" content="Pick a picture and a word. Find the one switch inside a vision model that makes it see that word, and check it against a random switch. Runs in your browser.">
   <link rel="preload" href="../static/fonts/geist-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="../static/fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="../static/site.css">
@@ -24,8 +24,8 @@
 
   <main>
     <section class="intro">
-      <h1>What does it see?</h1>
-      <p class="lede">CLIP, a model that matches pictures to words, running in your browser. Pick a picture and it tells you what it sees. Then find the features inside it that make it see that, and switch them off.</p>
+      <h1>Find the switch</h1>
+      <p class="lede">Pick a picture and a word. ii finds the one switch inside the model that makes it see that word, and checks it against random switches.</p>
     </section>
 
     <section class="loader" id="loader" aria-live="polite">
@@ -59,9 +59,7 @@
     </section>
 
     <section class="how" id="how">
-      <p class="fine">Runs on your device with <a href="https://onnxruntime.ai/">ONNX Runtime Web</a>; your pictures never leave it. Model <a href="https://huggingface.co/openai/clip-vit-base-patch16">openai/clip-vit-base-patch16</a> (MIT), read at block <span id="layer">8</span> of 12 through a dictionary of <span id="n-features">6,144</span> features trained on <span id="n-train">photos and robot video</span>. The words are a list of <span id="n-words">everyday things</span>; the model scores each as "a photo of a …". "Why it sees" ranks features by a first-order estimate (activation times gradient), leaving out a few always-on features that move any word; switching them off is the real test, and the random line beside it is the control. "Concepts" groups the features on the picture into regions (non-negative matrix factorisation of where they fire) and names each by the word it sees most in that region alone, more than in the others. This is exploration, not a verified finding.</p>
-      <p class="fine">Prefer to browse every feature? The <a href="features.html">feature playground</a> runs DINOv2 on robot video.</p>
-      <p class="fine perf" id="perf"></p>
+      <p class="fine">The model is <a href="https://huggingface.co/openai/clip-vit-base-patch16">CLIP</a>, running on your device; your pictures never leave it. A switch is one of its <span id="n-features">6,144</span> features, written onto every part of the picture. Exploration, not a verified finding.</p>
     </section>
   </main>
 

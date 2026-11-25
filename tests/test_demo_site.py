@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from html import escape
 import re
 from html.parser import HTMLParser
 from pathlib import Path
@@ -121,20 +122,27 @@ def test_cut_pages_forward_to_where_they_went():
         assert sorted(p.name for p in (ROOT / old).iterdir()) == ["index.html"], old
 
 
-def test_home_leads_with_the_playground():
+def test_home_leads_with_the_switch():
     page = (ROOT / "index.html").read_text(encoding="utf-8")
     text = _text(page)
     assert 'href="/live/" data-testid="cta"' in page
-    assert 'href="/start/"' in page and 'href="/explore/"' in page
-    assert 'href="/blog/groot-1028/" data-testid="post-link"' in page
-    assert "what it sees" in text
-    from interpretableintelligence.export_site import HERO_PACK, HERO_SAMPLE
+    assert 'href="/start/"' in page and 'href="/explore/"' in page and 'href="/blog/"' in page  # in the nav
+    from interpretableintelligence.export_site import HERO_PACK, HERO_SAMPLE, _pct
 
-    # The picture is one of the playground pack's own samples, and it opens there.
-    samples = json.loads((ROOT / "live" / "packs" / HERO_PACK / "pack.json").read_text(encoding="utf-8"))["samples"]
+    # The picture is one of the playground pack's own samples, and its numbers are the playground's
+    # own baked opening move on it (instant.json): the switch moves the word, a random one does not.
+    pack_dir = ROOT / "live" / "packs" / HERO_PACK
+    samples = json.loads((pack_dir / "pack.json").read_text(encoding="utf-8"))["samples"]
     assert HERO_SAMPLE in {s["clip_id"] for s in samples}
-    assert f'href="/live/#p={HERO_SAMPLE}" data-testid="hero-picture"' in page
-    for gone in ("/droid/", "/results/", "/demos/", "/fake/", "/picker/", "Synthetic"):
+    assert 'href="/live/" data-testid="hero-picture"' in page
+    flip = json.loads((pack_dir / "instant.json").read_text(encoding="utf-8"))["samples"][HERO_SAMPLE]["flip"]
+    word = json.loads((pack_dir / "vocab.json").read_text(encoding="utf-8"))[flip["word"]]
+    w = str(flip["word"])
+    assert f"How much it sees “{word}”" in text
+    for value in (flip["prob"][w], flip["boost"][w], flip["control"]["prob"][w]):
+        assert escape(_pct(value)) in text
+    assert flip["boost"][w] > 2 * flip["control"]["prob"][w]
+    for gone in ("/droid/", "/results/", "/demos/", "/fake/", "/picker/", "Synthetic", 'data-testid="doors"'):
         assert gone not in page
     assert "\u2014" not in page
     assert "mailto:" not in page and not re.search(r"[\w.+-]+@[\w.-]+\.\w+", text)
