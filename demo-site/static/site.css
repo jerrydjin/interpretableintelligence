@@ -181,10 +181,18 @@ h3 { font-size: var(--t-lead); line-height: 1.25; margin: 28px 0 8px; }
 
 /* ------------------------------------------------------------ explore */
 .id { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.8em; color: var(--ink-3); font-weight: 400; letter-spacing: 0; }
-.status { font-size: var(--t-small); color: var(--ink-3); white-space: nowrap; }
-.status-pass { color: var(--real); }
+.evidence { display: inline-flex; gap: 4px; align-items: center; }
+.dot, .mark-pass, .mark-fail, .mark-pending { width: 8px; height: 8px; border-radius: 50%; display: inline-block; box-sizing: border-box; }
+.dot-pass, .mark-pass { background: var(--real); }
+.dot-fail, .mark-fail { border: 1.5px solid var(--line-2); }
+.dot-pending, .mark-pending { border: 1.5px dashed var(--ink-3); }
+.lead { display: grid; gap: 12px; margin: 40px 0 40px; text-decoration: none; }
+.lead .moments { margin: 0; }
+.lead-name { display: flex; align-items: baseline; gap: 16px; font-size: var(--t-lead); }
+.lead-name .row-name { flex: 1; }
+.lead:hover .row-name { text-decoration: underline; }
 .rows { list-style: none; padding: 0; margin: 0 0 16px; border-top: 1px solid var(--line); }
-.rows a { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 16px; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--line); text-decoration: none; }
+.rows a { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); text-decoration: none; }
 .rows a:hover .row-name { text-decoration: underline; }
 .row-name { color: var(--ink); }
 .plain { padding-left: 20px; max-width: 68ch; }
@@ -202,8 +210,4 @@ h3 { font-size: var(--t-lead); line-height: 1.25; margin: 28px 0 8px; }
 .check { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 12px; align-items: baseline; }
 .check > span:last-child { display: flex; flex-wrap: wrap; column-gap: 10px; }
 .check > span:last-child > span { color: var(--ink-2); }
-.mark-pass, .mark-fail, .mark-pending { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-.mark-pass { background: var(--real); }
-.mark-fail { background: var(--fail); }
-.mark-pending { border: 1.5px solid var(--ink-3); }
 .stage-picture { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: var(--radius-sm); }
