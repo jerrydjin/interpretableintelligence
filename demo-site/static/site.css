@@ -171,13 +171,14 @@ h3 { font-size: var(--t-lead); line-height: 1.25; margin: 28px 0 8px; }
 /* The stage: dark ground for video and where a feature fires. */
 .stage { margin: 0; background: var(--plate); border-radius: var(--radius); padding: 10px; display: grid; gap: 10px; }
 .stage video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius-sm); background: #000; }
-.stage-feature { display: flex; align-items: center; gap: 12px; color: var(--paper); text-decoration: none; font-size: var(--t-small); padding: 0 4px 4px; }
-.stage-feature .id { color: var(--ink-3); }
 .tiles { display: flex; gap: 4px; }
 .tile { width: 44px; height: 44px; border-radius: 6px; background-repeat: no-repeat; background-color: #000; }
-.doors { list-style: none; padding: 0; margin: 56px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.doors .card { height: 100%; }
-@media (max-width: 760px) { .doors { grid-template-columns: 1fr; } }
+/* The home picture's switch: how much it sees the word before, with the switch, with a random one. */
+.hero-flip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; color: var(--paper); font-size: var(--t-small); padding: 0 4px 4px; }
+.hero-q { grid-column: 1 / -1; color: var(--ink-3); }
+.hero-col { display: flex; flex-direction: column; gap: 2px; }
+.hero-col b { font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 1.1; letter-spacing: var(--serif-track); }
+.hero-col.on b { color: var(--signal); }
 
 /* ------------------------------------------------------------ explore */
 .id { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.8em; color: var(--ink-3); font-weight: 400; letter-spacing: 0; }

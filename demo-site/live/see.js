@@ -1,25 +1,23 @@
-// ii playground, words first: what does the model see, and which features make it see that?
-// Runs a version 2 pack with the words readout (ii export-live --readout words) through
-// engine.js, in the browser. Exploration only: nothing here can change a feature's badge.
+// ii playground: find the switch. Pick a picture and a word; the page finds the feature inside
+// the model that most makes it see that word, turns it on, and shows the answer before, with the
+// switch, and with a random switch instead. Runs a version 2 pack with the words readout
+// (ii export-live --readout words) through engine.js, in the browser. Exploration only: nothing
+// here can change a feature's badge.
 
 import { Engine } from "./engine.js";
-import { conceptRegions } from "./regions.js";
 
 const PARAMS = new URLSearchParams(location.search);
 const PACK = PARAMS.get("pack") || "packs/clip-b16-words/";
 const EMBER = [232, 88, 42];
-const FIRST = "01-coco-14475"; // the picture the page opens on
+const FIRST = "06-droid-083"; // the picture the page opens on
+const TARGET = "umbrella"; // the word it opens on (packs without it use their last word)
+const SUGGEST = ["umbrella", "cat", "pizza", "snow", "guitar"]; // one tap each, where on the list
 const BAKE = PARAMS.has("bake");
 const N_WORDS = 6; // words shown
 const N_WHY = 6; // features shown for a word
 const N_ON = 3; // features offered to turn on
+const TRY = 5; // switches tried for a word, and random switches tried as the control
 const THUMB = 44; // px, the crop of the picture shown beside each feature
-// Naming concept regions (findConcepts).
-const CONCEPT_P = 0.05;
-const CONCEPT_LEAD = 1;
-const CONCEPT_WORDS = 30; // names come from the words it most sees in the whole picture
-// One colour per concept region, in the warm look (ember first).
-const HUES = [[232, 88, 42], [52, 120, 214], [46, 154, 92], [214, 162, 28], [142, 91, 208], [24, 160, 160], [214, 72, 126], [138, 106, 74]];
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
@@ -61,9 +59,6 @@ const ui = {
   push: 0.5, // how strongly, in units of each feature's training peak
   boost: null, // words with them on
   boostControl: null, // words with as many random features turned on the same way
-  concepts: null, // the picture's concept regions: {state, regions: [{word, patches}], owner}
-  showConcepts: false, // the picture shows its concept regions instead of the word's map
-  conceptHover: null, // the region pointed at
 };
 window.__ii = { ui };
 
@@ -88,7 +83,7 @@ async function boot() {
       $("work").hidden = false;
       buildThumbs();
       wireInputs();
-      if (!(await restoreFromLink())) await showSample(engine.pack.samples.find((s) => s.clip_id === FIRST) || engine.pack.samples[0]);
+      if (!(await restoreFromLink())) await showFirst();
     }
   }
   try {
@@ -127,18 +122,25 @@ async function boot() {
     $("work").hidden = false;
     buildThumbs();
     wireInputs();
-    if (!(await restoreFromLink())) await showSample(pack.samples.find((s) => s.clip_id === FIRST) || pack.samples[0]);
+    if (!(await restoreFromLink())) await showFirst();
   }
-  renderPerf();
   if (BAKE) return bake();
   encodeGallery();
 }
 
 function showMeta() {
+  $("n-features").textContent = engine.pack.sae.n_features.toLocaleString("en-GB");
+}
+
+// The word the page opens on: TARGET where the pack's list has it, else its last word.
+function targetWord() {
+  const w = engine.vocab.indexOf(TARGET);
+  return w >= 0 ? w : engine.vocab.length - 1;
+}
+
+function showFirst() {
   const pack = engine.pack;
-  $("layer").textContent = String(pack.model.layer);
-  $("n-features").textContent = pack.sae.n_features.toLocaleString("en-GB");
-  $("n-words").textContent = `${engine.vocab.length} everyday things`;
+  return showSample(pack.samples.find((s) => s.clip_id === FIRST) || pack.samples[0], { word: targetWord() });
 }
 
 // The model is ready: work out for real what the page has shown so far (the baked answer, or a
@@ -175,6 +177,7 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 // Show the baked answer for an example picture; false when there is none for this word.
 function showBaked(key, { word = null, off = [], on = [] } = {}) {
   const rec = ui.instant?.samples?.[key];
+  if (rec?.flip && word === rec.flip.word && !off.length) return showBakedFlip(rec);
   if (!rec || (word != null && word !== rec.word)) return false;
   ui.baked = rec;
   ui.state = { baked: true, seen: probs(rec.prob), maps: new Map(Object.entries(rec.maps).map(([id, [b64, peak]]) => [Number(id), unq8(b64, peak)])) };
@@ -185,6 +188,20 @@ function showBaked(key, { word = null, off = [], on = [] } = {}) {
   ui.on = new Set(on);
   bakedWhy();
   bakedOff();
+  render();
+  return true;
+}
+
+// The baked switch for the word the page opens on: before, with the switch, with a random one.
+function showBakedFlip(rec) {
+  const flip = rec.flip;
+  ui.baked = null;
+  ui.state = { baked: true, seen: probs(flip.prob), maps: new Map() };
+  Object.assign(ui, { feature: null, detail: null, why: null, result: null, control: null, word: flip.word, off: new Set(), on: new Set(flip.on), push: flip.push });
+  ui.toward = { ranked: flip.toward.map(([id, score]) => ({ id, score })) };
+  ui.tried = null;
+  ui.boost = probs(flip.boost);
+  ui.boostControl = { ids: flip.control.ids, seen: probs(flip.control.prob), of: flip.control.of };
   render();
   return true;
 }
@@ -210,7 +227,9 @@ async function bake() {
   const all = engine.pack.digests || {};
   const digests = Object.fromEntries(["front", "sae", "decoder", "words", "text", "vocab"].filter((k) => all[k]).map((k) => [k, all[k]]));
   const out = { version: 1, digests, backend: engine.backend, samples: {} };
+  const target = targetWord();
   for (const sample of engine.pack.samples) {
+    ui.word = null; // each picture's own top word first
     await showSample(sample);
     const word = ui.word;
     const list = reasons();
@@ -230,6 +249,25 @@ async function bake() {
     } else {
       rec.off = { ids: [], prob: {}, control: { ids: [], p: 0 } };
       rec.prob = Object.fromEntries([...keep].map((w) => [w, +seen.prob[w].toPrecision(5)]));
+    }
+    // The page's opening move on this picture: find the switch for the target word.
+    if (target !== word) {
+      await explain(target);
+      if (ui.boost) {
+        const keep = new Set([target]);
+        const top = (prob) => [...prob.keys()].sort((a, b) => prob[b] - prob[a]).slice(0, N_WORDS);
+        [seen.prob, ui.boost.prob, ui.boostControl.seen.prob].forEach((p) => top(p).forEach((w) => keep.add(w)));
+        const sparse = (prob) => Object.fromEntries([...keep].map((w) => [w, +prob[w].toPrecision(5)]));
+        rec.flip = {
+          word: target,
+          toward: boosters().map((r) => [r.id, +r.score.toPrecision(5)]),
+          on: [...ui.on],
+          push: ui.push,
+          prob: sparse(seen.prob),
+          boost: sparse(ui.boost.prob),
+          control: { ids: ui.boostControl.ids, of: ui.boostControl.of, prob: sparse(ui.boostControl.seen.prob) },
+        };
+      }
     }
     out.samples[sample.clip_id] = rec;
   }
@@ -262,6 +300,7 @@ function loadImage(src) {
 }
 
 async function showSample(sample, opts = {}) {
+  opts = { ...opts, word: opts.word ?? ui.word }; // a new picture keeps the word
   stopCam();
   ui.picture = { sample: sample.clip_id };
   markThumb(sample.clip_id);
@@ -296,8 +335,6 @@ async function showPicture(img, { word = null, off = [], on = [] } = {}) {
     ui.state = await engine.encode(img);
     ui.timings.read = performance.now() - t0;
   });
-  ui.concepts = null;
-  if (ui.showConcepts) findConcepts();
   ui.feature = null;
   ui.detail = null;
   if (ui.wantWord) {
@@ -311,7 +348,7 @@ async function showPicture(img, { word = null, off = [], on = [] } = {}) {
       word = null;
     }
   }
-  await explain(word ?? topWord(ui.state.seen), off, on);
+  await explain(word ?? ui.word ?? topWord(ui.state.seen), off, on);
 }
 
 async function busy(fn) {
@@ -339,7 +376,7 @@ async function explain(word, off = [], on = []) {
   ui.on = new Set(on);
   ui.result = null;
   ui.control = null;
-  ui.toward = ui.boost = ui.boostControl = null;
+  ui.toward = ui.boost = ui.boostControl = ui.tried = null;
   if (!ui.live) {
     bakedWhy();
     bakedOff();
@@ -358,12 +395,62 @@ async function explain(word, off = [], on = []) {
     if (!on.length) ui.push = ui.state.seen.prob[word] < 0.01 ? 1 : 0.5;
   }
   if (ui.off.size) await runOff();
-  if (ui.on.size && ui.toward) await runOn();
+  if (ui.toward && !on.length && !off.length) await findSwitch();
+  else if (ui.on.size && ui.toward) await runOn();
   render();
 }
 
+// The switches offered for the word: measured (findSwitch) where they were tried, else as ranked.
+// Switches that are on come first, even when ranked lower (a link, or the baked answer gone live).
 function boosters() {
-  return ui.toward ? ui.toward.ranked.filter((r) => r.score > 0).slice(0, N_ON) : [];
+  const ranked = ui.tried || (ui.toward ? ui.toward.ranked.filter((r) => r.score > 0) : []);
+  if (!ranked.length) return [];
+  const top = ranked[0].score;
+  const on = [...ui.on].map((id) => ranked.find((r) => r.id === id) || { id, score: top });
+  return [...on, ...ranked.filter((r) => !ui.on.has(r.id))].slice(0, Math.max(N_ON, on.length));
+}
+
+const pushEdits = (ids) => ids.map((id) => ({ id, kind: "add", value: ui.push * (engine.features[id].max || 0) }));
+
+// Each of `ids` turned on alone; the one that makes it see the word most, and the rest by that.
+async function tryEach(ids) {
+  const out = [];
+  for (const id of ids) {
+    const seen = await engine.see(ui.state, pushEdits([id]));
+    out.push({ id, score: seen.prob[ui.word], seen });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+// Random switches for the control: as many sets as tried switches, each the size of `n`, drawn
+// from the features ranked far down for this word.
+function randomSets(n) {
+  const pool = ui.toward.ranked.slice(200).map((r) => r.id).filter((id) => !ui.on.has(id));
+  return seeded(pool, n * TRY, hashOf(ui.picture, ui.word, "on", n)).reduce((sets, id, i) => (i % n ? sets[sets.length - 1].push(id) : sets.push([id]), sets), []);
+}
+
+// The best of the random sets: the control a picked switch has to beat.
+async function bestRandom(n) {
+  let best = null;
+  for (const ids of randomSets(n)) {
+    const seen = await engine.see(ui.state, pushEdits(ids));
+    if (!best || seen.prob[ui.word] > best.seen.prob[ui.word]) best = { ids, seen };
+  }
+  return best && { ...best, of: TRY };
+}
+
+// Find the switch: try the TRY features ranked first for the word one by one, turn on the one
+// that makes it see the word most, and set it beside the best of TRY random switches.
+async function findSwitch() {
+  const cands = ui.toward.ranked.filter((r) => r.score > 0).slice(0, TRY).map((r) => r.id);
+  if (!cands.length) return;
+  await busy(async () => {
+    ui.tried = await tryEach(cands);
+    ui.on = new Set([ui.tried[0].id]);
+    ui.boost = ui.tried[0].seen;
+    ui.boostControl = await bestRandom(1);
+  });
+  syncAddress();
 }
 
 async function toggleOn(id) {
@@ -385,12 +472,9 @@ async function runOn() {
     return syncAddress();
   }
   const ids = [...ui.on];
-  const edits = (list) => list.map((id) => ({ id, kind: "add", value: ui.push * (engine.features[id].max || 0) }));
   await busy(async () => {
-    ui.boost = await engine.see(ui.state, edits(ids));
-    const pool = ui.toward.ranked.slice(200).map((r) => r.id).filter((id) => !ui.on.has(id));
-    const picked = seeded(pool, ids.length, hashOf(ui.picture, ui.word, "on", ids.length));
-    ui.boostControl = { ids: picked, seen: await engine.see(ui.state, edits(picked)) };
+    ui.boost = await engine.see(ui.state, pushEdits(ids));
+    ui.boostControl = await bestRandom(ids.length);
   });
   syncAddress();
 }
@@ -572,159 +656,21 @@ function drawHeat() {
     return paintMap(null);
   }
   const id = ui.hover ?? ui.feature;
-  if (id == null && ui.showConcepts) return drawConcepts();
   if (id != null) {
     paintMap(engine.featureMap(ui.state, id), EMBER);
     key.replaceChildren(el("span", { class: "swatch ember" }), engine.features[id]?.name ? `Where “${engine.features[id].name}” fires` : `Where feature ${id} fires`);
-  } else if (ui.why && !faint()) {
+  } else if (ui.why && !ui.toward) {
     paintMap(ui.why.patches, EMBER);
     key.replaceChildren(el("span", { class: "swatch ember" }), `Where it finds “${engine.vocab[ui.word]}”`);
   } else {
     paintMap(null);
     key.replaceChildren();
   }
-  if (ui.live) key.append(conceptsButton());
-}
-
-function conceptsButton() {
-  return el(
-    "button",
-    {
-      class: `pill-btn small concepts-btn${ui.showConcepts ? " on" : ""}`,
-      type: "button",
-      "aria-pressed": ui.showConcepts ? "true" : "false",
-      "data-testid": "concepts",
-      onclick: () => {
-        ui.showConcepts = !ui.showConcepts;
-        ui.conceptHover = null;
-        if (ui.showConcepts && !ui.concepts) findConcepts();
-        drawHeat();
-      },
-    },
-    "Concepts",
-  );
-}
-
-// The picture split into a few concept regions, each painted in its own colour and named by
-// the word the model sees in that region alone (findConcepts).
-function drawConcepts() {
-  const key = $("stage-key");
-  const c = ui.concepts?.state === ui.state ? ui.concepts : null;
-  if (!c || !c.regions) {
-    paintRegions(null);
-    key.replaceChildren(el("span", { class: "muted" }, c ? "Finding the concepts…" : ""), conceptsButton());
-    return;
-  }
-  paintRegions(c);
-  key.replaceChildren(
-    el(
-      "span",
-      { class: "chips" },
-      c.regions.length
-        ? c.regions.map((r, n) =>
-            el(
-              "button",
-              {
-                class: `chip${r.word === ui.word ? " on" : ""}`,
-                type: "button",
-                "data-word": engine.vocab[r.word],
-                onmouseenter: () => {
-                  ui.conceptHover = n;
-                  paintRegions(c);
-                },
-                onmouseleave: () => {
-                  ui.conceptHover = null;
-                  paintRegions(c);
-                },
-                onclick: () => explain(r.word),
-              },
-              el("span", { class: "swatch", style: `background:rgb(${HUES[n % HUES.length].join(",")})` }),
-              engine.vocab[r.word],
-            ),
-          )
-        : el("span", { class: "muted" }, "No clear concepts in this picture."),
-    ),
-    conceptsButton(),
-  );
-}
-
-function paintRegions(c) {
-  const canvas = $("heat");
-  const g = sizeCanvas(canvas);
-  g.clearRect(0, 0, canvas.width, canvas.height);
-  $("stage").classList.toggle("mapping", Boolean(c));
-  if (!c) return;
-  const W = engine.gridW;
-  const H = engine.gridH;
-  const small = new ImageData(W, H);
-  for (let t = 0; t < W * H; t++) {
-    const n = c.owner[t];
-    if (n < 0) continue;
-    const faded = ui.conceptHover != null && ui.conceptHover !== n;
-    const [r, gr, b] = HUES[n % HUES.length];
-    small.data.set([r, gr, b, faded ? 40 : 170], t * 4);
-  }
-  const tmp = paintRegions._tmp || (paintRegions._tmp = document.createElement("canvas"));
-  tmp.width = W;
-  tmp.height = H;
-  tmp.getContext("2d").putImageData(small, 0, 0);
-  g.imageSmoothingEnabled = false;
-  g.drawImage(tmp, 0, 0, canvas.width, canvas.height);
-}
-
-// Group the features on this picture into concepts (regions.js), then name each by what the
-// model sees in its region alone (every other patch loses its features): the word, among those
-// it most sees in the whole picture, that this region alone gives at least CONCEPT_P and that
-// leads the other regions' mean log-probability by the most (at least CONCEPT_LEAD nats).
-// Regions without such a word stay unpainted; regions with the same word merge.
-async function findConcepts() {
-  const state = ui.state;
-  if (!state || state.baked || ui.concepts?.state === state) return;
-  ui.concepts = { state, regions: null };
-  const t0 = performance.now();
-  const { regions } = conceptRegions(state.rows, engine.features.map((f) => f.max || 0), { skip: ui.background, gridW: engine.gridW });
-  const base = state.seen;
-  // What the model sees in each region alone: every other patch loses its features.
-  const alone = [];
-  for (const r of regions) {
-    const inside = new Set(r.patches);
-    const rest = [];
-    for (let t = 0; t < engine.nTok; t++) if (!inside.has(t)) rest.push(t);
-    const seen = await busy(() => engine.clearPatches(state, rest, ui.background));
-    if (ui.state !== state) return;
-    alone.push(seen.logp);
-  }
-  const named = [];
-  const words = [...base.prob.keys()].sort((a, b) => base.prob[b] - base.prob[a]).slice(0, CONCEPT_WORDS);
-  regions.forEach((r, i) => {
-    let best = -1;
-    let bestLead = CONCEPT_LEAD;
-    for (const w of words) {
-      if (alone[i][w] < Math.log(CONCEPT_P)) continue;
-      let other = 0;
-      alone.forEach((lp, j) => j !== i && (other += lp[w] / (alone.length - 1)));
-      if (alone[i][w] - other >= bestLead) {
-        bestLead = alone[i][w] - other;
-        best = w;
-      }
-    }
-    if (best < 0) return;
-    const same = named.find((x) => x.word === best);
-    if (same) same.patches.push(...r.patches);
-    else named.push({ word: best, patches: [...r.patches] });
-  });
-  named.sort((a, b) => b.patches.length - a.patches.length);
-  const owner = new Int32Array(engine.nTok).fill(-1);
-  named.forEach((r, i) => r.patches.forEach((t) => (owner[t] = i)));
-  ui.concepts = { state, regions: named, owner };
-  ui.timings.concepts = performance.now() - t0;
-  if (ui.showConcepts) drawHeat();
 }
 
 function render() {
   drawHeat();
   renderPanel();
-  renderPerf();
   syncAddress();
 }
 
@@ -770,71 +716,137 @@ function wordList(seen, before = null, { pick = true } = {}) {
   );
 }
 
-function wordPicker() {
+// The one verb: make it see a word. Type one (any word, where the pack reads any) or tap one.
+function seeInput() {
   const list = el("datalist", { id: "vocab" }, engine.vocab.map((w) => el("option", { value: w })));
-  const input = el("input", { type: "search", placeholder: engine.readsAnyWord ? "Or type any word: cat, red cup, robot arm…" : "Or type a word: cat, cup, robot arm…", list: "vocab", autocomplete: "off", "aria-label": "Pick a word" });
-  input.addEventListener("change", async () => {
-    const typed = input.value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60);
-    if (!typed) return;
-    let w = engine.vocab.indexOf(typed);
-    if (w < 0 && engine.readsAnyWord) {
-      if (!ui.live || !ui.state?.seen?.embed) return flash("Words off the list work as soon as the model is ready.");
-      if (!engine.tokenizer) flash("Getting the part of the model that reads words. Only the first time.");
-      try {
-        w = await busy(() => engine.addWord(typed));
-      } catch (err) {
-        console.error(err);
-        return flash("That word could not be read here.");
-      }
-      // The new word joins the list: read the same picture's probabilities over the longer list.
-      ui.state.seen = engine.wordsFrom(ui.state.seen.embed);
-    }
-    if (w >= 0) explain(w);
-    else flash(`“${typed}” is not on the list of ${engine.vocab.length} words.`);
+  const input = el("input", {
+    type: "search",
+    class: "see-input",
+    value: ui.word != null ? engine.vocab[ui.word] : "",
+    placeholder: "a word",
+    list: "vocab",
+    autocomplete: "off",
+    "aria-label": "Make it see",
+    "data-testid": "see-input",
   });
-  return el("div", { class: "find" }, input, list);
+  input.addEventListener("change", () => seeWord(input.value));
+  const chips = SUGGEST.filter((w) => engine.vocab.includes(w) && engine.vocab.indexOf(w) !== ui.word).slice(0, 4);
+  return el(
+    "div",
+    { class: "see-head" },
+    el("label", { class: "see-label" }, el("span", {}, "Make it see"), input, list),
+    chips.length ? el("p", { class: "chips" }, chips.map((w) => el("button", { class: "chip", type: "button", "data-word": w, onclick: () => seeWord(w) }, w))) : null,
+  );
 }
 
-// A word it barely sees: nothing here pushes it much, so "why" would only list noise.
-const faint = () => Boolean(ui.toward && ui.state?.seen && ui.state.seen.prob[ui.word] < 0.01);
+async function seeWord(text) {
+  const typed = text.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60);
+  if (!typed) return;
+  let w = engine.vocab.indexOf(typed);
+  if (w < 0 && engine.readsAnyWord) {
+    if (!ui.live || !ui.state?.seen?.embed) return flash("Words off the list work as soon as the model is ready.");
+    if (!engine.tokenizer) flash("Getting the part of the model that reads words. Only the first time.");
+    try {
+      w = await busy(() => engine.addWord(typed));
+    } catch (err) {
+      console.error(err);
+      return flash("That word could not be read here.");
+    }
+    // The new word joins the list: read the same picture's probabilities over the longer list.
+    ui.state.seen = engine.wordsFrom(ui.state.seen.embed);
+  }
+  if (w < 0) return flash(`“${typed}” is not on the list of ${engine.vocab.length} words.`);
+  if (!ui.live && ui.picture?.sample && showBaked(ui.picture.sample, { word: w })) return;
+  explain(w);
+}
 
 function mainView() {
-  const view = mainViewAll();
-  if (faint()) {
-    const head = view.querySelector(":scope > .why-head");
-    while (head?.nextSibling) head.nextSibling.remove();
-    head?.remove();
-  }
-  return view;
-}
-
-function mainViewAll() {
   const word = engine.vocab[ui.word];
   const seen = ui.state.seen;
-  const now = ui.boost || ui.result || seen;
+  const parts = [seeInput()];
+  if (ui.toward) {
+    // A word it does not mostly see: the switch, before and after, beside a random switch.
+    parts.push(ui.boost ? flipCard(word) : wordList(seen, null, { pick: false }), switchView(word));
+  } else if (ui.why && ui.word === topWord(seen)) {
+    parts.push(...whyView(word));
+  } else {
+    parts.push(wordList(seen, null, { pick: false }), el("p", { class: "muted" }, "It works this out as soon as the model is ready."));
+  }
+  return el("div", { class: "view" }, parts);
+}
+
+// Before, with the switch on, and with a random switch on instead: how much it sees the word,
+// and the word it sees most.
+function flipCard(word) {
+  const w = ui.word;
+  const n = ui.on.size;
+  const control = ui.boostControl;
+  const col = (label, seen, kind) => {
+    const top = topWord(seen);
+    return el(
+      "div",
+      { class: `fcol ${kind}`, "data-testid": `flip-${kind}` },
+      el("span", { class: "flab" }, label),
+      el("span", { class: "fnum" }, pct(seen.prob[w])),
+      el("span", { class: "ftop" }, `sees “${engine.vocab[top]}”`),
+    );
+  };
+  return el(
+    "div",
+    { class: "flip", "data-testid": "boost" },
+    col("Before", ui.state.seen, "before"),
+    col(n === 1 ? "Switch on" : `${n} switches on`, ui.boost, "after"),
+    control?.ids.length ? col(`Best of ${control.of} random`, control.seen, "control") : null,
+  );
+}
+
+// The switches that most make it see the word (the first is on) and how hard they push.
+function switchView(word) {
+  const list = boosters();
+  if (!list.length) return el("p", { class: "muted" }, `Nothing inside it pushes it towards “${word}” on this picture. Try another word.`);
+  const total = list.reduce((a, r) => a + r.score, 0) || 1;
+  return el(
+    "div",
+    { class: "toward", "data-testid": "toward" },
+    el(
+      "div",
+      { class: "flist" },
+      list.map((r) => {
+        const on = ui.on.has(r.id);
+        return el(
+          "div",
+          { class: `frow push${on ? " on" : ""}`, "data-feature": r.id },
+          el(
+            "button",
+            { class: "switch", type: "button", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": `${fname(r.id)} ${on ? "on" : "off"}`, onclick: () => toggleOn(r.id) },
+            el("span", {}),
+          ),
+          el("button", { class: "fname-btn", type: "button", onclick: () => openFeature(r.id) }, el("span", { class: engine.features[r.id]?.name ? "fname" : "fname unnamed" }, engine.features[r.id]?.name || String(r.id))),
+          el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / total) * 100))}%` })),
+        );
+      }),
+    ),
+    slider("Strength", 0.25, 2, 0.25, ui.push, (v) => `× ${v}`, (v) => (ui.push = v), async () => {
+      if (ui.on.size) {
+        await runOn();
+        render();
+      }
+    }),
+    el("p", { class: "row-actions" }, el("button", { class: "pill-btn", type: "button", onclick: copyLink }, "Copy a link to this")),
+  );
+}
+
+// A word it already sees most: the features that make it see that, to switch off.
+function whyView(word) {
+  const seen = ui.state.seen;
   const list = reasons();
   const total = list.reduce((a, r) => a + r.score, 0) || 1;
   const allOff = list.length && list.every((r) => ui.off.has(r.id));
   const waiting = !ui.live && ui.off.size && !ui.result;
-  return el(
-    "div",
-    { class: "view" },
-    el("h2", {}, ui.result || ui.boost ? "Now it sees" : "It sees"),
+  return [
+    el("p", { class: "muted" }, list.length ? `It already sees “${word}”. These features make it see that. Switch them off to check.` : `It already sees “${word}”, and nothing on this picture stands out as the reason.`),
     resultCard(word),
-    boostCard(word),
-    wordList(now, ui.result || ui.boost ? seen : null),
-    wordPicker(),
-    towardView(word),
-    el("h2", { class: "why-head" }, `Why it sees “${word}”`),
-    !ui.why
-      ? el("p", { class: "muted" }, "It works this out as soon as the model is ready.")
-      : list.length
-      ? el(
-          "p",
-          { class: "muted" },
-          `These features push it towards “${word}” the most. Switch them off and watch the words.`,
-        )
-      : el("p", { class: "muted" }, `Nothing on this picture pushes it towards “${word}”. Try another word or picture.`),
+    wordList(ui.result || seen, ui.result ? seen : null, { pick: false }),
     el(
       "div",
       { class: "flist" },
@@ -878,69 +890,7 @@ function mainViewAll() {
         )
       : null,
     waiting ? el("p", { class: "muted small" }, "Switching them off as soon as the model is ready.") : null,
-  );
-}
-
-// Features that would make it see the word if they were there: turn one on and watch.
-function towardView(word) {
-  const list = boosters();
-  if (!list.length) return null;
-  const total = list.reduce((a, r) => a + r.score, 0) || 1;
-  return el(
-    "div",
-    { class: "toward", "data-testid": "toward" },
-    el("h2", { class: "why-head" }, `Make it see “${word}”`),
-    el("p", { class: "muted" }, `These features would push it towards “${word}” the most. Turn one on: it is written onto every patch, at this many times its usual peak.`),
-    el(
-      "div",
-      { class: "flist" },
-      list.map((r) => {
-        const on = ui.on.has(r.id);
-        const f = engine.features[r.id];
-        const sees = (f.sees || []).filter((x) => x.rise >= 0.05 && x.top_on * 2 > x.of).map((x) => x.word);
-        return el(
-          "div",
-          { class: `frow push${on ? " on" : ""}`, "data-feature": r.id },
-          el(
-            "button",
-            { class: "switch", type: "button", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": `Feature ${r.id} ${on ? "on" : "off"}`, onclick: () => toggleOn(r.id) },
-            el("span", {}),
-          ),
-          el(
-            "button",
-            { class: "fname-btn", type: "button", onclick: () => openFeature(r.id) },
-            el("span", { class: "fname" }, f.name || String(r.id)),
-            sees.length && !f.name ? el("span", { class: "muted small" }, ` ${sees.slice(0, 2).join(", ")}`) : null,
-          ),
-          el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / total) * 100))}%` })),
-        );
-      }),
-    ),
-    slider("Strength", 0.25, 2, 0.25, ui.push, (v) => `× ${v}`, (v) => (ui.push = v), async () => {
-      if (ui.on.size) {
-        await runOn();
-        render();
-      }
-    }),
-  );
-}
-
-function boostCard(word) {
-  if (!ui.boost) return null;
-  const w = ui.word;
-  const n = ui.on.size;
-  const control = ui.boostControl;
-  return el(
-    "div",
-    { class: "result", "data-testid": "boost" },
-    el("p", { class: "lead-num" }, `“${word}”: ${pct(ui.state.seen.prob[w])} → ${pct(ui.boost.prob[w])}`),
-    el(
-      "p",
-      { class: "muted small" },
-      `With ${n} feature${n === 1 ? "" : "s"} turned on. `,
-      control?.ids.length ? `Turning on ${control.ids.length} random feature${control.ids.length === 1 ? "" : "s"} the same way instead leaves it at ${pct(control.seen.prob[w])}.` : "",
-    ),
-  );
+  ];
 }
 
 function resultCard(word) {
@@ -1014,7 +964,7 @@ function featureView() {
           render();
         },
       },
-      `← Why it sees “${engine.vocab[ui.word]}”`,
+      "← Back",
     ),
     el("h2", { class: "ftitle" }, fname(id)),
     el(
@@ -1034,7 +984,7 @@ function featureView() {
     control,
     ui.detail ? wordList(ui.detail, ui.state.seen, { pick: false }) : el("p", { class: "muted" }, "Running the model…"),
     el("h3", {}, "Where else it fires"),
-    el("div", { class: "gallery", id: "gallery" }, galleryFor(id)),
+    el("div", { class: "gallery", id: "gallery", "data-feature": id }, galleryFor(id)),
   );
 }
 
@@ -1067,7 +1017,7 @@ async function encodeGallery() {
     const state = await engine.encode(img, { readout: false });
     ui.gallery.push({ sample, img, rows: state.rows, peaks: state.peaks });
     const box = $("gallery");
-    if (box && ui.feature != null) box.replaceChildren(...[galleryFor(ui.feature)].flat());
+    if (box) box.replaceChildren(...[galleryFor(Number(box.dataset.feature))].flat());
   }
 }
 
@@ -1216,7 +1166,7 @@ async function copyLink() {
   const url = `${location.origin}${location.pathname}${location.search}#${linkParams({ withPicture: true })}`;
   try {
     await navigator.clipboard.writeText(url);
-    flash("Link copied. It opens this picture with the same features off.");
+    flash("Link copied. It opens this picture with the same switches.");
   } catch {
     window.prompt("Copy this link:", url);
   }
@@ -1248,17 +1198,7 @@ async function restoreFromLink() {
   return true;
 }
 
-// ------------------------------------------------------------------ footer
-
-function renderPerf() {
-  if (!ui.live) return;
-  const t = ui.timings;
-  const parts = [engine.backend === "webgpu" ? "Running on WebGPU" : `Running on WebAssembly (${self.crossOriginIsolated ? "multi-threaded" : "one thread"})`, `ready in ${fmtMs(engine.timings.ready)}`];
-  if (t.read != null) parts.push(`reading a picture ${fmtMs(t.read)}`);
-  if (t.why != null) parts.push(`finding why ${fmtMs(t.why)}`);
-  if (t.edit != null) parts.push(`one edit ${fmtMs(t.edit)}`);
-  $("perf").textContent = parts.join(" · ") + ".";
-}
+// ------------------------------------------------------------------ messages
 
 function flash(message) {
   const box = el("div", { class: "toast", role: "status" }, message);

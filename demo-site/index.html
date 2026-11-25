@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
   <title>interpretable intelligence</title>
-  <meta name="description" content="Ask a vision model what it sees, then find the features that make it see that and switch them off.">
+  <meta name="description" content="Find the switch inside a vision model that makes it see a word, and check it against a random switch.">
   <link rel="stylesheet" href="/static/site.css">
   <link rel="icon" href="/favicon.ico">
 </head>
@@ -17,26 +17,14 @@
   <main class="prose prose-wide">
     <section class="hero hero-split">
       <div>
-        <h1>Ask a vision model what it sees, then find out why.</h1>
-        <p class="lede">Pick a picture and the model says what it sees, in words. ii shows you the features inside it that make it see that, and lets you switch them off to check.</p>
-        <p class="actions"><a class="button" href="/live/" data-testid="cta">Open the playground</a><a class="button button-quiet" href="/start/">Run it on your model</a></p>
+        <h1>Find the switch inside a model.</h1>
+        <p class="lede">One of 6,144 switches inside a vision model makes it see “umbrella” in a robot's workspace. Random switches do not. Try it on your own picture and word.</p>
+        <p class="actions"><a class="button" href="/live/" data-testid="cta">Find a switch</a></p>
       </div>
       <figure class="stage">
-        <a href="/live/#p=01-coco-14475" data-testid="hero-picture"><img src="/live/packs/clip-b16-words/samples/01-coco-14475.jpg" alt="A picture from the playground" class="stage-picture"></a>
-        <a class="stage-feature" href="/live/#p=01-coco-14475"><span>What does it see? Open this picture in the playground</span></a>
+        <a href="/live/" data-testid="hero-picture"><img src="/live/packs/clip-b16-words/samples/06-droid-083.jpg" alt="A robot arm at a table, from the playground" class="stage-picture"></a>
+        <figcaption class="hero-flip" data-testid="hero-flip"><span class="hero-q">How much it sees “umbrella”</span><span class="hero-col"><span>Before</span><b>&lt;0.1%</b></span><span class="hero-col on"><span>Switch on</span><b>99%</b></span><span class="hero-col"><span>Best of 5 random</span><b>&lt;0.1%</b></span></figcaption>
       </figure>
-    </section>
-    <ul class="doors" data-testid="doors">
-      <li><a class="card" href="/live/"><span class="card-title">Playground</span><span class="card-text">Your own pictures, in your browser. See what the model sees, which features make it see that, and switch them off.</span></a></li>
-      <li><a class="card" href="/start/"><span class="card-title">Your model</span><span class="card-text">The same tools on any Hugging Face vision or video model, on your laptop.</span></a></li>
-      <li><a class="card" href="/explore/"><span class="card-title">V-JEPA 2</span><span class="card-text">A robot's world model: its scored features, with where each fires and which checks it passed.</span></a></li>
-    </ul>
-    <section>
-      <h2>Research</h2>
-      <a class="card" href="/blog/groot-1028/" data-testid="post-link">
-        <span class="card-title">A feature tracked our robot&#x27;s failures. The control said it wasn&#x27;t the cause.</span>
-        <span class="card-text">Switching off feature 720 in NVIDIA&#x27;s GR00T dropped success from 39/75 to 1/9. Random features did that too. How ii kept us from calling it a finding.</span>
-      </a>
     </section>
     </main>
   <footer class="foot prose-wide"><p>ii is free, local and open on <a href="https://github.com/jerrydjin/interpretableintelligence">GitHub</a>.</p></footer>
