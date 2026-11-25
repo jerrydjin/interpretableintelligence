@@ -19,17 +19,18 @@ Episodes are split in two halves (``gripper_trace.fold_of``).
    ``--layer``, under the real action. Each latent's mean frame-token activation is compared between
    failing and good steps, within bins of real step size (``N_BINS`` quantile bins, so "the arm moved
    less" is not what gets picked). The ``N_PICK`` latents with the largest difference over its spread
-   are the suspects; their edit ``delta`` is the good-minus-failing difference.
-2. **Half B** (episodes the SAE and the picking never saw). On failing steps the edit adds
-   ``decode(delta)`` to every frame token at ``--layer`` in all 29 menu runs, and the planner picks
-   again. A **fix** is a new pick with ``cos >= GOOD_COS``. On good steps the same edit checks for
+   are the suspects.
+2. **Half B** (episodes the SAE and the picking never saw). On failing steps each suspect is moved
+   toward the good steps on every frame token at ``--layer``, in all 29 menu runs: one higher on
+   failing steps is switched off (set to 0), one higher on good steps is switched on at its typical
+   good-step firing level. The change goes back through the decoder, keeping the SAE's error. The
+   planner then picks again. A **fix** is a new pick with ``cos >= GOOD_COS``. On good steps the same edit checks for
    damage (``kept``: the pick stays good).
 
 Controls, through the same edit:
 
 * ``--random-sets`` sets of ``N_PICK`` random live latents of the trained SAE, each matched to a suspect
-  on firing rate (within a factor of 2), with their own good-minus-failing difference, scaled so the
-  total raw-unit edit has the suspects' size;
+  on firing rate (within a factor of 2), switched off or on by the same rule;
 * ``--random-saes`` untrained SAEs (research rule 4's untrained dictionary: the trainer's own init,
   the same normalisation, a threshold for the same ``k``), picked and edited by the same rule.
 
@@ -69,48 +70,71 @@ MAX_ROWS = 200_000
 N_BOOT = 2000
 
 
+class Clamp:
+    """A per-token SAE edit at the hooked layer: ``ablate`` latents set to 0 on every frame token, ``boost`` latents
+    set to a fixed value on every frame token (the change goes back through the decoder; the SAE's error is kept)."""
+
+    def __init__(self, weights: dict, ablate: list[int], boost: dict[int, float]) -> None:
+        self.w = weights
+        self.ablate = [int(j) for j in ablate]
+        self.boost = {int(j): float(v) for j, v in boost.items()}
+        self.norms: list[float] = []
+
+    @property
+    def latents(self) -> list[int]:
+        return self.ablate + list(self.boost)
+
+    def __call__(self, h: torch.Tensor) -> torch.Tensor:
+        """Raw-unit change ``[B, P, D]`` for frame tokens ``h [B, P, D]``."""
+        f = encode(self.w, h.float())
+        df = torch.zeros_like(f)
+        if self.ablate:
+            df[..., self.ablate] = -f[..., self.ablate]
+        for j, v in self.boost.items():
+            df[..., j] = v - f[..., j]
+        d = decode_delta(self.w, df)
+        self.norms.append(float(d.norm(dim=-1).mean()))
+        return d
+
+
 def _menu_costs(model: ACWorldModel, z: torch.Tensor, state: np.ndarray, cand: np.ndarray, goal: torch.Tensor, layer: int,
-                edits: list[torch.Tensor | None], grab: list | None = None) -> np.ndarray:
+                edits: list[Clamp | None], grab: list | None = None) -> np.ndarray:
     """Goal score (mean L1) of every menu action, once per edit: ``[len(edits), len(cand)]``.
 
-    Each edit is a raw-unit ``[D]`` vector added to every frame token at ``layer`` (``None``: no edit).
-    With ``grab``, the unedited real-action frame tokens at ``layer`` are appended to it (first edit must be ``None``)."""
+    Each edit changes the frame tokens at ``layer`` in all menu runs (``None``: no edit). With ``grab``, the
+    unedited real-action frame tokens at ``layer`` are appended to it (on the first ``None`` edit)."""
     n = len(cand)
-    rows = len(edits) * n
     p = model.tokens_per_frame
     dev = model.device
-    real = [e for e in edits if e is not None]
-    per_row = None
-    if real:
-        vec = torch.stack([torch.zeros_like(real[0]) if e is None else e for e in edits])
-        per_row = vec.repeat_interleave(n, dim=0)  # [rows, D]
-    costs = np.zeros(rows, dtype=np.float64)
     batch = max(1, model.predict_batch)
-    sd_all = torch.from_numpy(np.repeat(np.asarray(state, np.float32)[None], rows, axis=0))
-    ad_all = torch.from_numpy(np.tile(np.asarray(cand, np.float32), (len(edits), 1)))
-    for i in range(0, rows, batch):
-        sl = slice(i, min(rows, i + batch))
-        m = sl.stop - sl.start
+    out = np.zeros((len(edits), n), dtype=np.float64)
+    zg = goal.to(dev).unsqueeze(0)
+    for e_i, edit in enumerate(edits):
+        for i in range(0, n, batch):
+            sl = slice(i, min(n, i + batch))
+            m = sl.stop - sl.start
 
-        def fn(x, sl=sl):
-            if grab is not None and sl.start <= REAL < sl.stop:
-                grab.append(x[REAL - sl.start, COND:].detach().float().cpu())
-            if per_row is None:
+            def fn(x, sl=sl, edit=edit):
+                if grab is not None and edit is None and not grab and sl.start <= REAL < sl.stop:
+                    grab.append(x[REAL - sl.start, COND:].detach().float().cpu())
+                if edit is None:
+                    return x
+                x = x.clone()
+                x[:, COND:] = x[:, COND:] + edit(x[:, COND:]).to(x.dtype)
                 return x
-            x = x.clone()
-            x[:, COND:] = x[:, COND:] + per_row[sl].to(x.device, x.dtype).unsqueeze(1)
-            return x
 
-        handle = _hook(model, layer, fn)
-        try:
-            zd = z.unsqueeze(0).expand(m, -1, -1).to(dev)
-            with torch.inference_mode(), model._autocast():
-                y = model.predictor(zd, ad_all[sl].to(dev).unsqueeze(1), sd_all[sl].to(dev).unsqueeze(1))[:, -p:]
-            y = F.layer_norm(y.float(), (y.shape[-1],))
-            costs[sl] = (y - goal.to(dev).unsqueeze(0)).abs().mean((-1, -2)).double().cpu().numpy()
-        finally:
-            handle.remove()
-    return costs.reshape(len(edits), n)
+            handle = _hook(model, layer, fn)
+            try:
+                zd = z.unsqueeze(0).expand(m, -1, -1).to(dev)
+                ad = torch.from_numpy(np.asarray(cand[sl], np.float32)).to(dev).unsqueeze(1)
+                sd = torch.from_numpy(np.repeat(np.asarray(state, np.float32)[None], m, axis=0)).to(dev).unsqueeze(1)
+                with torch.inference_mode(), model._autocast():
+                    y = model.predictor(zd, ad, sd)[:, -p:]
+                y = F.layer_norm(y.float(), (y.shape[-1],))
+                out[e_i, sl] = (y - zg).abs().mean((-1, -2)).double().cpu().numpy()
+            finally:
+                handle.remove()
+    return out
 
 
 def _pick_cos(costs: np.ndarray, cand: np.ndarray) -> list[float]:
@@ -179,15 +203,12 @@ def matched_random(fire: np.ndarray, picked: list[int], n_sets: int, rng: np.ran
     return sets
 
 
-def edit_vector(w: dict, latents: list[int], delta: np.ndarray, size: float | None = None) -> torch.Tensor:
-    """Raw-unit ``[D]`` edit for moving ``latents`` by ``delta``; rescaled to norm ``size`` when given."""
-    df = torch.zeros(w["W_dec"].shape[0], dtype=torch.float32)
-    if latents:
-        df[latents] = torch.as_tensor(delta[latents], dtype=torch.float32)
-    v = decode_delta({k: t.float().cpu() for k, t in w.items()}, df)
-    if size is not None and float(v.norm()) > 0:
-        v = v * (size / float(v.norm()))
-    return v
+def clamp_for(w: dict, latents: list[int], delta: np.ndarray, on_level: np.ndarray) -> Clamp:
+    """Move ``latents`` toward the good steps: a latent higher on failing steps (``delta < 0``) is switched off, one
+    higher on good steps is switched on at its typical good-step firing level ``on_level``."""
+    ablate = [j for j in latents if delta[j] < 0]
+    boost = {j: float(on_level[j]) for j in latents if delta[j] >= 0}
+    return Clamp(w, ablate, boost)
 
 
 def verdict(arms: dict, kept: dict) -> str:
@@ -274,32 +295,38 @@ def run_plan_fix(model: ACWorldModel, trajectories: list[Trajectory], out_dir: P
                          f"(half A: {len(sel)} labelled, half B: {len(test_fail)} failing)")
     labels = np.array([1 if s["label"] == "good" else 0 for s in sel])
     bins = bins_of(np.array([s["step_m"] for s in sel]))
-    arms_def: dict[str, tuple[dict, list[int], np.ndarray, float | None]] = {}
+    edits: dict[str, Clamp | None] = {}
     suspects_info = {}
     for name, w in dicts.items():
-        feats = np.stack([encode(w, s["h"].to(device).float()).mean(0).cpu().numpy() for s in sel])
+        feats, on_sum, on_cnt = [], np.zeros(n_latents), np.zeros(n_latents)
+        for s, lab in zip(sel, labels):
+            f = encode(w, s["h"].to(device).float())
+            feats.append(f.mean(0).cpu().numpy())
+            if lab == 1:
+                on_sum += f.sum(0).cpu().numpy()
+                on_cnt += (f > 0).sum(0).cpu().numpy()
+        feats = np.stack(feats)
+        on_level = on_sum / np.maximum(on_cnt, 1)
         fire = (feats > 0).mean(0)
         delta, score = stratified_diff(feats, labels, bins)
         chosen = pick(score, fire)
         if name == "trained":
-            arms_def["suspects"] = (w, chosen, delta, None)
-            size = float(edit_vector(w, chosen, delta).norm())
+            edits["suspects"] = clamp_for(w, chosen, delta, on_level)
             for j, rset in enumerate(matched_random(fire, chosen, random_sets, rng)):
-                arms_def[f"random-set:{j}"] = (w, rset, delta, size)
+                edits[f"random-set:{j}"] = clamp_for(w, rset, delta, on_level)
             for lat in chosen:
                 order = np.argsort(-feats[:, lat])
                 suspects_info[str(lat)] = {
+                    "edit": "off" if delta[lat] < 0 else f"on at {on_level[lat]:.3f}",
                     "score": float(score[lat]), "delta": float(delta[lat]), "fire": float(fire[lat]),
                     "mean_failing": float(feats[labels == 0, lat].mean()), "mean_good": float(feats[labels == 1, lat].mean()),
                     "top_steps": [{"clip_id": sel[o]["clip_id"], "t": sel[o]["t"], "label": sel[o]["label"]} for o in order[:8]],
                 }
         else:
-            arms_def[name] = (w, chosen, delta, None)
-    edits = {name: edit_vector(w, lat, delta, size) for name, (w, lat, delta, size) in arms_def.items()}
-    # Sanity arm: the same runs with a zero edit must reproduce pass 1's picks.
-    arms_def["no-edit"] = (dicts["trained"], [], np.zeros(n_latents), None)
-    edits["no-edit"] = torch.zeros_like(edits["suspects"])
-    say(f"     suspects {arms_def['suspects'][1]}; edit size {float(edits['suspects'].norm()):.3f} (token norm {resid_norm:.3f})")
+            edits[name] = clamp_for(w, chosen, delta, on_level)
+    # Sanity arm: no edit must reproduce pass 1's picks.
+    edits["no-edit"] = None
+    say(f"     suspects {edits['suspects'].latents} (off {edits['suspects'].ablate}, on {list(edits['suspects'].boost)})")
 
     clock["sae"] = time.time()
     # Half B: edit every arm in all menu runs, on failing steps (fix) and good steps (damage).
@@ -328,8 +355,10 @@ def run_plan_fix(model: ACWorldModel, trajectories: list[Trajectory], out_dir: P
 
     arms = {}
     for n in names:
-        w, lat, delta, _size = arms_def[n]
-        arms[n] = {"latents": lat, "edit_norm": float(edits[n].norm()),
+        e = edits[n]
+        arms[n] = {"latents": [] if e is None else e.latents, "off": [] if e is None else e.ablate,
+                   "on": {} if e is None else {str(j): v for j, v in e.boost.items()},
+                   "edit_norm": 0.0 if e is None or not e.norms else float(np.mean(e.norms)),
                    "fix": _boot(fail_recs, frac(f"good/{n}"), n_boot=n_boot, seed=seed),
                    "kept": _boot(good_recs, frac(f"good/{n}"), n_boot=n_boot, seed=seed)}
     kept = arms["suspects"]["kept"] if good_recs else {"value": float("nan"), "lo": float("nan"), "hi": float("nan")}
