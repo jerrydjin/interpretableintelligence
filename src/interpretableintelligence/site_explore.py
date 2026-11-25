@@ -117,37 +117,48 @@ def feature_href(feature_id: int) -> str:
     return f"/explore/{RUN_SLUG}/{feature_id}/"
 
 
-def _status(feature: dict) -> str:
-    if feature["real"]:
-        return '<span class="status status-pass">Verified</span>'
-    return f'<span class="status">{feature["passed"]} of 4 checks</span>'
+def evidence(feature: dict) -> str:
+    """One dot per check: filled when it holds, hollow when it does not, dashed while unsettled."""
+    dots = "".join(f'<span class="dot dot-{state}"></span>' for _, state, _ in feature["checks"])
+    return f'<span class="evidence" role="img" aria-label="Evidence: {feature["passed"]} of 4 checks">{dots}</span>'
+
+
+def lead_feature(run: dict) -> dict | None:
+    """The strongest feature about what is in the scene, not where: the one the page opens with."""
+    return next((f for f in run["features"] if f["kind"] == "content"), None)
 
 
 def index_body(run: dict) -> str:
+    lead = lead_feature(run)
+    rest = [f for f in run["features"] if f is not lead]
     rows = "".join(
         f'<li><a href="{feature_href(f["id"])}"><span class="row-name">{escape(f["name"])}</span>'
-        f'<span class="id">#{f["id"]}</span>{_status(f)}</a></li>'
-        for f in run["features"]
+        f'<span class="id">#{f["id"]}</span>{evidence(f)}</a></li>'
+        for f in rest
     )
-    verified = sum(f["real"] for f in run["features"])
     return f"""
-    <h1>V-JEPA 2 on robot video</h1>
-    <p class="lede">{len(run["features"])} features from layer {run["board"]["run"]["layer"]}, each tested against four checks. {_verified_sentence(verified)}</p>
+    <h1>Inside a robot world model</h1>
+    <p class="lede">What V-JEPA 2 picks out as it watches robot arms at work, found with a sparse autoencoder.</p>
+    {_lead(lead) if lead else ""}
     <ul class="rows" data-testid="feature-list">{rows}</ul>
     {checks_explainer()}
     {_credit(run)}
     """
 
 
-def _verified_sentence(n: int) -> str:
-    if n == 0:
-        return "None has passed all four yet."
-    return f"{n} passed all four."
+def _lead(feature: dict) -> str:
+    tiles = "".join(f'<span class="tile" style="{tile_style(feature["id"], i)}"></span>' for i in range(4))
+    return f"""
+    <a class="lead" href="{feature_href(feature["id"])}" data-testid="lead-feature">
+      <span class="moments">{tiles}</span>
+      <span class="lead-name"><span class="row-name">{escape(feature["name"])}</span> <span class="id">#{feature["id"]}</span>{evidence(feature)}</span>
+    </a>"""
 
 
 def checks_explainer() -> str:
     return """
-    <h2>The four checks</h2>
+    <h2>Evidence</h2>
+    <p>Each dot is a check a feature has to clear before it counts as verified.</p>
     <ul class="plain">
       <li><b>Fires broadly.</b> Across many clips, not one scene.</li>
       <li><b>Name holds up.</b> Still fits clips held back while it was named.</li>
@@ -159,8 +170,8 @@ def checks_explainer() -> str:
 def _credit(run: dict) -> str:
     source = run["source"]
     return (
-        f'<p class="fine">Clips from <a href="{escape(source["url"])}">DROID</a> (CC BY 4.0). '
-        f'Model <a href="https://huggingface.co/{escape(run["board"]["run"]["model"])}">{escape(run["board"]["run"]["model"])}</a>.</p>'
+        f'<p class="fine">Layer {run["board"]["run"]["layer"]} of <a href="https://huggingface.co/{escape(run["board"]["run"]["model"])}">{escape(run["board"]["run"]["model"])}</a>. '
+        f'Clips from <a href="{escape(source["url"])}">DROID</a> (CC BY 4.0).</p>'
     )
 
 
@@ -172,10 +183,10 @@ def feature_body(run: dict, feature: dict) -> str:
     )
     tiles = "".join(f'<span class="tile" style="{tile_style(feature["id"], i)}"></span>' for i in range(8))
     return f"""
-    <p class="back"><a href="/explore/">V-JEPA 2 features</a></p>
+    <p class="back"><a href="/explore/">Inside a robot world model</a></p>
     <h1>{escape(feature["name"])} <span class="id">#{feature["id"]}</span></h1>
     <div class="moments" role="img" aria-label="Where it fires most strongly, on eight robot clips">{tiles}</div>
-    <h2>{feature["passed"]} of 4 checks</h2>
+    <h2>Evidence</h2>
     <ul class="checks" data-testid="checks">{checks}</ul>
     <p>Removing it moved the prediction by {_sci(feature["effect"])} (1 &minus; cosine). Matched random features: median {_sci(feature["control_median"])}, largest {_sci(feature["control_max"])}.</p>
     """

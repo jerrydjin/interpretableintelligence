@@ -225,12 +225,17 @@ def test_explore_lists_every_scored_feature_from_the_scoreboard():
     board = _scoreboard()
     page = (ROOT / "explore" / "index.html").read_text(encoding="utf-8")
     listed = re.search(r'<ul class="rows" data-testid="feature-list">(.*?)</ul>', page, re.S).group(1)
+    lead = re.search(r'<a class="lead" href="/explore/vjepa2-vitl/L16/(\d+)/"', page)
     ids = [int(i) for i in re.findall(r'href="/explore/vjepa2-vitl/L16/(\d+)/"', listed)]
+    ids += [int(lead.group(1))] if lead else []
     assert sorted(ids) == sorted(int(f["id"]) for f in board["features"])
-    real = sum(f["real"] is True for f in board["features"])
-    assert ("None has passed all four yet." in _text(page)) == (real == 0)
     names = re.findall(r'<span class="row-name">([^<]+)</span>', listed)
-    assert len(names) == len(ids)
+    assert len(names) == len(ids) - (1 if lead else 0)
+    for row in board["features"]:
+        passed = sum(
+            [row["distinct_clips_top20"] >= 5, bool(row["label_holds_heldout"]), row["random_percentile"] >= 95, row["absent_in_random_init"] is True]
+        )
+        assert f'aria-label="Evidence: {passed} of 4 checks"' in page
     assert "\u2014" not in page
 
 
@@ -249,7 +254,6 @@ def test_feature_pages_read_their_checks_from_the_scoreboard():
             "pending" if row["absent_in_random_init"] is None else ("pass" if row["absent_in_random_init"] else "fail"),
         ]
         assert states == expected, row["id"]
-        assert f"{expected.count('pass')} of 4 checks" in text
         assert f"{row['distinct_clips_top20']} of its top 20 moments" in text
         assert f"of {row['n_random']} matched random features" in text
         assert f"#{row['id']}" in text
