@@ -747,3 +747,57 @@ def test_pair_tubelet_feeds_the_previous_frame():
 
     z, _ = encode_with_trace(model, frames, [], {})
     assert np.allclose(z.numpy(), pair.numpy(), atol=1e-5)
+
+
+# ----------------------------------------------------------------------------- plan-fix
+
+
+def test_plan_fix_stratified_diff_ignores_step_size():
+    from interpretableintelligence.worldmodel import plan_fix as pf
+
+    rng = np.random.default_rng(0)
+    steps = np.repeat([0.01, 0.05], 40)
+    labels = np.tile([0, 1], 40)
+    feats = np.zeros((80, 3))
+    feats[:, 0] = steps * 100  # tracks step size only
+    feats[:, 1] = labels * 2.0  # tracks the label
+    feats[:, 2] = rng.normal(size=80)
+    # Failing steps mostly small: a plain mean difference would credit latent 0.
+    labels[:40] = 0
+    labels[40:] = 1
+    labels[:10] = 1
+    labels[40:50] = 0
+    feats[:, 1] = labels * 2.0
+    delta, score = pf.stratified_diff(feats, labels, pf.bins_of(steps, 2))
+    assert abs(delta[0]) < 1e-9 and delta[1] == pytest.approx(2.0)
+    assert pf.pick(score, np.ones(3), n=1) == [1]
+
+
+def test_plan_fix_verdict_and_labels():
+    from interpretableintelligence.worldmodel import plan_fix as pf
+
+    def arm(v, lo, hi):
+        return {"fix": {"value": v, "lo": lo, "hi": hi}}
+
+    arms = {"suspects": arm(0.3, 0.2, 0.4), "random-set:0": arm(0.05, 0.0, 0.1), "untrained:1000": arm(0.1, 0.0, 0.2)}
+    assert pf.verdict(arms, {"value": 0.95}) == "yes"
+    assert pf.verdict(arms, {"value": 0.5}) == "no"
+    arms["random-set:1"] = arm(0.1, 0.05, 0.25)
+    assert pf.verdict(arms, {"value": 0.95}) == "no"
+    assert pf.label(0.0) == "failing" and pf.label(0.8) == "good" and pf.label(0.5) is None
+
+
+def test_cli_plan_fix_tiny(tmp_path):
+    clips = _clips_with_states(tmp_path, n=8)
+    out = tmp_path / "pf"
+    args = ["plan-fix", "--clips", str(clips), "--out", str(out), "--tiny", "--layer", "2", "--latents", "32", "--k", "4",
+            "--steps", "50", "--random-sets", "2", "--random-saes", "2", "--max-fail", "6", "--max-good", "4", "--bootstrap", "20"]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    data = json.loads((out / "plan_fix.json").read_text())
+    assert data["schema"] == "plan-fix/v1" and data["layer"] == 2
+    assert set(data["arms"]) == {"suspects", "random-set:0", "random-set:1", "untrained:1000", "untrained:1001", "no-edit"}
+    assert data["verdict"] in {"yes", "no", "insufficient_data"}
+    # The zero edit reproduces the unedited picks: no failing step gets fixed by it.
+    assert data["arms"]["no-edit"]["fix"]["value"] == 0.0
+    assert (out / "sae" / "weights.safetensors").is_file()

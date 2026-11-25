@@ -1454,6 +1454,65 @@ def gripper_sae_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("plan-fix")
+def plan_fix_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for plan_fix.json and the SAE.")],
+    layer: Annotated[int, typer.Option("--layer", min=0, help="Predictor layer (0 = input, i = block i's output).")] = 12,
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
+    tiny: Annotated[bool, typer.Option("--tiny", help="Random CPU stand-in (tests).")] = False,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    n_latents: Annotated[int, typer.Option("--latents", min=2, help="SAE dictionary size.")] = 4096,
+    k: Annotated[int, typer.Option("--k", min=1, help="BatchTopK k.")] = 32,
+    steps: Annotated[int, typer.Option("--steps", min=1, help="SAE training steps.")] = 3000,
+    random_sets: Annotated[int, typer.Option("--random-sets", min=1, help="Sets of matched random latents as the control.")] = 10,
+    random_saes: Annotated[int, typer.Option("--random-saes", min=1, help="Untrained SAEs as the control.")] = 5,
+    max_fail: Annotated[int, typer.Option("--max-fail", min=1, help="Held-out failing steps to edit (random sample).")] = 150,
+    max_good: Annotated[int, typer.Option("--max-good", min=1, help="Held-out good steps to check for damage.")] = 60,
+    stride: Annotated[int, typer.Option("--stride", min=1, help="Use every Nth moving step of each clip.")] = 1,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the folds, SAE, controls and bootstrap.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Can switching one failure feature fix V-JEPA 2-AC's planner, beyond random features? (Offline.)
+
+    Labels each moving DROID step failing or good by the planner's pick, picks the predictor SAE
+    latents that differ most on half the episodes, and edits them on the other half's failing steps
+    against matched random latents and untrained SAEs. The verdict rule is fixed in the code.
+    """
+    from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.plan_fix import run_plan_fix
+
+    try:
+        if tiny:
+            model = tiny_world_model(seed=seed)
+        else:
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, seed=seed)
+            model.predict_batch = 32
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_plan_fix(model, trajectories, out, layer=layer, n_latents=n_latents, k=k, steps=steps, random_sets=random_sets,
+                              random_saes=random_saes, max_fail=max_fail, max_good=max_good, stride=stride, seed=seed, n_boot=bootstrap,
+                              say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"verdict: {result['verdict']} at layer {layer}: {result['n_test_failing']} held-out failing steps, "
+               f"{result['n_test_good']} good ({result['n_test_episodes']} episodes)")
+    for name, arm in result["arms"].items():
+        f, kp = arm["fix"], arm["kept"]
+        typer.echo(f"  {name:18s} fix {f['value']:.3f} [{f['lo']:.3f}, {f['hi']:.3f}]  kept {kp['value']:.3f}  edit {arm['edit_norm']:.3f}")
+    typer.echo(f"wrote {out}")
+
+
 @app.command("export")
 def export_cmd(
     run_dir: Annotated[Path, typer.Argument(help="Run folder to export.")],
