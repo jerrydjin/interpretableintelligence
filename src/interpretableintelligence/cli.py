@@ -1237,6 +1237,13 @@ def novelty_trace_cmd(
     code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of github.com/facebookresearch/vjepa2. Not needed with --tiny.")] = None,
     checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt.")] = None,
     random_predictor: Annotated[bool, typer.Option("--random-predictor", help="Control: trained encoder, untrained predictor.")] = False,
+    random_encoder: Annotated[
+        bool, typer.Option("--random-encoder", help="Control for the encoder trace: untrained encoder, trained predictor.")
+    ] = False,
+    tubelet: Annotated[
+        str,
+        typer.Option("--tubelet", help="repeat: each frame fills its own 2-frame tubelet (Meta's 2-AC); pair: the previous and the current frame as one real 2-frame clip."),
+    ] = "repeat",
     control: Annotated[
         Path | None,
         typer.Option("--control", exists=True, file_okay=False, help="Output of the same command with --random-predictor: the trained peak gain must beat it."),
@@ -1263,7 +1270,10 @@ def novelty_trace_cmd(
         else:
             if code_dir is None:
                 raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
-            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, seed=seed)
+            model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, random_predictor=random_predictor, random_encoder=random_encoder, seed=seed)
+        if tubelet not in ("repeat", "pair"):
+            raise ValueError("--tubelet must be repeat or pair")
+        model.tubelet = tubelet
         trajectories = load_trajectories(clips, max_clips=max_clips)
         if not trajectories:
             raise ValueError(f"no usable clips in {clips}")

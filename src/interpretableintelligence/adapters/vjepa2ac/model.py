@@ -102,6 +102,13 @@ def preprocess(frames: np.ndarray, crop: int = CROP) -> torch.Tensor:
     return x.unsqueeze(2).repeat(1, 1, TUBELET, 1, 1)
 
 
+def preprocess_pair(prev: np.ndarray, frames: np.ndarray, crop: int = CROP) -> torch.Tensor:
+    """Each frame with the one before it as a real 2-frame tubelet: ``[N, 3, 2, crop, crop]``."""
+    a = preprocess(prev, crop)[:, :, :1]
+    b = preprocess(frames, crop)[:, :, :1]
+    return torch.cat([a, b], dim=2)
+
+
 # --------------------------------------------------------------------------- the model
 
 
@@ -119,6 +126,7 @@ class ACWorldModel:
     info: dict = field(default_factory=dict)
     encode_batch: int = 8
     predict_batch: int = 16
+    tubelet: str = "repeat"  # "repeat": each frame fills its own tubelet (Meta's 2-AC); "pair": previous + current frame
 
     @property
     def grid(self) -> tuple[int, int]:
@@ -135,11 +143,20 @@ class ACWorldModel:
         return torch.autocast("cpu", enabled=False)
 
     @torch.inference_mode()
-    def encode_frames(self, frames: np.ndarray) -> torch.Tensor:
-        """``[N, H, W, 3]`` uint8 frames to ``[N, P, D]`` float32 latents on the CPU."""
+    def encode_frames(self, frames: np.ndarray, prev: np.ndarray | None = None) -> torch.Tensor:
+        """``[N, H, W, 3]`` uint8 frames to ``[N, P, D]`` float32 latents on the CPU.
+
+        With ``tubelet == "pair"`` each frame is encoded together with the frame before it (``prev``,
+        by default the previous entry of ``frames``, the first frame paired with itself)."""
+        if self.tubelet not in ("repeat", "pair"):
+            raise ValueError(f"unknown tubelet mode {self.tubelet!r}")
+        if self.tubelet == "pair" and prev is None:
+            prev = np.concatenate([frames[:1], frames[:-1]])
         out = []
         for i in range(0, len(frames), self.encode_batch):
-            x = preprocess(frames[i : i + self.encode_batch], self.crop).to(self.device)
+            sl = slice(i, i + self.encode_batch)
+            x = preprocess(frames[sl], self.crop) if self.tubelet == "repeat" else preprocess_pair(prev[sl], frames[sl], self.crop)
+            x = x.to(self.device)
             with self._autocast():
                 h = self.encoder(x)
             h = F.layer_norm(h.float(), (h.shape[-1],))
@@ -206,6 +223,7 @@ def load_vjepa2ac(
     code_dir: Path | str,
     checkpoint: Path | str | None = None,
     random_predictor: bool = False,
+    random_encoder: bool = False,
     seed: int = 0,
     dtype: torch.dtype | None = None,
 ) -> ACWorldModel:
@@ -214,6 +232,8 @@ def load_vjepa2ac(
     ``checkpoint`` is a local ``vjepa2-ac-vitg.pt``; without one it is downloaded to the torch hub
     cache. ``random_predictor`` keeps the trained encoder and leaves the predictor at its seeded
     initialisation: the random-weights control for anything that reads the predictor.
+    ``random_encoder`` leaves the encoder at its seeded initialisation instead: the control for
+    anything that reads the encoder (the predictor then sees inputs it was never trained on).
     """
     device = torch.device(device)
     code_dir = str(Path(code_dir).resolve())
@@ -233,6 +253,19 @@ def load_vjepa2ac(
         uniform_power=False,
         use_rope=True,
     )
+    if random_encoder:
+        torch.manual_seed(seed + 1)
+        encoder = vit_giant_xformers(
+            patch_size=PATCH,
+            img_size=(CROP, CROP),
+            num_frames=64,
+            tubelet_size=TUBELET,
+            use_sdpa=True,
+            use_SiLU=False,
+            wide_SiLU=True,
+            uniform_power=False,
+            use_rope=True,
+        )
     torch.manual_seed(seed)
     predictor = vit_ac_predictor(
         img_size=(CROP, CROP),
@@ -249,8 +282,9 @@ def load_vjepa2ac(
     def clean(sd: dict) -> dict:
         return {k.replace("module.", "").replace("backbone.", ""): v for k, v in sd.items()}
 
-    missing, unexpected = encoder.load_state_dict(clean(state["encoder"]), strict=False)
-    info = {"encoder_missing": len(missing), "encoder_unexpected": len(unexpected), "random_predictor": random_predictor}
+    missing, unexpected = ([], []) if random_encoder else encoder.load_state_dict(clean(state["encoder"]), strict=False)
+    info = {"encoder_missing": len(missing), "encoder_unexpected": len(unexpected), "random_predictor": random_predictor,
+            "random_encoder": random_encoder}
     if not random_predictor:
         predictor.load_state_dict(clean(state["predictor"]), strict=True)
     del state
@@ -260,7 +294,7 @@ def load_vjepa2ac(
     weight_dtype = dtype if device.type == "cuda" else torch.float32
     encoder.to(device=device, dtype=weight_dtype).eval()
     predictor.to(device=device, dtype=weight_dtype).eval()
-    name = "vjepa2-ac-random-predictor" if random_predictor else "vjepa2-ac"
+    name = "vjepa2-ac" + ("-random-encoder" if random_encoder else "") + ("-random-predictor" if random_predictor else "")
     return ACWorldModel(encoder=encoder, predictor=predictor, device=device, dtype=dtype, name=name, info=info)
 
 
