@@ -1126,6 +1126,84 @@ def gripper_probe_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("freeze-check")
+def freeze_check_cmd(
+    clips: Annotated[
+        Path,
+        typer.Option("--clips", exists=True, file_okay=False, help="Clips from `ii get-clips --with-states` (video plus arm poses)."),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for freeze_check.json, index.html and heatmaps/.")],
+    model_name: Annotated[
+        str,
+        typer.Option("--model", help="vjepa2-ac (Meta's public checkpoint), jepa-wms:<hub name> (e.g. jepa-wms:dino_wm_droid) or tiny (tests)."),
+    ] = "vjepa2-ac",
+    code_dir: Annotated[Path | None, typer.Option("--code-dir", help="Checkout of the model's code: facebookresearch/vjepa2 or facebookresearch/jepa-wms.")] = None,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="Local vjepa2-ac-vitg.pt (vjepa2-ac only).")] = None,
+    control: Annotated[bool, typer.Option("--control/--no-control", help="Also run the untrained copy (needed for a yes).")] = True,
+    max_clips: Annotated[int | None, typer.Option("--max-clips", min=1, help="Use only the first N clips.")] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for the untrained copy and the bootstrap.")] = 0,
+    bootstrap: Annotated[int, typer.Option("--bootstrap", min=1, help="Episode bootstrap resamples.")] = 2000,
+) -> None:
+    """Does a world model expect the world to stop? Yes / no / unclear, against its untrained copy. (Offline.)
+
+    On every moving step of recorded robot video: is the frozen world (the current frame) closer to the
+    model's prediction than the real next frame, how much of the real change does it predict, and does
+    it notice when the moving thing is frozen. The verdict rule is fixed in the code.
+    """
+    import dataclasses
+    import copy as _copy
+
+    from interpretableintelligence.device import pick_device
+    from interpretableintelligence.worldmodel.action_effects import load_trajectories
+    from interpretableintelligence.worldmodel.freeze_check import reset_weights, run_freeze_check
+
+    try:
+        ctl = None
+        if model_name in ("tiny", "vjepa2-ac"):
+            from interpretableintelligence.adapters.vjepa2ac.model import load_vjepa2ac, tiny_world_model
+
+            if model_name == "tiny":
+                model = tiny_world_model(seed=seed)
+            else:
+                if code_dir is None:
+                    raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/vjepa2")
+                model = load_vjepa2ac(pick_device(), code_dir=code_dir, checkpoint=checkpoint, seed=seed)
+                model.predict_batch = 64
+            if control:
+                ctl = dataclasses.replace(model, predictor=reset_weights(_copy.deepcopy(model.predictor), seed=seed),
+                                          name=model.name + "-untrained", info={**model.info, "untrained": "reset_weights(predictor)"})
+        elif model_name.startswith("jepa-wms:"):
+            from interpretableintelligence.adapters.jepawm import load_jepawm, untrained_copy
+
+            if code_dir is None:
+                raise ValueError("--code-dir is required: a checkout of github.com/facebookresearch/jepa-wms")
+            model = load_jepawm(model_name.split(":", 1)[1], code_dir=code_dir, device=pick_device())
+            if control:
+                ctl = untrained_copy(model, seed=seed)
+        else:
+            raise ValueError(f"unknown --model {model_name!r}: use vjepa2-ac, jepa-wms:<hub name> or tiny")
+        trajectories = load_trajectories(clips, max_clips=max_clips)
+        if not trajectories:
+            raise ValueError(f"no usable clips in {clips}")
+        result = run_freeze_check(model, trajectories, out, control=ctl, seed=seed, n_boot=bootstrap, say=typer.echo)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, KeyError, ImportError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    m, c = result["model"], result["control"]
+
+    def line(label: str, key: str) -> str:
+        v = m[key]
+        ctl_txt = f"   untrained {c[key]['value']:.2f} [{c[key]['lo']:.2f}, {c[key]['hi']:.2f}]" if c else ""
+        return f"  {label:24s} {v['value']:.2f} [{v['lo']:.2f}, {v['hi']:.2f}]{ctl_txt}"
+
+    typer.echo(f"verdict: {result['verdict']}  ({m['n_steps']} moving steps, {m['n_episodes']} episodes)")
+    typer.echo(line("frozen world wins", "frozen_wins"))
+    typer.echo(line("change predicted", "change_predicted"))
+    typer.echo(line("change from the action", "change_from_action"))
+    typer.echo(line("moving thing noticed", "moving_noticed"))
+    typer.echo(f"wrote {out}")
+
+
 @app.command("impossible-events")
 def impossible_events_cmd(
     clips: Annotated[
