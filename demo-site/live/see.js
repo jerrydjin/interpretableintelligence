@@ -130,7 +130,7 @@ async function boot() {
     if (!(await restoreFromLink())) await showFirst();
   }
   if (BAKE) return bake();
-  encodeGallery();
+  if (!engine.pack.files.gallery) encodeGallery();
 }
 
 function showMeta() {
@@ -500,7 +500,7 @@ async function pickSwitch(id) {
   render();
 }
 
-const curveKey = () => JSON.stringify([ui.picture?.sample || "own", ui.word, [...ui.on], ui.boostControl?.ids || []]);
+const curveKey = () => JSON.stringify([ui.picture?.sample || ui.picture?.gallery || "own", ui.word, [...ui.on], ui.boostControl?.ids || []]);
 
 function cancelCurve() {
   curveToken++;
@@ -1078,39 +1078,92 @@ function saysView(id) {
   );
 }
 
-// Where a switch lights up most on the other example pictures, by itself (at least a quarter of
-// its strongest in training, so a faint flicker does not pass for what it stands for).
+// Where a switch lights up most by itself (at least a quarter of its strongest in training, so a
+// faint flicker does not pass for what it stands for): from the pack's gallery of a few thousand
+// photos (ii gallery-live) when it has one, else from the example pictures.
 function examplesView(id) {
-  const here = ui.picture?.sample;
-  const live = ui.gallery.length === engine.pack.samples.length;
-  let list;
-  if (live) list = examplesFor(id).filter((g) => g.sample.clip_id !== here).map((g) => ({ key: g.sample.clip_id, map: engine.featureMap(g, id) }));
-  else {
-    const baked = ui.instant?.examples?.[id];
-    if (!baked) return null;
-    list = baked.filter(([key]) => key !== here).map(([key, b64, peak]) => ({ key, map: unq8(b64, peak) }));
-  }
   const peak = engine.features[id]?.max || 1;
-  list = list.filter(({ map }) => Math.max(...map) >= 0.25 * peak).slice(0, N_EXAMPLES);
+  let list;
+  if (engine.pack.files?.gallery) {
+    list = gallery.tops.get(id);
+    if (!list) {
+      galleryTops(id).then(() => {
+        const box = document.querySelector(`.examples[data-feature="${id}"]`);
+        if (box) box.replaceChildren(...[examplesView(id)].flat().filter(Boolean));
+      });
+      return null;
+    }
+    const here = ui.picture?.sample ?? ui.picture?.gallery;
+    list = list.filter((g) => (g.pic.sample ?? g.pic.file) !== here);
+  } else {
+    const here = ui.picture?.sample;
+    const live = ui.gallery.length === engine.pack.samples.length;
+    if (live) list = examplesFor(id).filter((g) => g.sample.clip_id !== here).map((g) => ({ pic: g.sample, map: engine.featureMap(g, id) }));
+    else {
+      const baked = ui.instant?.examples?.[id];
+      if (!baked) return null;
+      list = baked.filter(([key]) => key !== here).map(([key, b64, p]) => ({ pic: sampleOf(key), map: unq8(b64, p) }));
+    }
+    list = list.filter(({ map }) => Math.max(...map) >= 0.25 * peak);
+  }
+  list = list.slice(0, N_EXAMPLES);
   if (!list.length) return null;
   return [
     el("p", { class: "muted small ex-cap" }, "Where it lights up by itself"),
     el(
       "div",
       { class: "ex-row" },
-      list.map(({ key, map }) => {
-        const sample = sampleOf(key);
+      list.map(({ pic, map }) => {
         const canvas = el("canvas", { width: engine.gridW * 10, height: engine.gridH * 10 });
-        paintLights(map, peak, canvas);
+        paintLights(map, Math.max(...map), canvas); // where, not how much: its own strongest patch is full
         return el(
           "button",
-          { class: "ex", type: "button", title: sample.credit || key, onclick: () => showSample(sample) },
-          el("img", { src: engine.base + sample.file, alt: "", loading: "lazy" }),
+          { class: "ex", type: "button", title: pic.credit || "", onclick: () => openExample(pic, id) },
+          el("img", { src: engine.base + pic.file, alt: "", loading: "lazy" }),
           canvas,
         );
       }),
     ),
   ];
+}
+
+// The pack's gallery (ii gallery-live): each switch's strongest pictures sit in one of a few
+// small files, fetched when that switch is first shown.
+const gallery = { index: null, shards: new Map(), tops: new Map() };
+
+async function galleryTops(id) {
+  const file = engine.pack.files.gallery;
+  gallery.index ||= fetch(engine.base + file).then((r) => r.json()).catch(() => null);
+  const index = await gallery.index;
+  if (!index) return gallery.tops.set(id, []).get(id);
+  const s = id % index.shards;
+  const url = engine.base + file.replace(/[^/]*$/, "") + `top-${String(s).padStart(3, "0")}.json`;
+  if (!gallery.shards.has(s)) gallery.shards.set(s, fetch(url).then((r) => r.json()).catch(() => ({})));
+  const shard = await gallery.shards.get(s);
+  const list = (shard[id] || []).map((pic) => ({ pic, map: unq8(pic.map, pic.peak) }));
+  gallery.tops.set(id, list);
+  return list;
+}
+
+// Open an example picture with the same switch: still turned up for the word, or still open.
+async function openExample(pic, id) {
+  const opened = ui.feature === id;
+  const opts = { word: ui.word, on: opened || !ui.on.has(id) ? [] : [id] };
+  try {
+    if (pic.sample) await showSample(sampleOf(pic.sample), opts);
+    else {
+      const img = await loadImage(engine.base + pic.file);
+      stopCam();
+      ui.picture = { img, gallery: pic.file };
+      markThumb(null);
+      $("credit").textContent = pic.credit || "";
+      await showPicture(img, opts);
+    }
+  } catch (err) {
+    return flash(err.message);
+  }
+  $("stage").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (opened) await openFeature(id);
 }
 
 // A word it already sees most: the features that make it see that, to switch off.

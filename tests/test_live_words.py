@@ -355,3 +355,45 @@ def test_page_tokenizer_matches_clip_tokenizer(tmp_path):
     )
     got = json.loads(subprocess.run([node, "--input-type=module", "-e", program], check=True, capture_output=True, text=True).stdout)
     assert got == want
+
+
+def test_gallery_live_keeps_each_features_strongest_pictures(words_run, tmp_path):
+    """ii gallery-live reads a folder through the pack's own graphs and keeps, per feature, where it fires most."""
+    import base64
+    import shutil
+
+    pytest.importorskip("onnxruntime")
+    from interpretableintelligence.live import encode_jpeg
+
+    pack = tmp_path / "pack"
+    shutil.copytree(words_run["pack"], pack)
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    rng = np.random.default_rng(1)
+    for i in range(6):
+        (photos / f"img{i}.jpg").write_bytes(encode_jpeg(rng.integers(0, 255, size=(48, 40, 3), dtype=np.uint8)))
+    (tmp_path / "credits.json").write_text(json.dumps({"img2": "Photo by someone, CC BY 2.0"}), encoding="utf-8")
+    result = CliRunner().invoke(
+        app, ["gallery-live", str(pack), "--images", str(photos), "--credits", str(tmp_path / "credits.json"), "--per-feature", "9", "--min-frac", "0"]
+    )
+    assert result.exit_code == 0, result.output
+    meta = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+    assert meta["files"]["gallery"] == "gallery/index.json" and meta["digests"]["gallery"]
+    index = json.loads((pack / "gallery" / "index.json").read_text(encoding="utf-8"))
+    assert index["read"] == 6 + len(meta["samples"])
+    seen, files, credited = 0, set(), False
+    for s in range(index["shards"]):
+        shard = json.loads((pack / "gallery" / f"top-{s:03d}.json").read_text(encoding="utf-8"))
+        for fid, rows in shard.items():
+            assert int(fid) % index["shards"] == s and 0 < len(rows) <= 9
+            peaks = [row["peak"] for row in rows]
+            assert min(peaks) > 0
+            for row in rows:
+                assert (pack / row["file"]).is_file()
+                files.add(row["file"])
+                credited |= row.get("credit") == "Photo by someone, CC BY 2.0"
+                q = np.frombuffer(base64.b64decode(row["map"]), np.uint8)
+                assert q.size == index["grid"] and q.max() == 255
+            seen += 1
+    assert seen > 0 and credited
+    assert len([f for f in files if f.startswith("gallery/")]) == len(list((pack / "gallery").glob("*.jpg"))) <= index["pictures"]

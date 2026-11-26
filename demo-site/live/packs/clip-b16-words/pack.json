@@ -66,7 +66,8 @@
       "text_encoder.onnx.0",
       "text_encoder.onnx.1"
     ],
-    "tokenizer": "tokenizer.json"
+    "tokenizer": "tokenizer.json",
+    "gallery": "gallery/index.json"
   },
   "runs_in": [
     "browser"
@@ -200,7 +201,8 @@
     "vocab": "e338dd1032ceb8da",
     "features": "f0eee1c44590ce1a",
     "text_encoder": "0b0028d3060e43d1",
-    "tokenizer": "71f7ceb7b3d5bb3c"
+    "tokenizer": "71f7ceb7b3d5bb3c",
+    "gallery": "20d9791943304d57"
   },
   "names": {
     "pictures": 8,
