@@ -29,20 +29,28 @@ from pathlib import Path
 
 import numpy as np
 
+from interpretableintelligence.live import encode_jpeg, read_image
 from interpretableintelligence.live_names import _join, background
 
 EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
-def _square(path: Path, size: int):
-    """The middle square of a picture, resized to ``size`` (as the page's crop resize)."""
-    from PIL import Image, ImageOps
+def _square(path: Path, size: int) -> np.ndarray:
+    """The middle square of a picture, resized to ``size`` (as the page's crop resize), ``[size, size, 3]`` uint8.
 
-    im = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
-    w, h = im.size
-    s = min(w, h)
-    im = im.crop(((w - s) // 2, (h - s) // 2, (w - s) // 2 + s, (h - s) // 2 + s))
-    return im.resize((size, size), Image.BICUBIC) if im.size != (size, size) else im
+    Through PyAV, as ``live.read_image`` reads pictures, so no imaging dependency is needed.
+    """
+    import av
+
+
+    rgb = read_image(path)
+    h, w = rgb.shape[:2]
+    s = min(h, w)
+    rgb = np.ascontiguousarray(rgb[(h - s) // 2 : (h - s) // 2 + s, (w - s) // 2 : (w - s) // 2 + s])
+    if s == size:
+        return rgb
+    frame = av.VideoFrame.from_ndarray(rgb, format="rgb24").reformat(width=size, height=size, interpolation="AREA" if s > size else "BICUBIC")
+    return frame.to_ndarray(format="rgb24")
 
 
 def _q8(values: np.ndarray) -> tuple[str, float]:
@@ -58,7 +66,7 @@ def build_gallery(
     per_feature: int = 6,
     min_frac: float = 0.25,
     shards: int = 128,
-    quality: int = 60,
+    quality: int = 4,
     with_samples: bool = True,
     limit: int | None = None,
     log: Callable[[str], None] = lambda _m: None,
@@ -108,7 +116,7 @@ def build_gallery(
         if i % 250 == 0:
             log(f"reading pictures: {i}/{len(pool)}")
         im = _square(entry["path"], size)
-        x = ((np.asarray(im, np.float32) / 255.0 - mean) / std).transpose(2, 0, 1)[None].astype(np.float32)
+        x = ((im.astype(np.float32) / 255.0 - mean) / std).transpose(2, 0, 1)[None].astype(np.float32)
         hidden = front.run(None, {"pixel_values": x})[0][0, prefix:]
         pre = sae_s.run(None, {"x": np.ascontiguousarray(hidden.reshape(-1, d), np.float32)})[0]
         n_tok = pre.shape[0]
@@ -144,7 +152,7 @@ def build_gallery(
         number[i] = len(pictures)
         if entry["file"] is None:
             name = f"gallery/{len(pictures):05d}.jpg"
-            _square(entry["path"], size).save(pack_dir / name, "JPEG", quality=quality, optimize=True, progressive=True)
+            (pack_dir / name).write_bytes(encode_jpeg(_square(entry["path"], size), max_edge=size, quality=quality))
             rec = {"file": name}
         else:
             rec = {"file": entry["file"], "sample": entry["sample"]}
