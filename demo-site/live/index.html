@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#faf9f5">
   <title>Playground · ii</title>
-  <meta name="description" content="Inside a vision model are thousands of switches, each for one idea. Find the one for a word, turn it up, and the model sees something that isn’t there. Runs in your browser.">
+  <meta name="description" content="Inside a vision model are thousands of switches, each for one idea. See which light up on your picture, point at any part of it, and turn one up to see what it does. Runs in your browser.">
   <link rel="preload" href="../static/fonts/geist-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="../static/fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="../static/site.css">
@@ -24,8 +24,8 @@
 
   <main>
     <section class="intro">
-      <h1>Find the switch</h1>
-      <p class="lede">Inside a vision model are thousands of switches, each for one idea. Find the one for a word, turn it up, and the model sees something that isn’t there. A random switch does nothing.</p>
+      <h1>What lights up inside</h1>
+      <p class="lede">Inside a vision model are thousands of switches, each for one idea. See which light up on your picture, point at any part of it, and turn one up to see what it does.</p>
     </section>
 
     <section class="loader" id="loader" aria-live="polite">
@@ -59,7 +59,7 @@
     </section>
 
     <section class="how" id="how">
-      <p class="fine">The model is <a href="https://huggingface.co/openai/clip-vit-base-patch16">CLIP</a>, running on your device; your pictures never leave it. A switch is one of the <span id="n-features">6,144</span> features a sparse autoencoder found in it; turning one up adds it to every part of the picture. Exploration, not a verified finding.</p>
+      <p class="fine">The model is <a href="https://huggingface.co/openai/clip-vit-base-patch16">CLIP</a>, running on your device; your pictures never leave it. A switch is one of the <span id="n-features">6,144</span> features a sparse autoencoder found in it, read at block 8 of 12; how strongly it is on is shown against the most it reached on its training pictures, and a few always-on switches that carry every picture are left out. Turning one up adds it to every part of the picture; a random switch turned up the same way is the control. Exploration, not a verified finding.</p>
     </section>
   </main>
 

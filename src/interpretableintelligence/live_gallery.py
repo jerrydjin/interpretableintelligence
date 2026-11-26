@@ -11,7 +11,10 @@ fires most, and writes them into the pack:
 * ``gallery/top-SSS.json``: ``{"<feature>": [{"file", "credit", "sample"?, "peak", "map"}]}``
   for features ``id % shards == SSS``, most first (activation summed over the patches), so the page fetches one small file per
   switch. ``map`` is the feature over the patches, base64 of one byte per patch scaled to
-  ``peak`` (the page's ``unq8``); ``sample`` names a pack sample picture.
+  ``peak`` (the page's ``unq8``); ``sample`` names a pack sample picture;
+* ``gallery/firsts.json``: every feature's first ``FIRSTS`` pictures in one small file, each as the
+  square of patches where it lights up (``[picture, x, y, side]``, in patches), so the page can show
+  a few crops beside every switch in a list without fetching a shard per switch.
 
 A picture is kept for a feature only where the feature reaches ``min_frac`` of its training peak
 (the page's "by itself" bar), so a faint flicker does not pass for what it stands for. Always-on
@@ -33,6 +36,7 @@ from interpretableintelligence.live import encode_jpeg, read_image
 from interpretableintelligence.live_names import _join, background
 
 EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+FIRSTS = 3  # pictures per feature in firsts.json
 
 
 def _square(path: Path, size: int) -> np.ndarray:
@@ -177,10 +181,62 @@ def build_gallery(
         (out_dir / f"top-{s:03d}.json").write_text(json.dumps(shard, separators=(",", ":")) + "\n", encoding="utf-8")
     index = {"shards": shards, "per_feature": per_feature, "min_frac": min_frac, "read": len(pool), "pictures": len(pictures), "grid": n_tok}
     (out_dir / "index.json").write_text(json.dumps(index, separators=(",", ":")) + "\n", encoding="utf-8")
-    digest = hashlib.sha256()
-    for p in sorted(out_dir.glob("*.json")):
-        digest.update(p.read_bytes())
+    write_firsts(pack_dir, grid_w=int(model["grid"]["w"]), grid_h=int(model["grid"]["h"]))
     pack["files"]["gallery"] = "gallery/index.json"
-    pack.setdefault("digests", {})["gallery"] = digest.hexdigest()[:16]
+    pack.setdefault("digests", {})["gallery"] = gallery_digest(out_dir)
     pack_path.write_text(json.dumps(pack, indent=2) + "\n", encoding="utf-8")
     return {"read": len(pool), "pictures": len(pictures), "features": kept, "of": int((~skip).sum())}
+
+
+def gallery_digest(out_dir: Path) -> str:
+    digest = hashlib.sha256()
+    for p in sorted(Path(out_dir).glob("*.json")):
+        digest.update(p.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def _square_of(q: bytes, w: int, h: int, frac: float = 0.4, least: int = 6) -> list[int]:
+    """The square of patches around where a map lights up (at least ``frac`` of its peak), padded
+    by a patch and at least ``least`` patches wide, inside the grid: ``[x, y, side]``."""
+    peak = max(q) if q else 0
+    lit = [t for t, v in enumerate(q) if peak and v >= frac * peak]
+    if not lit:
+        return [0, 0, min(w, h)]
+    xs, ys = [t % w for t in lit], [t // w for t in lit]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    side = min(w, h, max(least, x1 - x0 + 3, y1 - y0 + 3))
+    cx, cy = (x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2
+    x = int(min(w - side, max(0, round(cx - side / 2))))
+    y = int(min(h - side, max(0, round(cy - side / 2))))
+    return [x, y, side]
+
+
+def write_firsts(pack_dir: Path, *, grid_w: int, grid_h: int, n: int = FIRSTS) -> dict:
+    """``gallery/firsts.json`` from the gallery's shards (see the module docstring).
+
+    ``{"pictures": [file, ...], "top": {"<feature>": [[picture, x, y, side], ...]}}``, the pictures
+    in each feature's shard order (most first). Reads only the shards, so an existing gallery gains
+    it without reading the photos again; ``index.json`` points at it.
+    """
+    out_dir = Path(pack_dir) / "gallery"
+    index_path = out_dir / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    pictures: list[str] = []
+    number: dict[str, int] = {}
+    top: dict[str, list[list[int]]] = {}
+    for s in range(int(index["shards"])):
+        shard = json.loads((out_dir / f"top-{s:03d}.json").read_text(encoding="utf-8"))
+        for fid, rows in shard.items():
+            out = []
+            for row in rows[:n]:
+                file = row["file"]
+                if file not in number:
+                    number[file] = len(pictures)
+                    pictures.append(file)
+                out.append([number[file], *_square_of(base64.b64decode(row["map"]), grid_w, grid_h)])
+            top[fid] = out
+    top = dict(sorted(top.items(), key=lambda kv: int(kv[0])))
+    (out_dir / "firsts.json").write_text(json.dumps({"pictures": pictures, "top": top}, separators=(",", ":")) + "\n", encoding="utf-8")
+    index["firsts"] = "firsts.json"
+    index_path.write_text(json.dumps(index, separators=(",", ":")) + "\n", encoding="utf-8")
+    return {"features": len(top), "pictures": len(pictures)}
