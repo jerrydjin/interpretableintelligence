@@ -205,7 +205,7 @@ def _write_home(path: Path, summary: dict, run: dict) -> None:
     word = escape(flip["word"])
     cols = "".join(
         f'<span class="hero-col{" on" if kind == "after" else ""}"><span>{label}</span><b>{escape(_pct(flip[kind]))}</b></span>'
-        for kind, label in (("before", "Before"), ("after", "Switch on"), ("control", f"Best of {flip['of']} random"))
+        for kind, label in (("before", "Switch off"), ("after", "Switch on"), ("control", "Random switch"))
     )
     body = f"""
     <section class="hero hero-split">
@@ -216,7 +216,7 @@ def _write_home(path: Path, summary: dict, run: dict) -> None:
       </div>
       <figure class="stage">
         <a href="/live/" data-testid="hero-picture"><img src="{picture}" alt="A robot arm at a table, from the playground" class="stage-picture"></a>
-        <figcaption class="hero-flip" data-testid="hero-flip"><span class="hero-q">How much it sees “{word}”</span>{cols}</figcaption>
+        <figcaption class="hero-flip" data-testid="hero-flip"><span class="hero-q">Chance it calls this “{word}”</span>{cols}</figcaption>
       </figure>
     </section>
     """

@@ -138,7 +138,7 @@ def test_home_leads_with_the_switch():
     flip = json.loads((pack_dir / "instant.json").read_text(encoding="utf-8"))["samples"][HERO_SAMPLE]["flip"]
     word = json.loads((pack_dir / "vocab.json").read_text(encoding="utf-8"))[flip["word"]]
     w = str(flip["word"])
-    assert f"How much it sees “{word}”" in text
+    assert f"Chance it calls this “{word}”" in text
     for value in (flip["prob"][w], flip["boost"][w], flip["control"]["prob"][w]):
         assert escape(_pct(value)) in text
     assert flip["boost"][w] > 2 * flip["control"]["prob"][w]
