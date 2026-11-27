@@ -586,7 +586,7 @@ function activeView() {
       el("h2", { class: "lit-title" }, spot ? "Lit up at this spot" : "Lit up inside"),
       spot && ui.pinned ? el("button", { class: "back", type: "button", onclick: () => setSpot(null, false) }, "Whole picture") : null,
     ),
-    el("p", { class: "muted small lit-note" }, spot ? "How strongly each is on here, against the most it ever is." : `The switches most on in this picture. ${matchMedia("(hover: hover)").matches ? "Point at" : "Tap"} any part of it to see what is on there.`),
+    spot ? null : el("p", { class: "muted small lit-note" }, `${matchMedia("(hover: hover)").matches ? "Point at" : "Tap"} the picture to see one spot.`),
     list.length ? el("div", { class: "flist" }, rows) : el("p", { class: "muted" }, "Nothing stands out here."),
     !spot && !ui.more && ui.active.length > N_ACTIVE
       ? el("button", { class: "back more", type: "button", onclick: () => ((ui.more = true), $("active").replaceWith(activeView())) }, "Show more")
@@ -1059,7 +1059,7 @@ function drawHeat() {
   if (id != null && (ui.feature != null || ui.view !== "inside")) {
     // One switch: where it lights up on this picture by itself, against its usual top.
     paintLights(engine.featureMap(ui.state, id), engine.features[id]?.max || 1);
-    key.replaceChildren(el("span", { class: "swatch ember" }), `Where ${ui.toward && ui.feature == null ? switchName(id) : litName(id)} lights up on this picture`);
+    key.replaceChildren(el("span", { class: "swatch ember" }), `Where ${ui.toward && ui.feature == null ? switchName(id) : litName(id)} lights up`);
   } else if (on != null) {
     // The switch on this picture: where it already lights up, plus the even glow of turning it
     // up everywhere, brighter as the strength goes up.
@@ -1074,7 +1074,7 @@ function drawHeat() {
     if (ui.spot != null) paintSpot(ui.spot, ui.hover);
     else if (lit != null) paintLights(engine.featureMap(ui.state, lit), engine.features[lit]?.max || 1);
     else paintMap(null);
-    const what = lit != null ? `Where ${litName(lit)} lights up on this picture` : ui.spot != null ? (ui.pinned ? "The spot you picked" : "The spot you are pointing at") : null;
+    const what = lit != null ? `Where ${litName(lit)} lights up` : ui.spot != null ? (ui.pinned ? "The spot you picked" : "The spot you are pointing at") : null;
     key.replaceChildren(...(what ? [el("span", { class: "swatch ember" }), what] : []));
   } else if (ui.why && !ui.toward) {
     // The same lights as everywhere else: where on the picture pushes it towards the word.
@@ -1175,8 +1175,9 @@ function seeInput() {
   const input = el("input", {
     type: "search",
     class: "see-input",
+    id: "see-input",
     value: ui.word != null ? engine.vocab[ui.word] : "",
-    placeholder: ui.view === "inside" ? "any word" : "a word",
+    placeholder: "Type a word, like umbrella",
     list: "vocab",
     autocomplete: "off",
     "aria-label": "Make it see",
@@ -1187,14 +1188,19 @@ function seeInput() {
   return el(
     "div",
     { class: "see-head" },
-    el("label", { class: "see-label" }, el("span", {}, "Make it see"), input, list),
-    chips.length ? el("p", { class: "chips" }, chips.map((w) => el("button", { class: "chip", type: "button", "data-word": w, onclick: () => seeWord(w) }, w))) : null,
+    el("label", { class: "see-label", for: "see-input" }, "Make it see"),
+    el("div", { class: "see-field" }, input, list, el("button", { class: "see-go", type: "button", onclick: () => seeWord(input.value) }, "See")),
+    chips.length ? el("p", { class: "chips pills" }, chips.map((w) => el("button", { class: "chip", type: "button", "data-word": w, onclick: () => seeWord(w) }, w))) : null,
   );
 }
 
 async function seeWord(text) {
   const typed = text.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60);
   if (!typed) return;
+  // Enter, leaving the box and the button can all ask for the same word at once.
+  if (seeWord.last === typed && Date.now() - seeWord.at < 600) return;
+  seeWord.last = typed;
+  seeWord.at = Date.now();
   let w = engine.vocab.indexOf(typed);
   if (w < 0 && engine.readsAnyWord) {
     if (!ui.live || !ui.state?.seen?.embed) return flash("Words off the list work as soon as the model is ready.");
@@ -1279,7 +1285,6 @@ function answerCard() {
     nowLabel: ui.push ? `turned up ×${ui.push}` : "as it is",
     control: control?.ids.length ? control.seen.prob[w] : null,
     testid: "boost",
-    cap: "Chance it says so", // the word is in the title right above
     extra: [
       wins ? null : el("p", { class: "atop" }, `It still calls it “${engine.vocab[top]}”.`),
       !wins && after < 0.01 && ui.push === 2 ? el("p", { class: "atop" }, "Not enough to change its mind here. Try another switch or picture.") : null,
@@ -1372,7 +1377,7 @@ function switchView(word) {
     others.length
       ? el(
           "p",
-          { class: "chips others" },
+          { class: "chips pills others" },
           el("span", { class: "cap" }, "Other switches"),
           others.map((r) => el("button", { class: "chip", type: "button", "data-feature": r.id, onclick: () => pickSwitch(r.id) }, fname(r.id))),
         )
@@ -1456,7 +1461,7 @@ function examplesView(id, n = N_EXAMPLES) {
   if (!list.length) return null;
   const read = gallery.read;
   return [
-    el("p", { class: "cap" }, read ? `Where it lights up most, out of ${read.toLocaleString("en-GB")} photos` : "Where it lights up by itself"),
+    el("p", { class: "cap" }, read ? `Top photos, of ${read.toLocaleString("en-GB")}` : "Where it lights up by itself"),
     el(
       "div",
       { class: `ex-row${n > 4 ? " three" : ""}` },
@@ -1618,13 +1623,13 @@ function featureView() {
       `← ${backTo()}`,
     ),
     el("h2", { class: "sw-name" }, title(id)),
-    el("p", { class: "lit-note" }, `One of the ${engine.pack.sae.n_features.toLocaleString("en-GB")} patterns the model picks up on${title(id).startsWith("Switch #") ? "" : `, #${id}`}`),
+    title(id).startsWith("Switch #") ? null : el("p", { class: "lit-note" }, `#${id}`),
     el("div", { class: "examples", id: "examples", "data-feature": id, "data-n": N_TOP }, examplesView(id, N_TOP)),
     saysView(id),
     el(
       "div",
       { class: "section" },
-      el("p", { class: "cap" }, "Turn this switch up on your picture"),
+      el("p", { class: "cap" }, "Turn it up"),
       strengthSlider(ui.strength.add, (v) => (ui.strength.add = v), () => runDetail(), "detail-strength"),
       el("div", { id: "detail-words" }, detailView()),
     ),

@@ -399,3 +399,20 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 .wpct small { font-size: 11px; margin-left: 2px; }
 .wpct small.up { color: var(--signal); }
 .wpct small.down { color: var(--ink-3); }
+
+/* Make it see: a heading, a real text box with its button, and a few words to try as pills. */
+.see-label { display: block; font-family: var(--serif); font-size: 24px; letter-spacing: var(--serif-track); line-height: 1.2; margin: 0 0 12px; }
+.see-field { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 14px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--sheet); }
+.see-field:focus-within { border-color: var(--ink-3); }
+.see-field .see-input { flex: 1 1 auto; min-width: 0; padding: 8px 0; border: 0; font-family: var(--sans, inherit); font-size: 16px; color: var(--ink); }
+.see-field .see-input::placeholder { color: var(--ink-3); }
+.see-go { flex: none; padding: 8px 16px; border: 0; border-radius: 999px; background: var(--ink); color: var(--sheet); font: inherit; font-size: var(--t-small); cursor: pointer; }
+.see-go:hover { opacity: 0.88; }
+.see-head .chips.pills { gap: 8px; margin: 12px 0 0; }
+.chips.pills .chip { padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; font-size: var(--t-small); }
+.chips.pills .chip:hover { border-color: var(--ink-3); }
+/* Tighter between the list's "Show more" and the next section. */
+.view > #active + .see-more, .see-more.section { margin-top: 16px; }
+.more { margin: 6px 0 0; }
+.view .back.more { margin: 6px 0 0; }
+.chips.pills.others { align-items: center; gap: 8px; } .chips.pills.others .cap { margin-right: 4px; }
