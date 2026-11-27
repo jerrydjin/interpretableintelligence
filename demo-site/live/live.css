@@ -353,3 +353,28 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 .why-title { margin-top: 12px; }
 .frow.lit.on { background: var(--signal-wash); }
 .view > .examples + .says { margin-top: 14px; }
+
+/* One set of building blocks for every screen of the playground (see.js): a section starts with a
+   thin rule, a caption names it, headings share one serif size, a back link sits 12px above the
+   heading, and every experiment's answer is the same before → after block (.answer). */
+.section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.see-more.section, .sw.section { margin-top: 24px; padding-top: 20px; }
+.cap { margin: 0 0 8px; font-size: var(--t-small); font-weight: 500; color: var(--ink-2); letter-spacing: 0.01em; }
+.lit-title, .sw-name, .why-title { margin: 0; font-family: var(--serif); font-weight: 400; font-size: var(--t-head); letter-spacing: var(--serif-track); line-height: 1.2; }
+.view > .back + * { margin-top: 12px; }
+.view > .sw-name + .examples, .view > .why-title + p { margin-top: 14px; }
+.lit-note { margin: 4px 0 6px; min-height: 0; color: var(--ink-3); }
+.examples .cap { margin-top: 14px; }
+.answer { margin: 18px 0 4px; }
+.section > .cap + .strength { margin-top: 0; }
+.section .answer { margin-top: 16px; }
+.answer .atop { margin-top: 4px; }
+.others .cap { margin: 0 4px 0 0; }
+.frow.lit .fname.unnamed, .frow.why .fname.unnamed { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.says { margin: 14px 0 0; }
+.frow.why { grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; }
+.frow.why .fname-btn.lit-mid { align-items: stretch; flex-direction: column; gap: 7px; }
+.frow.why.off .fbar span { background: var(--line-2); }
+.sw-name + .examples .cap { margin-top: 12px; }
+.examples + .says { margin-top: 12px; }
+@media (max-width: 520px) { .wrow { grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) 6.2rem; gap: 10px; } }

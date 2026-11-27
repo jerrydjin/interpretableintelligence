@@ -624,7 +624,7 @@ function openWord(w) {
 }
 
 function insideView() {
-  return el("div", { class: "view" }, seenLine(), activeView(), el("div", { class: "see-more" }, seeInput()));
+  return el("div", { class: "view" }, seenLine(), activeView(), el("div", { class: "see-more section" }, seeInput()));
 }
 
 async function busy(fn) {
@@ -1070,7 +1070,10 @@ function drawHeat() {
     const what = lit != null ? `Where ${litName(lit)} lights up on this picture` : ui.spot != null ? (ui.pinned ? "The spot you picked" : "The spot you are pointing at") : null;
     key.replaceChildren(...(what ? [el("span", { class: "swatch ember" }), what] : []));
   } else if (ui.why && !ui.toward) {
-    paintMap(ui.why.patches, EMBER);
+    // The same lights as everywhere else: where on the picture pushes it towards the word.
+    let top = 0;
+    for (const v of ui.why.patches) if (v > top) top = v;
+    paintLights(ui.why.patches, top || 1);
     key.replaceChildren(el("span", { class: "swatch ember" }), `Where it finds “${engine.vocab[ui.word]}”`);
   } else {
     paintMap(null);
@@ -1209,8 +1212,35 @@ function mainView() {
   return el("div", { class: "view" }, parts);
 }
 
+// Where a switch's card goes back to, named the way that screen names itself.
+function backTo() {
+  if (ui.view === "inside") return "What lights up inside";
+  const word = engine.vocab[ui.word];
+  return ui.toward ? `Make it see “${word}”` : `Why it calls this “${word}”`;
+}
+
 function backButton() {
   return el("button", { class: "back", type: "button", "data-testid": "back", onclick: backToInside }, "← What lights up inside");
+}
+
+// One way to show every experiment's answer: the chance it calls the picture a word, before and
+// after the edit, with the random control beside it. Used by make it see, switch off and a
+// switch's own card, so the three read the same.
+function beforeAfter({ word, before, after, wasLabel, nowLabel, control = null, controlLabel = "A random switch instead", testid = null, extra = [] }) {
+  return el(
+    "div",
+    { class: "answer", id: testid === "boost" ? "answer" : null, "data-testid": testid },
+    el("p", { class: "cap" }, `Chance it calls this “${word}”`),
+    el(
+      "div",
+      { class: "anum" },
+      el("span", { class: "was", "data-testid": testid === "boost" ? "flip-before" : null }, pct(before), el("small", {}, wasLabel)),
+      el("span", { class: "arrow", "aria-hidden": "true" }, "→"),
+      el("span", { class: "now", "data-testid": testid === "boost" ? "flip-after" : null }, pct(after), el("small", {}, nowLabel)),
+    ),
+    control != null ? el("p", { class: "actl", "data-testid": testid === "boost" ? "flip-control" : `${testid}-control` }, `${controlLabel}: `, el("b", {}, pct(control))) : null,
+    ...extra,
+  );
 }
 
 // The answer: how likely it says the word before and with the switch on, the random switch
@@ -1220,27 +1250,23 @@ function answerCard() {
   const word = engine.vocab[w];
   const before = ui.state.seen.prob[w];
   const control = ui.boostControl;
-  if (!ui.boost) return el("div", { class: "answer", id: "answer", "data-testid": "boost" }, el("p", { class: "alab" }, `Chance it calls this “${word}”`), el("p", { class: "anum" }, pct(before)), el("p", { class: "muted small" }, ui.live ? "Turning the switch on…" : "Turning the switch on as soon as the model is ready."));
+  if (!ui.boost) return el("div", { class: "answer", id: "answer", "data-testid": "boost" }, el("p", { class: "cap" }, `Chance it calls this “${word}”`), el("div", { class: "anum" }, el("span", { class: "was" }, pct(before))), el("p", { class: "actl" }, ui.live ? "Turning the switch on…" : "Turning the switch on as soon as the model is ready."));
   const after = ui.boost.prob[w];
   const top = topWord(ui.boost);
   const wins = top === w;
-  return el(
-    "div",
-    { class: "answer", id: "answer", "data-testid": "boost" },
-    el("p", { class: "alab" }, `Chance it calls this “${word}”`),
-    el(
-      "div",
-      { class: "anum" },
-      el("span", { class: "was", "data-testid": "flip-before" }, pct(before), el("small", {}, "switch off")),
-      el("span", { class: "arrow", "aria-hidden": "true" }, "→"),
-      el("span", { class: "now", "data-testid": "flip-after" }, pct(after), el("small", {}, ui.push ? `switch on ×${ui.push}` : "switch off")),
-    ),
-    control?.ids.length
-      ? el("p", { class: "actl", "data-testid": "flip-control" }, "A random switch instead: ", el("b", {}, pct(control.seen.prob[w])))
-      : null,
-    el("p", { class: `atop${wins ? " wins" : ""}` }, wins ? `Now it calls it “${word}”.` : `It still calls it “${engine.vocab[top]}”.`),
-    !wins && after < 0.01 && ui.push === 2 ? el("p", { class: "atop" }, "Not enough to change its mind here. Try another switch or picture.") : null,
-  );
+  return beforeAfter({
+    word,
+    before,
+    after,
+    wasLabel: "as it is",
+    nowLabel: ui.push ? `turned up ×${ui.push}` : "as it is",
+    control: control?.ids.length ? control.seen.prob[w] : null,
+    testid: "boost",
+    extra: [
+      el("p", { class: `atop${wins ? " wins" : ""}` }, wins ? `Now it calls it “${word}”.` : `It still calls it “${engine.vocab[top]}”.`),
+      !wins && after < 0.01 && ui.push === 2 ? el("p", { class: "atop" }, "Not enough to change its mind here. Try another switch or picture.") : null,
+    ],
+  });
 }
 
 // The climb: the word's chance at every strength, for the switch and for the random switch.
@@ -1319,17 +1345,17 @@ function switchView(word) {
     strengthSlider(),
     el(
       "div",
-      { class: "sw", "data-feature": id },
+      { class: "sw section", "data-feature": id },
       el("h3", { class: "sw-name" }, `The ${switchName(id)} switch`),
-      saysView(id),
       el("div", { class: "examples", id: "examples", "data-feature": id }, examplesView(id)),
+      saysView(id),
       el("p", { class: "row-actions" }, el("button", { class: "back", type: "button", onclick: () => openFeature(id) }, "More about this switch →")),
     ),
     others.length
       ? el(
           "p",
           { class: "chips others" },
-          el("span", { class: "muted" }, "Other switches:"),
+          el("span", { class: "cap" }, "Other switches"),
           others.map((r) => el("button", { class: "chip", type: "button", "data-feature": r.id, onclick: () => pickSwitch(r.id) }, fname(r.id))),
         )
       : null,
@@ -1338,14 +1364,17 @@ function switchView(word) {
 }
 
 // Strength, under the chart and as wide as it: from off to twice the switch's usual top.
-function strengthSlider() {
-  const out = el("output", {}, ui.push ? `×${ui.push}` : "off");
-  const input = el("input", { type: "range", min: 0, max: 2, step: 0.25, value: ui.push, "aria-label": "Strength", "data-testid": "strength" });
+// Used for every strength in the playground (make it see, a switch's own card), so they look and
+// move the same. `apply(v)` runs after each move, one at a time; the last move always runs.
+function strengthSlider(value = ui.push, set = (v) => (ui.push = v), apply = setPush, testid = "strength") {
+  const out = el("output", {}, value ? `×${value}` : "off");
+  const input = el("input", { type: "range", min: 0, max: 2, step: 0.25, value, "aria-label": "Strength", "data-testid": testid });
   let queued = false;
   let running = false;
   input.addEventListener("input", async () => {
-    ui.push = Number(input.value);
-    out.textContent = ui.push ? `×${ui.push}` : "off";
+    const v = Number(input.value);
+    set(v);
+    out.textContent = v ? `×${v}` : "off";
     if (running) {
       queued = true;
       return;
@@ -1353,7 +1382,7 @@ function strengthSlider() {
     running = true;
     do {
       queued = false;
-      await setPush(ui.push);
+      await apply(v);
     } while (queued);
     running = false;
   });
@@ -1409,7 +1438,7 @@ function examplesView(id, n = N_EXAMPLES) {
   if (!list.length) return null;
   const read = gallery.read;
   return [
-    el("p", { class: "muted small ex-cap" }, read ? `Where it lights up most, out of ${read.toLocaleString("en-GB")} photos` : "Where it lights up by itself"),
+    el("p", { class: "cap" }, read ? `Where it lights up most, out of ${read.toLocaleString("en-GB")} photos` : "Where it lights up by itself"),
     el(
       "div",
       { class: `ex-row${n > 4 ? " three" : ""}` },
@@ -1476,7 +1505,7 @@ function whyView(word) {
   const near = new Set([...seen.prob.keys()].sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, 20).map((w) => engine.vocab[w]));
   const fits = (id) => engine.features[id]?.name && near.has(engine.features[id].name);
   const list = reasons();
-  const total = list.reduce((a, r) => a + r.score, 0) || 1;
+  const top = list[0]?.score || 1; // bars against the first, as in the list of what lights up
   const allOff = list.length && list.every((r) => ui.off.has(r.id));
   const waiting = !ui.live && ui.off.size && !ui.result;
   return [
@@ -1509,10 +1538,10 @@ function whyView(word) {
           ),
           el(
             "button",
-            { class: "fname-btn", type: "button", onclick: () => openFeature(r.id) },
+            { class: "fname-btn lit-mid", type: "button", onclick: () => openFeature(r.id) },
             el("span", { class: fits(r.id) ? "fname" : "fname unnamed" }, fits(r.id) ? engine.features[r.id].name : `#${r.id}`),
+            el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / top) * 100))}%` })),
           ),
-          el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / total) * 100))}%` })),
           previewsOf(r.id),
         );
       }),
@@ -1536,19 +1565,17 @@ function resultCard(word) {
   const after = ui.result.prob[w];
   const n = ui.off.size;
   const control = ui.control;
-  return el(
-    "div",
-    { class: "result", "data-testid": "result" },
-    el("p", { class: "lead-num" }, `“${word}”: ${pct(before)} → ${pct(after)}`),
-    el(
-      "p",
-      { class: "muted small" },
-      `With ${n} switch${n === 1 ? "" : "es"} off. `,
-      control
-        ? `Turning off ${control.ids.length} random switch${control.ids.length === 1 ? "" : "es"} that are also on here leaves it at ${pct(control.seen.prob[w])}.`
-        : "",
-    ),
-  );
+  const sw = (k) => `${k} switch${k === 1 ? "" : "es"}`;
+  return beforeAfter({
+    word,
+    before,
+    after,
+    wasLabel: "as it is",
+    nowLabel: `${sw(n)} off`,
+    control: control ? control.seen.prob[w] : null,
+    controlLabel: control ? `${control.ids.length} random switch${control.ids.length === 1 ? "" : "es"} off instead` : "",
+    testid: "result",
+  });
 }
 
 // One switch on its own: where it lights up on other photos, what turning it up did on other
@@ -1563,23 +1590,25 @@ function featureView() {
       {
         class: "back",
         type: "button",
+        "data-testid": "feature-back",
         onclick: () => {
           ui.feature = null;
           ui.detail = ui.detailControl = null;
           render();
         },
       },
-      "← Back",
+      `← ${backTo()}`,
     ),
     el("h2", { class: "sw-name" }, fitsHere(id) ? `The “${engine.features[id].name}” switch` : `Switch #${id}`),
     el("div", { class: "examples", id: "examples", "data-feature": id, "data-n": N_TOP }, examplesView(id, N_TOP)),
     saysView(id),
-    el("h3", { class: "detail-h" }, "Turn it up on this picture"),
-    slider("Strength", 0, 2, 0.25, ui.strength.add, (v) => (v ? `×${v}` : "off"), (v) => (ui.strength.add = v), async () => {
-      await runDetail();
-      drawHeat();
-    }),
-    el("div", { id: "detail-words" }, detailView()),
+    el(
+      "div",
+      { class: "section" },
+      el("p", { class: "cap" }, "Turn it up on this picture"),
+      strengthSlider(ui.strength.add, (v) => (ui.strength.add = v), () => runDetail(), "detail-strength"),
+      el("div", { id: "detail-words" }, detailView()),
+    ),
   );
 }
 
@@ -1593,42 +1622,20 @@ function detailView() {
   let w = 0;
   for (let i = 1; i < after.prob.length; i++) if (after.prob[i] - before.prob[i] > after.prob[w] - before.prob[w]) w = i;
   const ctl = ui.detailControl;
+  const noMore = ctl && Math.abs(after.prob[w] - before.prob[w]) <= Math.abs(ctl.prob[w] - before.prob[w]);
   return [
-    el(
-      "div",
-      { class: "result", "data-testid": "detail" },
-      el("p", { class: "lead-num" }, `“${engine.vocab[w]}”: ${pct(before.prob[w])} → ${pct(after.prob[w])}`),
-      ctl
-        ? el(
-            "p",
-            { class: "muted small", "data-testid": "detail-control" },
-            `A random switch turned up the same way: ${pct(ctl.prob[w])}.`,
-            Math.abs(after.prob[w] - before.prob[w]) <= Math.abs(ctl.prob[w] - before.prob[w]) ? " This switch does no more than that." : null,
-          )
-        : null,
-    ),
+    beforeAfter({
+      word: engine.vocab[w],
+      before: before.prob[w],
+      after: after.prob[w],
+      wasLabel: "as it is",
+      nowLabel: `turned up ×${ui.strength.add}`,
+      control: ctl ? ctl.prob[w] : null,
+      testid: "detail",
+      extra: [noMore ? el("p", { class: "atop" }, "This switch does no more than a random one here.") : null],
+    }),
     wordList(after, before, { pick: false }),
   ];
-}
-
-function slider(label, min, max, step, value, fmt, set, run = runDetail) {
-  const out = el("output", {}, fmt(value));
-  const input = el("input", { type: "range", min, max, step, value, "aria-label": label });
-  let queued = false;
-  input.addEventListener("input", async () => {
-    const v = Number(input.value);
-    set(v);
-    out.textContent = fmt(v);
-    if (ui.busy) {
-      queued = true;
-      return;
-    }
-    do {
-      queued = false;
-      await run();
-    } while (queued);
-  });
-  return el("label", { class: "slider" }, el("span", {}, label), input, out);
 }
 
 // ------------------------------------------------------------------ gallery (in the background)
