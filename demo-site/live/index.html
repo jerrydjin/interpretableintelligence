@@ -40,6 +40,7 @@
           <video id="cam" playsinline muted hidden></video>
           <canvas id="heat" aria-hidden="true"></canvas>
           <div class="drop-hint" id="drop-hint">Drop a picture anywhere</div>
+          <details class="credit-tag"><summary aria-label="Picture credit">Credit</summary><span id="credit"></span></details>
         </div>
         <div class="stage-key" id="stage-key"></div>
         <div class="tray">
@@ -48,7 +49,6 @@
             <label class="pill-btn" for="file">Use your own picture</label>
             <input type="file" id="file" accept="image/*" hidden>
             <button class="pill-btn" id="cam-btn" type="button">Use your camera</button>
-            <span class="tray-note" id="credit"></span>
           </div>
         </div>
       </div>
@@ -59,7 +59,7 @@
     </section>
 
     <section class="how" id="how">
-      <p class="fine"><a href="https://huggingface.co/openai/clip-vit-base-patch16">CLIP</a> runs on your device; your pictures never leave it. Switches are the <span id="n-features">6,144</span> features of a sparse autoencoder at block 8 of 12. Each result is compared with a random switch. Exploration, not a verified finding.</p>
+      <details class="fine about"><summary>How this works</summary><p><a href="https://huggingface.co/openai/clip-vit-base-patch16">CLIP</a> runs on your device; your pictures never leave it. Switches are the <span id="n-features">6,144</span> features of a sparse autoencoder at block 8 of 12. Each result is compared with a random switch. Exploration, not a verified finding.</p></details>
     </section>
   </main>
 

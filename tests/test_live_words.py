@@ -429,7 +429,7 @@ def test_gallery_live_keeps_each_features_strongest_pictures(words_run, tmp_path
         assert 0 < len(rows) <= 3
         for pic, x, y, n in rows:
             assert 0 <= pic < len(firsts["pictures"]) and 0 < n <= side and 0 <= x <= side - n and 0 <= y <= side - n
-    # ii look-live: crops of each feature's gallery pictures vote for a word; named only by a half.
+    # ii look-live: crops of each feature's gallery pictures vote for a word; the most voted names it.
     from interpretableintelligence.live_looks import PARTS
 
     before = meta["digests"].get("features")
@@ -443,10 +443,12 @@ def test_gallery_live_keeps_each_features_strongest_pictures(words_run, tmp_path
     assert len(votes) == len(json.loads((pack / meta["files"]["features"]).read_text(encoding="utf-8")))
     for f in json.loads((pack / meta["files"]["features"]).read_text(encoding="utf-8")):
         row = votes[f["id"]]
-        if "looks" in f:
-            assert f["looks"] in vocab and 2 * row["votes"][f["looks"]] >= row["n"] >= 1
+        assert sum(row["votes"].values()) == row["n"]
+        if row["n"]:
+            assert f["looks"] in vocab and row["votes"][f["looks"]] == max(row["votes"].values())
+            assert f["looks_share"] == round(row["votes"][f["looks"]] / row["n"], 2)
         else:
-            assert not row["n"] or 2 * max(row["votes"].values()) < row["n"]
+            assert "looks" not in f
     assert json.loads((pack / "pack.json").read_text(encoding="utf-8"))["digests"]["features"] != before or not any(
         "looks" in f for f in json.loads((pack / meta["files"]["features"]).read_text(encoding="utf-8"))
     )

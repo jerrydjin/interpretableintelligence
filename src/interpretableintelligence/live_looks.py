@@ -6,15 +6,13 @@ feature, the square of patches where it lights up on each of its gallery picture
 gallery-live``, the same squares as ``firsts.json``) is cut out, resized to the model's input and
 read through the pack's own ``front`` and ``words`` graphs; every crop votes for the word it is most
 likely to be called, among the pack's word list and :data:`PARTS` (parts and surfaces the list
-lacks, read through the pack's text encoder when it has one). A feature gets that word as
-``looks`` in ``features.json`` only when
-
-* it has at least ``least`` gallery pictures, and
-* at least half of them vote for the same word.
-
-Otherwise it has no ``looks`` and the page falls back to its other name or its number. Always-on
-features have no gallery pictures, so they are never named. Like ``name``, ``looks`` is a short
-description for people, measured and not verified: it never sets a badge.
+lacks, read through the pack's text encoder when it has one). Every feature with at least
+``least`` gallery pictures gets the word with the most votes (ties go to the higher mean
+probability) as ``looks`` in ``features.json``, and the share of its pictures that voted for it as
+``looks_share``: a best guess, as interpretability tools label every feature from its top examples,
+with how much its pictures agree. Always-on features have no gallery pictures, so they get no
+label and the page shows their number. Like ``name``, ``looks`` is a short description for people,
+measured and not verified: it never sets a badge.
 """
 
 from __future__ import annotations
@@ -132,10 +130,18 @@ def _crop(path: Path, x: int, y: int, side: int, grid: int, size: int) -> np.nda
     return frame.to_ndarray(format="rgb24")
 
 
+def pick(row: dict) -> str | None:
+    """The word a feature's pictures voted for most; ties go to the higher mean probability."""
+    if not row.get("votes"):
+        return None
+    mean = row.get("mean", {})
+    return max(row["votes"], key=lambda w: (row["votes"][w], mean.get(w, 0.0)))
+
+
 def look_pack(
     pack_dir: Path,
     *,
-    least: int = 4,
+    least: int = 3,
     extra: tuple[str, ...] = PARTS,
     only: list[int] | None = None,
     checkpoint: Path | None = None,
@@ -176,18 +182,20 @@ def look_pack(
         shard = json.loads((pack_dir / "gallery" / f"top-{fid % shards:03d}.json").read_text(encoding="utf-8"))
         rows = shard.get(str(fid), [])
         counts: dict[str, int] = {}
-        for i, row in enumerate(rows):
+        avg = np.zeros(len(words))
+        for row in rows:
             x, y, side = _square_of(base64.b64decode(row["map"]), grid, grid)
             rgb = _crop(pack_dir / row["file"], x, y, side, grid, size)
             pixels = ((rgb.astype(np.float32) / 255 - mean) / std).transpose(2, 0, 1)[None]
             hidden = front.run(None, {"pixel_values": pixels})[0]
             e = head.run(["embed"], {"hidden": hidden, "u": np.zeros((1, table.shape[1]), np.float32)})[0][0]
-            word = words[int(np.argmax(scale * table @ (e / np.linalg.norm(e))))]
+            logits = scale * table @ (e / np.linalg.norm(e))
+            p = np.exp(logits - logits.max())
+            avg += p / p.sum() / len(rows)
+            word = words[int(np.argmax(logits))]
             counts[word] = counts.get(word, 0) + 1
-            # Stop once no word can reach half of the pictures.
-            if 2 * (max(counts.values()) + len(rows) - i - 1) < len(rows):
-                break
-        return {"id": fid, "n": len(rows), "votes": counts}
+        top = {words[i]: round(float(avg[i]), 4) for i in np.argsort(-avg)[:5]}
+        return {"id": fid, "n": len(rows), "votes": counts, "mean": top}
 
     feat_path = pack_dir / files["features"]
     features = json.loads(feat_path.read_text(encoding="utf-8"))
@@ -210,11 +218,12 @@ def look_pack(
         if row is None:
             continue
         f.pop("looks", None)
-        if row["n"] >= least and row["votes"]:
-            word, count = max(row["votes"].items(), key=lambda kv: kv[1])
-            if 2 * count >= row["n"]:
-                f["looks"] = word
-                named += 1
+        f.pop("looks_share", None)
+        word = pick(row)
+        if row["n"] >= least and word:
+            f["looks"] = word
+            f["looks_share"] = round(row["votes"][word] / row["n"], 2)
+            named += 1
     feat_path.write_text(json.dumps(features, separators=(",", ":")) + "\n", encoding="utf-8")
     pack.setdefault("digests", {})["features"] = hashlib.sha256(feat_path.read_bytes()).hexdigest()[:16]
     pack_path.write_text(json.dumps(pack, indent=2) + "\n", encoding="utf-8")

@@ -486,15 +486,16 @@ function setSpot(t, pinned = ui.pinned) {
 function wireStage() {
   const stage = $("stage");
   const inside = () => ui.view === "inside" && ui.feature == null && ui.state && !ui.cam;
+  const onTag = (e) => e.target.closest?.(".credit-tag");
   stage.addEventListener("pointermove", (e) => {
-    if (e.pointerType !== "mouse" || ui.pinned || !inside()) return;
+    if (e.pointerType !== "mouse" || ui.pinned || !inside() || onTag(e)) return;
     setSpot(patchAt(e), false);
   });
   stage.addEventListener("pointerleave", (e) => {
     if (e.pointerType === "mouse" && !ui.pinned && inside()) setSpot(null, false);
   });
   stage.addEventListener("click", (e) => {
-    if (!inside()) return;
+    if (!inside() || onTag(e)) return;
     const t = patchAt(e);
     if (ui.pinned && ui.spot === t) setSpot(null, false);
     else setSpot(t, true);
@@ -550,7 +551,6 @@ function activeView() {
   const spot = ui.spot != null;
   const list = spot ? spotList(ui.spot) : ui.active.slice(0, ui.more ? 3 * N_ACTIVE : N_ACTIVE);
   const top = spot ? 1 : list[0]?.score || 1;
-  const named = fitsHere;
   const rows = list.map((r) =>
     el(
       "button",
@@ -571,7 +571,7 @@ function activeView() {
       el(
         "span",
         { class: "lit-mid" },
-        el("span", { class: named(r.id) ? "fname" : "fname unnamed" }, named(r.id) ? engine.features[r.id].name : `#${r.id}`),
+        nameCell(r.id),
         el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.min(100, Math.round((r.score / top) * 100)))}%` })),
       ),
       previewsOf(r.id),
@@ -825,14 +825,19 @@ async function runOn({ keepControl = false } = {}) {
 }
 
 // A switch's title, everywhere on the page: what it fires on in the gallery photos (`looks`, ii
-// look-live), else the word turning it up makes the model say when that word fits the
-// picture (`name`, see fitsHere), else its number.
+// look-live, a best guess from its top photos), else its number.
 function title(id) {
   const f = engine.features[id] || {};
-  const text = f.looks || (fitsHere(id) ? f.name : null);
+  const text = f.looks;
   return text ? text[0].toUpperCase() + text.slice(1) : `Switch #${id}`;
 }
 const fname = title;
+
+// A switch in a list: its label, and its number in small grey type, the same on every row.
+function nameCell(id) {
+  const looks = engine.features[id]?.looks;
+  return el("span", { class: looks ? "fname" : "fname unnamed" }, looks || `#${id}`, looks ? el("small", { class: "fnum" }, ` #${id}`) : null);
+}
 // The same inside a sentence: “dog face”, or #2290.
 function switchName(id) {
   const t = title(id);
@@ -1525,8 +1530,6 @@ function whyView(word) {
   // A switch's name is the word turning it up makes the model say on other pictures. Beside a
   // picture it is named only when that word is among what it might call this picture, so a
   // "camera" switch on a teddy bear's eye does not read as a camera in the picture.
-  const near = new Set([...seen.prob.keys()].sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, 20).map((w) => engine.vocab[w]));
-  const fits = (id) => engine.features[id]?.name && near.has(engine.features[id].name);
   const list = reasons();
   const top = list[0]?.score || 1; // bars against the first, as in the list of what lights up
   const allOff = list.length && list.every((r) => ui.off.has(r.id));
@@ -1562,7 +1565,7 @@ function whyView(word) {
           el(
             "button",
             { class: "fname-btn lit-mid", type: "button", onclick: () => openFeature(r.id) },
-            el("span", { class: fits(r.id) ? "fname" : "fname unnamed" }, fits(r.id) ? engine.features[r.id].name : `#${r.id}`),
+            nameCell(r.id),
             el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / top) * 100))}%` })),
           ),
           previewsOf(r.id),

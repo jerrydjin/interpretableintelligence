@@ -1601,7 +1601,7 @@ def gallery_live_cmd(
 @app.command("look-live")
 def look_live_cmd(
     pack: Annotated[Path, typer.Argument(help="A words pack with a gallery (ii gallery-live), e.g. demo-site/live/packs/clip-b16-words.")],
-    least: Annotated[int, typer.Option("--least", min=1, help="Name a feature only if it has at least this many gallery pictures.")] = 4,
+    least: Annotated[int, typer.Option("--least", min=1, help="Label a feature only if it has at least this many gallery pictures.")] = 3,
     checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="JSON-lines file of votes so far; read first and appended to, to resume.")] = None,
 ) -> None:
     """Name each feature of a words pack by what it fires on: crops of its gallery pictures vote for a word (features.json `looks`)."""

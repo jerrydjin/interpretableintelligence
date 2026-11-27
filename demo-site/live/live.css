@@ -416,3 +416,19 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 .more { margin: 6px 0 0; }
 .view .back.more { margin: 6px 0 0; }
 .chips.pills.others { align-items: center; gap: 8px; } .chips.pills.others .cap { margin-right: 4px; }
+/* The fine print folds away under one quiet line. */
+.see .how { margin-top: 32px; padding-top: 12px; }
+.about summary { cursor: pointer; color: var(--ink-3); list-style: none; }
+.about summary::-webkit-details-marker { display: none; }
+.about summary::after { content: " +"; }
+.about[open] summary::after { content: " −"; }
+.about summary:hover { color: var(--ink-2); }
+.about p { margin: 8px 0 0; max-width: 90ch; }
+/* The picture's credit: a quiet tag in its corner that opens on a click. */
+.credit-tag { position: absolute; right: 10px; bottom: 10px; z-index: 3; max-width: calc(100% - 20px); display: flex; flex-direction: column; align-items: flex-end; font-size: 12px; }
+.credit-tag:has(#credit:empty) { display: none; }
+.credit-tag summary { list-style: none; cursor: pointer; padding: 3px 9px; border-radius: 999px; background: rgb(0 0 0 / 0.45); color: #fff; opacity: 0.75; }
+.credit-tag summary::-webkit-details-marker { display: none; }
+.credit-tag summary:hover, .credit-tag[open] summary { opacity: 1; }
+.credit-tag #credit { order: -1; margin-bottom: 6px; padding: 8px 10px; border-radius: 10px; background: rgb(0 0 0 / 0.7); color: #fff; line-height: 1.4; overflow-wrap: anywhere; }
+.fname .fnum { margin-left: 6px; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
