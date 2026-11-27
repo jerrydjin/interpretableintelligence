@@ -1598,6 +1598,23 @@ def gallery_live_cmd(
     typer.echo(f"read {out['read']} pictures; {out['features']} of {out['of']} features have some, from {out['pictures']} pictures kept")
 
 
+@app.command("look-live")
+def look_live_cmd(
+    pack: Annotated[Path, typer.Argument(help="A words pack with a gallery (ii gallery-live), e.g. demo-site/live/packs/clip-b16-words.")],
+    least: Annotated[int, typer.Option("--least", min=1, help="Name a feature only if it has at least this many gallery pictures.")] = 4,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="JSON-lines file of votes so far; read first and appended to, to resume.")] = None,
+) -> None:
+    """Name each feature of a words pack by what it fires on: crops of its gallery pictures vote for a word (features.json `looks`)."""
+    from interpretableintelligence.live_looks import look_pack
+
+    try:
+        out = look_pack(pack, least=least, checkpoint=checkpoint, log=typer.echo)
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"named {out['named']} of {out['read']} features")
+
+
 @app.command("bake-live")
 def bake_live_cmd(
     pack: Annotated[Path, typer.Argument(help="A words pack inside the playground folder, e.g. demo-site/live/packs/clip-b16-words.")],

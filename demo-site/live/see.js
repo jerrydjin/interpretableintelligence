@@ -825,7 +825,7 @@ async function runOn({ keepControl = false } = {}) {
 }
 
 // A switch's title, everywhere on the page: what it fires on in the gallery photos (`looks`, ii
-// gallery-live --names), else the word turning it up makes the model say when that word fits the
+// look-live), else the word turning it up makes the model say when that word fits the
 // picture (`name`, see fitsHere), else its number.
 function title(id) {
   const f = engine.features[id] || {};
