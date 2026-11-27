@@ -378,3 +378,24 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 .sw-name + .examples .cap { margin-top: 12px; }
 .examples + .says { margin-top: 12px; }
 @media (max-width: 520px) { .wrow { grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) 6.2rem; gap: 10px; } }
+/* The panel's own padding is the only space above and below its content, the same on every side. */
+.see .panel { padding: 22px; }
+.see #panel-body > .view { margin-top: 0; }
+.see #panel-body > .view > :last-child { margin-bottom: 0; }
+
+/* No blue: words and controls in the site's ink, activations in ember. */
+.see input[type="range"] { accent-color: var(--ink); }
+.see .wbar .now { background: var(--ink-2); }
+.see .curve-svg .now-line { stroke: var(--ink-3); }
+/* A word's jump: hollow dot where it was, filled where it is, the jump between them. */
+.wtrack { position: relative; height: 12px; }
+.wtrack::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 2px; border-radius: 999px; background: var(--well); }
+.wtrack .jump { position: absolute; top: 4px; height: 4px; border-radius: 999px; background: var(--line-2); }
+.wtrack.up .jump { background: var(--signal); }
+.wtrack .dot { position: absolute; top: 1px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; box-sizing: border-box; }
+.wtrack .dot.now { background: var(--ink); }
+.wtrack .dot.was { background: var(--sheet); border: 1.5px solid var(--ink-3); }
+.wtrack.up .dot.now { background: var(--signal); }
+.wpct small { font-size: 11px; margin-left: 2px; }
+.wpct small.up { color: var(--signal); }
+.wpct small.down { color: var(--ink-3); }

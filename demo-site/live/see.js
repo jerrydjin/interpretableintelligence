@@ -604,7 +604,7 @@ function fitsHere(id) {
   return [...seen.prob.keys()].sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, 20).some((w) => engine.vocab[w] === name);
 }
 
-const litName = (id) => (fitsHere(id) ? `“${engine.features[id].name}”` : `#${id}`);
+const litName = (id) => switchName(id);
 
 // What it calls the picture, in a line: tap a word to see which switches make it say that.
 function seenLine() {
@@ -824,13 +824,20 @@ async function runOn({ keepControl = false } = {}) {
   computeCurve();
 }
 
-// A feature's name (the word writing it in makes the model see, ii name-live), else its number.
-function fname(id) {
-  return engine.features[id]?.name || `Switch ${id}`;
+// A switch's title, everywhere on the page: what it fires on in the gallery photos (`looks`, ii
+// gallery-live --names), else the word turning it up makes the model say when that word fits the
+// picture (`name`, see fitsHere), else its number.
+function title(id) {
+  const f = engine.features[id] || {};
+  const text = f.looks || (fitsHere(id) ? f.name : null);
+  return text ? text[0].toUpperCase() + text.slice(1) : `Switch #${id}`;
 }
-
-// “kitten”, or #3880 for a switch with no name.
-const switchName = (id) => (engine.features[id]?.name ? `“${engine.features[id].name}”` : `#${id}`);
+const fname = title;
+// The same inside a sentence: “dog face”, or #2290.
+function switchName(id) {
+  const t = title(id);
+  return t.startsWith("Switch #") ? `#${id}` : `“${t.toLowerCase()}”`;
+}
 
 function reasons() {
   return ui.why ? ui.why.ranked.filter((r) => r.score > 0 && !ui.background.has(r.id)).slice(0, N_WHY) : [];
@@ -1059,7 +1066,7 @@ function drawHeat() {
     const peak = engine.features[on]?.max || 1;
     const lit = engine.featureMap(ui.state, on).map((v) => v + ui.push * peak);
     paintLights(lit, 3 * peak);
-    key.replaceChildren(el("span", { class: "swatch ember" }), ui.push ? `The ${switchName(on)} switch, turned up ×${ui.push} everywhere` : `Where the ${switchName(on)} switch lights up by itself`);
+    key.replaceChildren(el("span", { class: "swatch ember" }), ui.push ? `${switchName(on)}, turned up ×${ui.push} everywhere` : `Where ${switchName(on)} lights up by itself`);
   } else if (ui.view === "inside") {
     // The switch pointed at in the list, else (with no spot) the first one, so the picture is lit.
     const lit = ui.hover ?? (ui.spot == null ? ui.active?.[0]?.id : null);
@@ -1121,8 +1128,8 @@ function renderPanel() {
   body.replaceChildren(ui.feature != null ? featureView() : ui.view === "inside" ? insideView() : mainView());
 }
 
-function wordList(seen, before = null, { pick = true } = {}) {
-  const order = [...seen.prob.keys()].sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, N_WORDS);
+function wordList(seen, before = null, { pick = true, skip = null } = {}) {
+  const order = [...seen.prob.keys()].filter((w) => w !== skip).sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, N_WORDS);
   if (pick && ui.word != null && !order.includes(ui.word)) order.push(ui.word);
   return el(
     "div",
@@ -1140,13 +1147,23 @@ function wordList(seen, before = null, { pick = true } = {}) {
           onclick: pick ? () => explain(w) : null,
         },
         el("span", { class: "wname" }, engine.vocab[w]),
+        // Without an edit, a bar. With one, where it was (hollow) and where it is now (filled),
+        // joined by the jump: ember when the edit raised it, grey when it lowered it.
+        was == null
+          ? el("span", { class: "wbar" }, el("span", { class: "now", style: `width:${Math.max(1, p * 100)}%` }))
+          : el(
+              "span",
+              { class: `wtrack${moved ? (p > was ? " up" : " down") : ""}` },
+              moved ? el("span", { class: "jump", style: `left:${Math.min(was, p) * 100}%;width:${Math.abs(p - was) * 100}%` }) : null,
+              moved ? el("span", { class: "dot was", style: `left:${was * 100}%` }) : null,
+              el("span", { class: "dot now", style: `left:${p * 100}%` }),
+            ),
         el(
           "span",
-          { class: "wbar" },
-          moved ? el("span", { class: "was", style: `width:${Math.max(1, was * 100)}%` }) : null,
-          el("span", { class: "now", style: `width:${Math.max(1, p * 100)}%` }),
+          { class: "wpct" },
+          pct(p),
+          moved ? el("small", { class: p > was ? "up" : "down" }, ` ${p > was ? "+" : "−"}${Math.round(Math.abs(p - was) * 100)}`) : null,
         ),
-        el("span", { class: "wpct" }, moved ? `${pct(was)} → ${pct(p)}` : pct(p)),
       );
     }),
   );
@@ -1214,23 +1231,23 @@ function mainView() {
 
 // Where a switch's card goes back to, named the way that screen names itself.
 function backTo() {
-  if (ui.view === "inside") return "What lights up inside";
+  if (ui.view === "inside") return "All switches";
   const word = engine.vocab[ui.word];
   return ui.toward ? `Make it see “${word}”` : `Why it calls this “${word}”`;
 }
 
 function backButton() {
-  return el("button", { class: "back", type: "button", "data-testid": "back", onclick: backToInside }, "← What lights up inside");
+  return el("button", { class: "back", type: "button", "data-testid": "back", onclick: backToInside }, "← All switches");
 }
 
 // One way to show every experiment's answer: the chance it calls the picture a word, before and
 // after the edit, with the random control beside it. Used by make it see, switch off and a
 // switch's own card, so the three read the same.
-function beforeAfter({ word, before, after, wasLabel, nowLabel, control = null, controlLabel = "A random switch instead", testid = null, extra = [] }) {
+function beforeAfter({ word, before, after, wasLabel, nowLabel, control = null, controlLabel = "A random switch instead", testid = null, extra = [], cap = null }) {
   return el(
     "div",
     { class: "answer", id: testid === "boost" ? "answer" : null, "data-testid": testid },
-    el("p", { class: "cap" }, `Chance it calls this “${word}”`),
+    el("p", { class: "cap" }, cap || `Chance it calls this “${word}”`),
     el(
       "div",
       { class: "anum" },
@@ -1262,8 +1279,9 @@ function answerCard() {
     nowLabel: ui.push ? `turned up ×${ui.push}` : "as it is",
     control: control?.ids.length ? control.seen.prob[w] : null,
     testid: "boost",
+    cap: "Chance it says so", // the word is in the title right above
     extra: [
-      el("p", { class: `atop${wins ? " wins" : ""}` }, wins ? `Now it calls it “${word}”.` : `It still calls it “${engine.vocab[top]}”.`),
+      wins ? null : el("p", { class: "atop" }, `It still calls it “${engine.vocab[top]}”.`),
       !wins && after < 0.01 && ui.push === 2 ? el("p", { class: "atop" }, "Not enough to change its mind here. Try another switch or picture.") : null,
     ],
   });
@@ -1310,7 +1328,7 @@ function fillCurve(box) {
   );
   const series = [
     [c.ctl, "ctl", "random"],
-    [c.on, "on", engine.features[[...ui.on][0]]?.name || `#${[...ui.on][0]}`],
+    [c.on, "on", "this switch"],
   ];
   const ends = [];
   for (const [m, cls, label] of series) {
@@ -1324,7 +1342,8 @@ function fillCurve(box) {
   // The names sit at the right end, the switch's above its line, the random one's below unless
   // that would leave the chart.
   const [ctl, on] = ends;
-  on.y = Math.max(T + 2, on.y - 7);
+  // Near the top there is no room above the line: the name goes under it.
+  on.y = on.y - 7 >= T + 4 ? on.y - 7 : on.y + 15;
   ctl.y = ctl.y + 15 <= H ? ctl.y + 15 : ctl.y - 7;
   if (Math.abs(on.y - ctl.y) < 13) on.y = Math.max(T + 2, ctl.y - 14);
   for (const e of ends) root.append(svg("text", { x: e.x, y: e.y, class: `lab ${e.cls}`, "text-anchor": "end" }, e.text));
@@ -1346,9 +1365,8 @@ function switchView(word) {
     el(
       "div",
       { class: "sw section", "data-feature": id },
-      el("h3", { class: "sw-name" }, `The ${switchName(id)} switch`),
+      el("h3", { class: "sw-name" }, title(id)),
       el("div", { class: "examples", id: "examples", "data-feature": id }, examplesView(id)),
-      saysView(id),
       el("p", { class: "row-actions" }, el("button", { class: "back", type: "button", onclick: () => openFeature(id) }, "More about this switch →")),
     ),
     others.length
@@ -1599,13 +1617,14 @@ function featureView() {
       },
       `← ${backTo()}`,
     ),
-    el("h2", { class: "sw-name" }, fitsHere(id) ? `The “${engine.features[id].name}” switch` : `Switch #${id}`),
+    el("h2", { class: "sw-name" }, title(id)),
+    el("p", { class: "lit-note" }, `One of the ${engine.pack.sae.n_features.toLocaleString("en-GB")} patterns the model picks up on${title(id).startsWith("Switch #") ? "" : `, #${id}`}`),
     el("div", { class: "examples", id: "examples", "data-feature": id, "data-n": N_TOP }, examplesView(id, N_TOP)),
     saysView(id),
     el(
       "div",
       { class: "section" },
-      el("p", { class: "cap" }, "Turn it up on this picture"),
+      el("p", { class: "cap" }, "Turn this switch up on your picture"),
       strengthSlider(ui.strength.add, (v) => (ui.strength.add = v), () => runDetail(), "detail-strength"),
       el("div", { id: "detail-words" }, detailView()),
     ),
@@ -1634,7 +1653,7 @@ function detailView() {
       testid: "detail",
       extra: [noMore ? el("p", { class: "atop" }, "This switch does no more than a random one here.") : null],
     }),
-    wordList(after, before, { pick: false }),
+    wordList(after, before, { pick: false, skip: w }),
   ];
 }
 
