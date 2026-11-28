@@ -212,10 +212,10 @@ def _write_home(path: Path, summary: dict, run: dict) -> None:
       <div>
         <h1>Find the switch inside a model.</h1>
         <p class="lede">One of {flip["n_features"]:,} switches inside a vision model makes it see “{word}” in a robot's workspace. Random switches do not. Try it on your own picture and word.</p>
-        <p class="actions"><a class="button" href="/live/" data-testid="cta">Find a switch</a></p>
+        <p class="actions"><a class="button" href="/live/" data-testid="cta">Look inside</a></p>
       </div>
       <figure class="stage">
-        <a href="/live/" data-testid="hero-picture"><img src="{picture}" alt="A robot arm at a table, from the playground" class="stage-picture"></a>
+        <a href="/live/#p={HERO_SAMPLE}&amp;w={word}" data-testid="hero-picture"><img src="{picture}" alt="A robot arm at a table, from the playground" class="stage-picture"></a>
         <figcaption class="hero-flip" data-testid="hero-flip"><span class="hero-q">Chance it calls this “{word}”</span>{cols}</figcaption>
       </figure>
     </section>

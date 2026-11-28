@@ -256,6 +256,11 @@ def test_bake_live_saves_the_pages_first_answer(words_run, tmp_path):
         assert abs(sum(rec["prob"].values()) - 1) < 0.05  # the 5 words, all kept
         assert set(rec["maps"]) == {str(i) for i, _ in rec["why"]}
         assert sorted(rec["off"]["ids"]) == sorted(i for i, _ in rec["why"])
+        # What lights up inside, which the page opens on: switches by how much of the picture they
+        # cover, strongest first, each with its map (here or among the why maps).
+        scores = [score for _, score in rec["active"]["ids"]]
+        assert scores and scores == sorted(scores, reverse=True) and min(scores) > 0
+        assert {i for i, _ in rec["active"]["ids"]} <= {int(k) for k in rec["active"]["maps"]} | {int(k) for k in rec["maps"]}
         # The opening move: the switch for the pack's last word ("cup"), with a random switch beside it.
         flip = rec.get("flip")
         if flip:
@@ -292,13 +297,32 @@ def test_bake_live_saves_the_pages_first_answer(words_run, tmp_path):
             tab.on("pageerror", lambda exc: errors.append(str(exc)))
             tab.goto(f"http://127.0.0.1:{httpd.server_address[1]}/live/index.html?cpu&pack=packs/tiny/")
             tab.wait_for_function("() => document.querySelector('[data-testid=see-input]') && window.__ii.ui.live && !window.__ii.ui.busy && !window.__ii.ui.state.baked", timeout=180_000)
-            opened = tab.evaluate("() => ({ word: window.__ii.ui.word, on: [...window.__ii.ui.on], typed: document.querySelector('[data-testid=see-input]').value })")
+            opened = tab.evaluate(
+                "() => ({ view: window.__ii.ui.view, word: window.__ii.ui.word, rows: document.querySelectorAll('[data-testid=active] .frow').length })"
+            )
+            # Point at a spot: the list becomes the switches on there.
+            box = tab.locator("#stage").bounding_box()
+            tab.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            tab.wait_for_function("() => window.__ii.ui.spot != null")
+            spot = tab.inner_text("[data-testid=active] h2")
+            # Make it see the last word: the switch is found and turned on beside a random one.
+            top = tab.evaluate("() => { const p = window.__ii.ui.state.seen.prob; return p.indexOf(Math.max(...p)); }")
+            target = next(i for i in range(len(WORDS) - 1, -1, -1) if i != top)
+            tab.fill("[data-testid=see-input]", WORDS[target])
+            tab.dispatch_event("[data-testid=see-input]", "change")
+            tab.wait_for_function("() => window.__ii.ui.boost && window.__ii.ui.boostControl && !window.__ii.ui.busy", timeout=120_000)
+            made = tab.evaluate("() => ({ word: window.__ii.ui.word, on: [...window.__ii.ui.on], view: window.__ii.ui.view })")
+            tab.click("[data-testid=back]")
+            back = tab.evaluate("() => ({ view: window.__ii.ui.view, word: window.__ii.ui.word, on: window.__ii.ui.on.size })")
             browser.close()
     finally:
         httpd.shutdown()
         httpd.server_close()
     assert not errors, errors
-    assert opened["word"] == len(WORDS) - 1 and opened["typed"] == WORDS[-1]
+    assert opened == {"view": "inside", "word": None, "rows": opened["rows"]} and opened["rows"] > 0
+    assert spot == "Lit up at this spot"
+    assert made["view"] == "word" and made["word"] == target and len(made["on"]) == 1
+    assert back == {"view": "inside", "word": None, "on": 0}
 
 
 def test_words_pack_reads_any_word(words_run):
@@ -355,3 +379,76 @@ def test_page_tokenizer_matches_clip_tokenizer(tmp_path):
     )
     got = json.loads(subprocess.run([node, "--input-type=module", "-e", program], check=True, capture_output=True, text=True).stdout)
     assert got == want
+
+
+def test_gallery_live_keeps_each_features_strongest_pictures(words_run, tmp_path):
+    """ii gallery-live reads a folder through the pack's own graphs and keeps, per feature, where it fires most."""
+    import base64
+    import shutil
+
+    pytest.importorskip("onnxruntime")
+    from interpretableintelligence.live import encode_jpeg
+
+    pack = tmp_path / "pack"
+    shutil.copytree(words_run["pack"], pack)
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    rng = np.random.default_rng(1)
+    for i in range(6):
+        (photos / f"img{i}.jpg").write_bytes(encode_jpeg(rng.integers(0, 255, size=(48, 40, 3), dtype=np.uint8)))
+    (tmp_path / "credits.json").write_text(json.dumps({"img2": "Photo by someone, CC BY 2.0"}), encoding="utf-8")
+    result = CliRunner().invoke(
+        app, ["gallery-live", str(pack), "--images", str(photos), "--credits", str(tmp_path / "credits.json"), "--per-feature", "9", "--min-frac", "0"]
+    )
+    assert result.exit_code == 0, result.output
+    meta = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+    assert meta["files"]["gallery"] == "gallery/index.json" and meta["digests"]["gallery"]
+    index = json.loads((pack / "gallery" / "index.json").read_text(encoding="utf-8"))
+    assert index["read"] == 6 + len(meta["samples"])
+    seen, files, credited = 0, set(), False
+    for s in range(index["shards"]):
+        shard = json.loads((pack / "gallery" / f"top-{s:03d}.json").read_text(encoding="utf-8"))
+        for fid, rows in shard.items():
+            assert int(fid) % index["shards"] == s and 0 < len(rows) <= 9
+            peaks = [row["peak"] for row in rows]
+            assert min(peaks) > 0
+            for row in rows:
+                assert (pack / row["file"]).is_file()
+                files.add(row["file"])
+                credited |= row.get("credit") == "Photo by someone, CC BY 2.0"
+                q = np.frombuffer(base64.b64decode(row["map"]), np.uint8)
+                assert q.size == index["grid"] and q.max() == 255
+            seen += 1
+    assert seen > 0 and credited
+    assert len([f for f in files if f.startswith("gallery/")]) == len(list((pack / "gallery").glob("*.jpg"))) <= index["pictures"]
+    # firsts.json: each feature's first pictures in one file, as squares of patches inside the grid.
+    firsts = json.loads((pack / "gallery" / index["firsts"]).read_text(encoding="utf-8"))
+    assert len(firsts["top"]) == seen and set(firsts["pictures"]) <= files
+    side = int(round(index["grid"] ** 0.5))
+    for rows in firsts["top"].values():
+        assert 0 < len(rows) <= 3
+        for pic, x, y, n in rows:
+            assert 0 <= pic < len(firsts["pictures"]) and 0 < n <= side and 0 <= x <= side - n and 0 <= y <= side - n
+    # ii look-live: crops of each feature's gallery pictures vote for a word; the most voted names it.
+    from interpretableintelligence.live_looks import PARTS
+
+    before = meta["digests"].get("features")
+    result = CliRunner().invoke(app, ["look-live", str(pack), "--least", "1", "--checkpoint", str(tmp_path / "votes.jsonl")])
+    assert result.exit_code == 0, result.output
+    vocab = set(json.loads((pack / meta["files"]["vocab"]).read_text(encoding="utf-8"))) | set(PARTS)
+    votes = {}
+    for line in (tmp_path / "votes.jsonl").read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        votes[row["id"]] = row
+    assert len(votes) == len(json.loads((pack / meta["files"]["features"]).read_text(encoding="utf-8")))
+    for f in json.loads((pack / meta["files"]["features"]).read_text(encoding="utf-8")):
+        row = votes[f["id"]]
+        assert sum(row["votes"].values()) == row["n"]
+        if row["n"]:
+            assert f["looks"] in vocab and row["votes"][f["looks"]] == max(row["votes"].values())
+            assert f["looks_share"] == round(row["votes"][f["looks"]] / row["n"], 2)
+        else:
+            assert "looks" not in f
+    assert json.loads((pack / "pack.json").read_text(encoding="utf-8"))["digests"]["features"] != before or not any(
+        "looks" in f for f in json.loads((pack / meta["files"]["features"]).read_text(encoding="utf-8"))
+    )

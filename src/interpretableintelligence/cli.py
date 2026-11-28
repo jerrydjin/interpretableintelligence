@@ -1575,6 +1575,46 @@ def name_live_cmd(
     typer.echo(f"named {out['named']} of {out['features']} features on {len(out['pictures'])} pictures")
 
 
+@app.command("gallery-live")
+def gallery_live_cmd(
+    pack: Annotated[Path, typer.Argument(help="A pack, e.g. demo-site/live/packs/clip-b16-words.")],
+    images: Annotated[Path, typer.Option("--images", help="A folder of pictures to look through (jpg, png, webp).")],
+    credits: Annotated[
+        Path | None, typer.Option("--credits", help='A JSON file {"<file stem>": "credit line"}; shown on each picture.')
+    ] = None,
+    per_feature: Annotated[int, typer.Option("--per-feature", min=1, help="Pictures kept for each feature.")] = 6,
+    min_frac: Annotated[float, typer.Option("--min-frac", help="Keep a picture only where the feature reaches this share of its training peak.")] = 0.25,
+    limit: Annotated[int | None, typer.Option("--limit", min=1, help="Read only the first N pictures (sorted by name).")] = None,
+) -> None:
+    """Find where each feature of a pack lights up most on a folder of pictures, through the pack's own model (gallery/ in the pack)."""
+    from interpretableintelligence.live_gallery import build_gallery
+
+    try:
+        names = json.loads(credits.read_text(encoding="utf-8")) if credits else None
+        out = build_gallery(pack, images, names, per_feature=per_feature, min_frac=min_frac, limit=limit, log=typer.echo)
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"read {out['read']} pictures; {out['features']} of {out['of']} features have some, from {out['pictures']} pictures kept")
+
+
+@app.command("look-live")
+def look_live_cmd(
+    pack: Annotated[Path, typer.Argument(help="A words pack with a gallery (ii gallery-live), e.g. demo-site/live/packs/clip-b16-words.")],
+    least: Annotated[int, typer.Option("--least", min=1, help="Label a feature only if it has at least this many gallery pictures.")] = 3,
+    checkpoint: Annotated[Path | None, typer.Option("--checkpoint", help="JSON-lines file of votes so far; read first and appended to, to resume.")] = None,
+) -> None:
+    """Name each feature of a words pack by what it fires on: crops of its gallery pictures vote for a word (features.json `looks`)."""
+    from interpretableintelligence.live_looks import look_pack
+
+    try:
+        out = look_pack(pack, least=least, checkpoint=checkpoint, log=typer.echo)
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"named {out['named']} of {out['read']} features")
+
+
 @app.command("bake-live")
 def bake_live_cmd(
     pack: Annotated[Path, typer.Argument(help="A words pack inside the playground folder, e.g. demo-site/live/packs/clip-b16-words.")],

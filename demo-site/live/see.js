@@ -1,17 +1,18 @@
-// ii playground: find the switch. Pick a picture and a word; the page finds the feature inside
-// the model that most makes it see that word, turns it on, and shows the answer before, with the
-// switch, and with a random switch instead. Runs a version 2 pack with the words readout
-// (ii export-live --readout words) through engine.js, in the browser. Exploration only: nothing
-// here can change a feature's badge.
+// ii playground: what lights up inside. Pick a picture; the page shows the switches (SAE features)
+// that light up on it most, which are on at any spot you point at, where each lights up on
+// thousands of other photos, and what turning one up does beside a random switch. Typing a word
+// finds the switch that makes it see that word (find the switch). Runs a version 2 pack with the
+// words readout (ii export-live --readout words) through engine.js, in the browser. Exploration
+// only: nothing here can change a feature's badge.
 
 import { Engine } from "./engine.js";
 
 const PARAMS = new URLSearchParams(location.search);
 const PACK = PARAMS.get("pack") || "packs/clip-b16-words/";
 const EMBER = [232, 88, 42];
-const FIRST = "06-droid-083"; // the picture the page opens on
+const FIRST = "01-coco-14475"; // the picture the page opens on (a teddy bear: its snout and eyes light up switches for snouts and eyes)
 const TARGET = "umbrella"; // the word it opens on (packs without it use their last word)
-const SUGGEST = ["umbrella", "cat", "pizza", "snow", "guitar"]; // one tap each, where on the list
+const SUGGEST = ["snow", "umbrella", "cat", "pizza", "guitar"]; // one tap each, where on the list
 const BAKE = PARAMS.has("bake");
 const N_WORDS = 6; // words shown
 const N_WHY = 6; // features shown for a word
@@ -19,7 +20,12 @@ const N_ON = 3; // features offered to turn on
 const TRY = 5; // switches tried for a word, and random switches tried as the control
 const THUMB = 44; // px, the crop of the picture shown beside each feature
 const PUSHES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]; // the Strength slider's steps (0 is off)
-const N_EXAMPLES = 4; // other pictures shown for a switch
+const N_EXAMPLES = 4; // other pictures shown for a switch beside the answer
+const N_TOP = 6; // photos shown on a switch's own card
+const N_ACTIVE = 8; // switches listed for the picture (and as many more on request)
+const N_SPOT = 8; // switches listed for one spot
+const N_BAKED = 30; // switches baked per example picture, with where they light up
+const PREVIEW = 36; // px, the crops of other photos beside each switch in the list
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
@@ -63,6 +69,11 @@ const ui = {
   boostControl: null, // words with as many random features turned on the same way
   curve: null, // the word's probability at every strength, with the switch and with the random one
   curveBusy: false,
+  view: "inside", // inside: what lights up on the picture | word: make it see a word, or why it sees one
+  spot: null, // the patch pointed at (inside view)
+  pinned: false, // the spot stays after the pointer leaves (a tap)
+  more: false, // the longer list of switches
+  firsts: null, // gallery/firsts.json: a few crops of other photos per switch
 };
 let curveToken = 0;
 window.__ii = { ui };
@@ -83,6 +94,7 @@ async function boot() {
     } catch {
       ui.instant = null;
     }
+    loadFirsts();
     if (ui.instant) {
       showMeta();
       $("work").hidden = false;
@@ -130,7 +142,7 @@ async function boot() {
     if (!(await restoreFromLink())) await showFirst();
   }
   if (BAKE) return bake();
-  encodeGallery();
+  if (!engine.pack.files.gallery) encodeGallery();
 }
 
 function showMeta() {
@@ -145,7 +157,7 @@ function targetWord() {
 
 function showFirst() {
   const pack = engine.pack;
-  return showSample(pack.samples.find((s) => s.clip_id === FIRST) || pack.samples[0], { word: targetWord() });
+  return showSample(pack.samples.find((s) => s.clip_id === FIRST) || pack.samples[0], { word: null });
 }
 
 // The model is ready: work out for real what the page has shown so far (the baked answer, or a
@@ -156,7 +168,7 @@ async function goLive() {
   ui.baked = null;
   if (!ui.cam && ui.picture) {
     const img = ui.picture.sample ? await loadImage(engine.base + sampleOf(ui.picture.sample).file) : ui.picture.img;
-    await showPicture(img, { word: ui.word, off: [...ui.off], on: [...ui.on] });
+    await showPicture(img, { word: ui.view === "word" ? ui.word : null, off: [...ui.off], on: [...ui.on] });
   }
   if (feature != null) await openFeature(feature);
 }
@@ -182,10 +194,12 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 // Show the baked answer for an example picture; false when there is none for this word.
 function showBaked(key, { word = null, off = [], on = [] } = {}) {
   const rec = ui.instant?.samples?.[key];
+  if (word == null) return rec?.active ? showBakedInside(rec) : false;
   if (rec?.flip && word === rec.flip.word && !off.length) return showBakedFlip(rec);
   if (!rec || (word != null && word !== rec.word)) return false;
   ui.baked = rec;
   ui.state = { baked: true, seen: probs(rec.prob), maps: new Map(Object.entries(rec.maps).map(([id, [b64, peak]]) => [Number(id), unq8(b64, peak)])) };
+  ui.view = "word";
   ui.feature = null;
   ui.detail = null;
   ui.word = rec.word;
@@ -202,7 +216,7 @@ function showBakedFlip(rec) {
   const flip = rec.flip;
   ui.baked = null;
   ui.state = { baked: true, seen: probs(flip.prob), maps: new Map() };
-  Object.assign(ui, { feature: null, detail: null, why: null, result: null, control: null, word: flip.word, off: new Set(), on: new Set(flip.on), push: flip.push });
+  Object.assign(ui, { view: "word", feature: null, detail: null, why: null, result: null, control: null, word: flip.word, off: new Set(), on: new Set(flip.on), push: flip.push });
   ui.toward = { ranked: flip.toward.map(([id, score]) => ({ id, score })) };
   ui.tried = null;
   ui.boost = probs(flip.boost);
@@ -216,6 +230,18 @@ function showBakedFlip(rec) {
         ctl: new Map(flip.curve.ctl.map(([s, p]) => [s, probs(p)])),
       }
     : null;
+  render();
+  return true;
+}
+
+// The baked switches that light up most on an example picture, with where each lights up.
+function showBakedInside(rec) {
+  ui.baked = rec;
+  ui.state = { baked: true, seen: probs(rec.prob), maps: new Map() };
+  for (const [id, [b64, peak]] of Object.entries(rec.active.maps)) ui.state.maps.set(Number(id), unq8(b64, peak));
+  for (const [id, [b64, peak]] of Object.entries(rec.maps)) ui.state.maps.set(Number(id), unq8(b64, peak));
+  ui.active = rec.active.ids.map(([id, score]) => ({ id, score }));
+  toInside();
   render();
   return true;
 }
@@ -245,8 +271,10 @@ async function bake() {
   await encodeGallery();
   const shown = new Set(); // switches offered on some picture: their examples go in the file
   for (const sample of engine.pack.samples) {
-    ui.word = null; // each picture's own top word first
-    await showSample(sample);
+    ui.word = null;
+    await showSample(sample, { word: null }); // what lights up inside, first
+    const active = activeList(N_BAKED);
+    await explain(topWord(ui.state.seen)); // then why it sees its own top word
     const word = ui.word;
     const list = reasons();
     const seen = ui.state.seen;
@@ -294,6 +322,10 @@ async function bake() {
         };
       }
     }
+    rec.active = {
+      ids: active.map((r) => [r.id, +r.score.toPrecision(4)]),
+      maps: Object.fromEntries(active.filter((r) => !(r.id in maps)).map((r) => [r.id, q8(engine.featureMap(ui.state, r.id))])),
+    };
     out.samples[sample.clip_id] = rec;
   }
   // Where each offered switch lights up most on the example pictures, so the page shows it at once.
@@ -356,7 +388,7 @@ async function showPicture(img, { word = null, off = [], on = [] } = {}) {
   showPhoto(img);
   if (!ui.live) {
     // Read for real once the model is ready (goLive), with this word and these switches.
-    Object.assign(ui, { state: null, why: null, result: null, control: null, baked: null, feature: null, word, off: new Set(off), on: new Set(on) });
+    Object.assign(ui, { state: null, why: null, result: null, control: null, baked: null, feature: null, word, off: new Set(off), on: new Set(on), view: word == null ? "inside" : "word" });
     return render();
   }
   await busy(async () => {
@@ -377,7 +409,222 @@ async function showPicture(img, { word = null, off = [], on = [] } = {}) {
       word = null;
     }
   }
-  await explain(word ?? ui.word ?? topWord(ui.state.seen), off, on);
+  if (word == null) {
+    ui.active = activeList(N_BAKED);
+    toInside();
+    return render();
+  }
+  await explain(word, off, on);
+}
+
+// ------------------------------------------------------------------ what lights up inside
+
+// Back to what lights up on the picture: no word, nothing turned on or off.
+function toInside() {
+  cancelCurve();
+  Object.assign(ui, { view: "inside", word: null, why: null, toward: null, tried: null, boost: null, boostControl: null, result: null, control: null, feature: null, detail: null, hover: null, spot: null, pinned: false, more: false });
+  ui.off = new Set();
+  ui.on = new Set();
+}
+
+function backToInside() {
+  if (!ui.live && ui.picture?.sample && ui.instant?.samples?.[ui.picture.sample]?.active) return showBakedInside(ui.instant.samples[ui.picture.sample]);
+  if (ui.state && !ui.state.baked) ui.active = activeList(N_BAKED);
+  toInside();
+  render();
+}
+
+// The switches that light up most on the picture: how much of it they cover at their usual top
+// strength (activation summed over the patches, over the feature's training peak). Always-on
+// switches (ui.background) are left out: they carry the whole picture, not what is in it.
+function activeList(n) {
+  const s = ui.state;
+  if (!s || s.baked) return ui.active || [];
+  const out = [];
+  for (let f = 0; f < s.totals.length; f++) {
+    if (s.totals[f] <= 0 || ui.background.has(f)) continue;
+    out.push({ id: f, score: s.totals[f] / (engine.features[f]?.max || 1) });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, n);
+}
+
+// The switches on at one patch, strongest first, as a share of each one's usual top.
+function spotList(t) {
+  const s = ui.state;
+  const out = [];
+  if (s.baked) {
+    for (const [id, map] of s.maps) if (map[t] > 0) out.push({ id, score: map[t] / (engine.features[id]?.max || 1) });
+  } else {
+    const row = s.rows[t];
+    for (let j = 0; j < row.idx.length; j++) {
+      const id = row.idx[j];
+      if (row.val[j] > 0 && !ui.background.has(id)) out.push({ id, score: row.val[j] / (engine.features[id]?.max || 1) });
+    }
+  }
+  const seen = new Set();
+  return out.filter((r) => !seen.has(r.id) && seen.add(r.id)).sort((a, b) => b.score - a.score).slice(0, N_SPOT);
+}
+
+// The patch under a pointer on the picture.
+function patchAt(e) {
+  const r = $("stage").getBoundingClientRect();
+  const x = Math.floor(((e.clientX - r.left) / r.width) * engine.gridW);
+  const y = Math.floor(((e.clientY - r.top) / r.height) * engine.gridH);
+  if (x < 0 || y < 0 || x >= engine.gridW || y >= engine.gridH) return null;
+  return y * engine.gridW + x;
+}
+
+function setSpot(t, pinned = ui.pinned) {
+  if (ui.spot === t && ui.pinned === pinned) return;
+  ui.spot = t;
+  ui.pinned = t != null && pinned;
+  const box = $("active");
+  if (box) box.replaceWith(activeView());
+  drawHeat();
+}
+
+function wireStage() {
+  const stage = $("stage");
+  const inside = () => ui.view === "inside" && ui.feature == null && ui.state && !ui.cam;
+  const onTag = (e) => e.target.closest?.(".credit-tag");
+  stage.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse" || ui.pinned || !inside() || onTag(e)) return;
+    setSpot(patchAt(e), false);
+  });
+  stage.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "mouse" && !ui.pinned && inside()) setSpot(null, false);
+  });
+  stage.addEventListener("click", (e) => {
+    if (!inside() || onTag(e)) return;
+    const t = patchAt(e);
+    if (ui.pinned && ui.spot === t) setSpot(null, false);
+    else setSpot(t, true);
+  });
+}
+
+// A few photos from the gallery where a switch lights up most, cropped to where it does.
+async function loadFirsts() {
+  try {
+    const file = engine.pack.files?.gallery;
+    if (!file) return;
+    const dir = engine.base + file.replace(/[^/]*$/, "");
+    const index = await fetch(engine.base + file).then((r) => r.json());
+    if (!index.firsts) return;
+    ui.firsts = await fetch(dir + index.firsts).then((r) => r.json());
+    ui.firsts.read = index.read;
+    const box = $("active");
+    if (box) box.replaceWith(activeView());
+  } catch {
+    ui.firsts = null;
+  }
+}
+
+const pictureCache = new Map();
+const picture = (src) => {
+  if (!pictureCache.has(src)) pictureCache.set(src, loadImage(src).catch(() => null));
+  return pictureCache.get(src);
+};
+
+function previewsOf(id) {
+  const list = ui.firsts?.top?.[id];
+  if (!list) return null;
+  const dpr = window.devicePixelRatio || 1;
+  return el(
+    "span",
+    { class: "previews", "aria-hidden": "true" },
+    list.map(([pic, x, y, side]) => {
+      const c = el("canvas", { width: PREVIEW * dpr, height: PREVIEW * dpr });
+      picture(engine.base + ui.firsts.pictures[pic]).then((img) => {
+        if (!img) return;
+        const w = img.naturalWidth, h = img.naturalHeight, sq = Math.min(w, h);
+        const px = sq / engine.gridW;
+        c.getContext("2d").drawImage(img, (w - sq) / 2 + x * px, (h - sq) / 2 + y * px, side * px, side * px, 0, 0, c.width, c.height);
+      });
+      return c;
+    }),
+  );
+}
+
+// What lights up on the picture, or at the spot pointed at: each switch with where it is on this
+// picture, where it lights up on other photos, and how strongly.
+function activeView() {
+  const spot = ui.spot != null;
+  const list = spot ? spotList(ui.spot) : ui.active.slice(0, ui.more ? 3 * N_ACTIVE : N_ACTIVE);
+  const top = spot ? 1 : list[0]?.score || 1;
+  const rows = list.map((r) =>
+    el(
+      "button",
+      {
+        class: "frow lit",
+        type: "button",
+        "data-feature": r.id,
+        onclick: () => openFeature(r.id),
+        onmouseenter: () => {
+          ui.hover = r.id;
+          drawHeat();
+        },
+        onmouseleave: () => {
+          ui.hover = null;
+          drawHeat();
+        },
+      },
+      el(
+        "span",
+        { class: "lit-mid" },
+        nameCell(r.id),
+        el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.min(100, Math.round((r.score / top) * 100)))}%` })),
+      ),
+      previewsOf(r.id),
+    ),
+  );
+  return el(
+    "div",
+    { id: "active", "data-testid": "active" },
+    el(
+      "div",
+      { class: "lit-head" },
+      el("h2", { class: "lit-title" }, spot ? "Lit up at this spot" : "Lit up inside"),
+      spot && ui.pinned ? el("button", { class: "back", type: "button", onclick: () => setSpot(null, false) }, "Whole picture") : null,
+    ),
+    spot ? null : el("p", { class: "muted small lit-note" }, `${matchMedia("(hover: hover)").matches ? "Point at" : "Tap"} the picture to see one spot.`),
+    list.length ? el("div", { class: "flist" }, rows) : el("p", { class: "muted" }, "Nothing stands out here."),
+    !spot && !ui.more && ui.active.length > N_ACTIVE
+      ? el("button", { class: "back more", type: "button", onclick: () => ((ui.more = true), $("active").replaceWith(activeView())) }, "Show more")
+      : null,
+  );
+}
+
+// A switch's name is the word turning it up makes the model say on other pictures. Beside a
+// picture it is named only when that word is among the 20 it might call this picture, so a
+// "camera" switch on a teddy bear's snout does not read as a camera in the picture.
+function fitsHere(id) {
+  const name = engine.features[id]?.name;
+  if (!name || !ui.state) return false;
+  const seen = ui.state.seen;
+  return [...seen.prob.keys()].sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, 20).some((w) => engine.vocab[w] === name);
+}
+
+const litName = (id) => switchName(id);
+
+// What it calls the picture, in a line: tap a word to see which switches make it say that.
+function seenLine() {
+  const seen = ui.state.seen;
+  const order = [...seen.prob.keys()].sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, 3);
+  return el(
+    "p",
+    { class: "seen-line", "data-testid": "seen" },
+    el("span", { class: "muted" }, "It calls this "),
+    order.flatMap((w, i) => [i ? el("span", { class: "muted" }, i === order.length - 1 ? " or " : ", ") : null, el("button", { class: "seen-word", type: "button", "data-word": engine.vocab[w], onclick: () => openWord(w) }, engine.vocab[w], el("small", {}, ` ${pct(seen.prob[w])}`))]),
+  );
+}
+
+function openWord(w) {
+  if (!ui.live && ui.picture?.sample && showBaked(ui.picture.sample, { word: w })) return;
+  explain(w);
+}
+
+function insideView() {
+  return el("div", { class: "view" }, seenLine(), activeView(), el("div", { class: "see-more section" }, seeInput()));
 }
 
 async function busy(fn) {
@@ -400,6 +647,10 @@ function topWord(seen) {
 // ------------------------------------------------------------------ the loop: word, why, switch off
 
 async function explain(word, off = [], on = []) {
+  ui.view = "word";
+  ui.spot = null;
+  ui.pinned = false;
+  ui.feature = null;
   ui.word = word;
   ui.off = new Set(off);
   ui.on = new Set(on);
@@ -500,7 +751,7 @@ async function pickSwitch(id) {
   render();
 }
 
-const curveKey = () => JSON.stringify([ui.picture?.sample || "own", ui.word, [...ui.on], ui.boostControl?.ids || []]);
+const curveKey = () => JSON.stringify([ui.picture?.sample || ui.picture?.gallery || "own", ui.word, [...ui.on], ui.boostControl?.ids || []]);
 
 function cancelCurve() {
   curveToken++;
@@ -573,13 +824,25 @@ async function runOn({ keepControl = false } = {}) {
   computeCurve();
 }
 
-// A feature's name (the word writing it in makes the model see, ii name-live), else its number.
-function fname(id) {
-  return engine.features[id]?.name || `Switch ${id}`;
+// A switch's title, everywhere on the page: what it fires on in the gallery photos (`looks`, ii
+// look-live, a best guess from its top photos), else its number.
+function title(id) {
+  const f = engine.features[id] || {};
+  const text = f.looks;
+  return text ? text[0].toUpperCase() + text.slice(1) : `Switch #${id}`;
 }
+const fname = title;
 
-// “kitten”, or #3880 for a switch with no name.
-const switchName = (id) => (engine.features[id]?.name ? `“${engine.features[id].name}”` : `#${id}`);
+// A switch in a list: its label, and its number in small grey type, the same on every row.
+function nameCell(id) {
+  const looks = engine.features[id]?.looks;
+  return el("span", { class: looks ? "fname" : "fname unnamed" }, looks || `#${id}`, looks ? el("small", { class: "fnum" }, ` #${id}`) : null);
+}
+// The same inside a sentence: “dog face”, or #2290.
+function switchName(id) {
+  const t = title(id);
+  return t.startsWith("Switch #") ? `#${id}` : `“${t.toLowerCase()}”`;
+}
 
 function reasons() {
   return ui.why ? ui.why.ranked.filter((r) => r.score > 0 && !ui.background.has(r.id)).slice(0, N_WHY) : [];
@@ -693,8 +956,10 @@ async function openFeature(id) {
     return flash(`Feature ${id} opens as soon as the model is ready.`);
   }
   ui.feature = id;
-  ui.detail = null;
+  ui.detail = ui.detailControl = null;
   ui.hover = null;
+  ui.spot = null;
+  ui.pinned = false;
   render();
   await runDetail();
 }
@@ -702,13 +967,22 @@ async function openFeature(id) {
 async function runDetail() {
   const id = ui.feature;
   if (id == null) return;
-  const seen = await busy(() => engine.see(ui.state, pushEdits([id], ui.strength.add)));
+  const add = ui.strength.add;
+  const ctlId = randomSwitch(id);
+  const [seen, ctl] = await busy(async () => [await engine.see(ui.state, pushEdits([id], add)), add && ctlId != null ? await engine.see(ui.state, pushEdits([ctlId], add)) : null]);
   if (ui.feature !== id) return;
   ui.detail = seen;
+  ui.detailControl = ctl;
   const box = $("detail-words");
-  if (box) box.replaceChildren(wordList(seen, ui.state.seen, { pick: false }));
+  if (box) box.replaceChildren(...[detailView()].flat());
   else renderPanel();
   syncAddress();
+}
+
+// A random switch for the control: any that is not always on, fixed for this switch and picture.
+function randomSwitch(id) {
+  const pool = engine.features.filter((f) => f.id !== id && (f.max || 0) > 0 && !ui.background.has(f.id)).map((f) => f.id);
+  return seeded(pool, 1, hashOf(ui.picture?.sample || ui.picture?.gallery || "own", id, "detail"))[0] ?? null;
 }
 
 // ------------------------------------------------------------------ drawing
@@ -787,20 +1061,31 @@ function drawHeat() {
   }
   const id = ui.hover ?? ui.feature;
   const on = ui.toward && ui.on.size === 1 ? [...ui.on][0] : null;
-  if (id != null) {
-    const peak = engine.features[id]?.max || 1;
-    const add = ui.hover == null ? ui.strength.add : 0;
-    paintLights(engine.featureMap(ui.state, id).map((v) => v + add * peak), 3 * peak);
-    key.replaceChildren(el("span", { class: "swatch ember" }), add ? `The ${switchName(id)} switch, turned up ×${add} everywhere` : `Where the ${switchName(id)} switch lights up by itself`);
+  if (id != null && (ui.feature != null || ui.view !== "inside")) {
+    // One switch: where it lights up on this picture by itself, against its usual top.
+    paintLights(engine.featureMap(ui.state, id), engine.features[id]?.max || 1);
+    key.replaceChildren(el("span", { class: "swatch ember" }), `Where ${ui.toward && ui.feature == null ? switchName(id) : litName(id)} lights up`);
   } else if (on != null) {
     // The switch on this picture: where it already lights up, plus the even glow of turning it
     // up everywhere, brighter as the strength goes up.
     const peak = engine.features[on]?.max || 1;
     const lit = engine.featureMap(ui.state, on).map((v) => v + ui.push * peak);
     paintLights(lit, 3 * peak);
-    key.replaceChildren(el("span", { class: "swatch ember" }), ui.push ? `The ${switchName(on)} switch, turned up ×${ui.push} everywhere` : `Where the ${switchName(on)} switch lights up by itself`);
+    key.replaceChildren(el("span", { class: "swatch ember" }), ui.push ? `${switchName(on)}, turned up ×${ui.push} everywhere` : `Where ${switchName(on)} lights up by itself`);
+  } else if (ui.view === "inside") {
+    // The switch pointed at in the list, else (with no spot) the first one, so the picture is lit.
+    const lit = ui.hover ?? (ui.spot == null ? ui.active?.[0]?.id : null);
+    document.querySelectorAll(".frow.lit").forEach((r) => r.classList.toggle("on", Number(r.dataset.feature) === lit));
+    if (ui.spot != null) paintSpot(ui.spot, ui.hover);
+    else if (lit != null) paintLights(engine.featureMap(ui.state, lit), engine.features[lit]?.max || 1);
+    else paintMap(null);
+    const what = lit != null ? `Where ${litName(lit)} lights up` : ui.spot != null ? (ui.pinned ? "The spot you picked" : "The spot you are pointing at") : null;
+    key.replaceChildren(...(what ? [el("span", { class: "swatch ember" }), what] : []));
   } else if (ui.why && !ui.toward) {
-    paintMap(ui.why.patches, EMBER);
+    // The same lights as everywhere else: where on the picture pushes it towards the word.
+    let top = 0;
+    for (const v of ui.why.patches) if (v > top) top = v;
+    paintLights(ui.why.patches, top || 1);
     key.replaceChildren(el("span", { class: "swatch ember" }), `Where it finds “${engine.vocab[ui.word]}”`);
   } else {
     paintMap(null);
@@ -808,9 +1093,32 @@ function drawHeat() {
   }
 }
 
+// The spot pointed at: a ring round its patch, the rest dimmed; with a switch hovered, its lights.
+function paintSpot(t, id) {
+  const canvas = $("heat");
+  if (id != null) paintLights(engine.featureMap(ui.state, id), engine.features[id]?.max || 1);
+  const g = id != null ? canvas.getContext("2d") : sizeCanvas(canvas);
+  if (id == null) {
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    $("stage").classList.add("mapping");
+  }
+  const cw = canvas.width / engine.gridW;
+  const ch = canvas.height / engine.gridH;
+  const x = (t % engine.gridW) * cw;
+  const y = Math.floor(t / engine.gridW) * ch;
+  if (id == null) {
+    g.fillStyle = "rgba(20,20,19,0.35)";
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    g.clearRect(x, y, cw, ch);
+  }
+  g.lineWidth = Math.max(2, cw * 0.08);
+  g.strokeStyle = "rgba(255,255,255,0.95)";
+  g.strokeRect(x, y, cw, ch);
+}
+
 function render() {
-  drawHeat();
   renderPanel();
+  drawHeat();
   syncAddress();
 }
 
@@ -822,11 +1130,11 @@ function renderPanel() {
     if (!ui.live) body.replaceChildren(el("div", { class: "view" }, el("p", { class: "muted" }, "It reads this picture as soon as the model is ready.")));
     return;
   }
-  body.replaceChildren(ui.feature != null ? featureView() : mainView());
+  body.replaceChildren(ui.feature != null ? featureView() : ui.view === "inside" ? insideView() : mainView());
 }
 
-function wordList(seen, before = null, { pick = true } = {}) {
-  const order = [...seen.prob.keys()].sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, N_WORDS);
+function wordList(seen, before = null, { pick = true, skip = null } = {}) {
+  const order = [...seen.prob.keys()].filter((w) => w !== skip).sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, N_WORDS);
   if (pick && ui.word != null && !order.includes(ui.word)) order.push(ui.word);
   return el(
     "div",
@@ -844,13 +1152,23 @@ function wordList(seen, before = null, { pick = true } = {}) {
           onclick: pick ? () => explain(w) : null,
         },
         el("span", { class: "wname" }, engine.vocab[w]),
+        // Without an edit, a bar. With one, where it was (hollow) and where it is now (filled),
+        // joined by the jump: ember when the edit raised it, grey when it lowered it.
+        was == null
+          ? el("span", { class: "wbar" }, el("span", { class: "now", style: `width:${Math.max(1, p * 100)}%` }))
+          : el(
+              "span",
+              { class: `wtrack${moved ? (p > was ? " up" : " down") : ""}` },
+              moved ? el("span", { class: "jump", style: `left:${Math.min(was, p) * 100}%;width:${Math.abs(p - was) * 100}%` }) : null,
+              moved ? el("span", { class: "dot was", style: `left:${was * 100}%` }) : null,
+              el("span", { class: "dot now", style: `left:${p * 100}%` }),
+            ),
         el(
           "span",
-          { class: "wbar" },
-          moved ? el("span", { class: "was", style: `width:${Math.max(1, was * 100)}%` }) : null,
-          el("span", { class: "now", style: `width:${Math.max(1, p * 100)}%` }),
+          { class: "wpct" },
+          pct(p),
+          moved ? el("small", { class: p > was ? "up" : "down" }, ` ${p > was ? "+" : "−"}${Math.round(Math.abs(p - was) * 100)}`) : null,
         ),
-        el("span", { class: "wpct" }, moved ? `${pct(was)} → ${pct(p)}` : pct(p)),
       );
     }),
   );
@@ -862,8 +1180,9 @@ function seeInput() {
   const input = el("input", {
     type: "search",
     class: "see-input",
+    id: "see-input",
     value: ui.word != null ? engine.vocab[ui.word] : "",
-    placeholder: "a word",
+    placeholder: "Type a word, like umbrella",
     list: "vocab",
     autocomplete: "off",
     "aria-label": "Make it see",
@@ -874,14 +1193,19 @@ function seeInput() {
   return el(
     "div",
     { class: "see-head" },
-    el("label", { class: "see-label" }, el("span", {}, "Make it see"), input, list),
-    chips.length ? el("p", { class: "chips" }, chips.map((w) => el("button", { class: "chip", type: "button", "data-word": w, onclick: () => seeWord(w) }, w))) : null,
+    el("label", { class: "see-label", for: "see-input" }, "Make it see"),
+    el("div", { class: "see-field" }, input, list, el("button", { class: "see-go", type: "button", onclick: () => seeWord(input.value) }, "See")),
+    chips.length ? el("p", { class: "chips pills" }, chips.map((w) => el("button", { class: "chip", type: "button", "data-word": w, onclick: () => seeWord(w) }, w))) : null,
   );
 }
 
 async function seeWord(text) {
   const typed = text.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60);
   if (!typed) return;
+  // Enter, leaving the box and the button can all ask for the same word at once.
+  if (seeWord.last === typed && Date.now() - seeWord.at < 600) return;
+  seeWord.last = typed;
+  seeWord.at = Date.now();
   let w = engine.vocab.indexOf(typed);
   if (w < 0 && engine.readsAnyWord) {
     if (!ui.live || !ui.state?.seen?.embed) return flash("Words off the list work as soon as the model is ready.");
@@ -903,7 +1227,8 @@ async function seeWord(text) {
 function mainView() {
   const word = engine.vocab[ui.word];
   const seen = ui.state.seen;
-  const parts = [seeInput()];
+  const top = ui.why && ui.word === topWord(seen) && !ui.toward;
+  const parts = [backButton(), top ? el("h2", { class: "sw-name why-title" }, `Why it calls this “${word}”`) : seeInput()];
   if (ui.toward) {
     // A word it does not mostly see: the switch, before and after, beside a random switch.
     parts.push(answerCard(), switchView(word));
@@ -915,6 +1240,37 @@ function mainView() {
   return el("div", { class: "view" }, parts);
 }
 
+// Where a switch's card goes back to, named the way that screen names itself.
+function backTo() {
+  if (ui.view === "inside") return "All switches";
+  const word = engine.vocab[ui.word];
+  return ui.toward ? `Make it see “${word}”` : `Why it calls this “${word}”`;
+}
+
+function backButton() {
+  return el("button", { class: "back", type: "button", "data-testid": "back", onclick: backToInside }, "← All switches");
+}
+
+// One way to show every experiment's answer: the chance it calls the picture a word, before and
+// after the edit, with the random control beside it. Used by make it see, switch off and a
+// switch's own card, so the three read the same.
+function beforeAfter({ word, before, after, wasLabel, nowLabel, control = null, controlLabel = "A random switch instead", testid = null, extra = [], cap = null }) {
+  return el(
+    "div",
+    { class: "answer", id: testid === "boost" ? "answer" : null, "data-testid": testid },
+    el("p", { class: "cap" }, cap || `Chance it calls this “${word}”`),
+    el(
+      "div",
+      { class: "anum" },
+      el("span", { class: "was", "data-testid": testid === "boost" ? "flip-before" : null }, pct(before), el("small", {}, wasLabel)),
+      el("span", { class: "arrow", "aria-hidden": "true" }, "→"),
+      el("span", { class: "now", "data-testid": testid === "boost" ? "flip-after" : null }, pct(after), el("small", {}, nowLabel)),
+    ),
+    control != null ? el("p", { class: "actl", "data-testid": testid === "boost" ? "flip-control" : `${testid}-control` }, `${controlLabel}: `, el("b", {}, pct(control))) : null,
+    ...extra,
+  );
+}
+
 // The answer: how likely it says the word before and with the switch on, the random switch
 // beside it, and what it says most.
 function answerCard() {
@@ -922,27 +1278,23 @@ function answerCard() {
   const word = engine.vocab[w];
   const before = ui.state.seen.prob[w];
   const control = ui.boostControl;
-  if (!ui.boost) return el("div", { class: "answer", id: "answer", "data-testid": "boost" }, el("p", { class: "alab" }, `Chance it calls this “${word}”`), el("p", { class: "anum" }, pct(before)), el("p", { class: "muted small" }, ui.live ? "Turning the switch on…" : "Turning the switch on as soon as the model is ready."));
+  if (!ui.boost) return el("div", { class: "answer", id: "answer", "data-testid": "boost" }, el("p", { class: "cap" }, `Chance it calls this “${word}”`), el("div", { class: "anum" }, el("span", { class: "was" }, pct(before))), el("p", { class: "actl" }, ui.live ? "Turning the switch on…" : "Turning the switch on as soon as the model is ready."));
   const after = ui.boost.prob[w];
   const top = topWord(ui.boost);
   const wins = top === w;
-  return el(
-    "div",
-    { class: "answer", id: "answer", "data-testid": "boost" },
-    el("p", { class: "alab" }, `Chance it calls this “${word}”`),
-    el(
-      "div",
-      { class: "anum" },
-      el("span", { class: "was", "data-testid": "flip-before" }, pct(before), el("small", {}, "switch off")),
-      el("span", { class: "arrow", "aria-hidden": "true" }, "→"),
-      el("span", { class: "now", "data-testid": "flip-after" }, pct(after), el("small", {}, ui.push ? `switch on ×${ui.push}` : "switch off")),
-    ),
-    control?.ids.length
-      ? el("p", { class: "actl", "data-testid": "flip-control" }, "A random switch instead: ", el("b", {}, pct(control.seen.prob[w])))
-      : null,
-    el("p", { class: `atop${wins ? " wins" : ""}` }, wins ? `Now it calls it “${word}”.` : `It still calls it “${engine.vocab[top]}”.`),
-    !wins && after < 0.01 && ui.push === 2 ? el("p", { class: "atop" }, "Not enough to change its mind here. Try another switch or picture.") : null,
-  );
+  return beforeAfter({
+    word,
+    before,
+    after,
+    wasLabel: "as it is",
+    nowLabel: ui.push ? `turned up ×${ui.push}` : "as it is",
+    control: control?.ids.length ? control.seen.prob[w] : null,
+    testid: "boost",
+    extra: [
+      wins ? null : el("p", { class: "atop" }, `It still calls it “${engine.vocab[top]}”.`),
+      !wins && after < 0.01 && ui.push === 2 ? el("p", { class: "atop" }, "Not enough to change its mind here. Try another switch or picture.") : null,
+    ],
+  });
 }
 
 // The climb: the word's chance at every strength, for the switch and for the random switch.
@@ -986,7 +1338,7 @@ function fillCurve(box) {
   );
   const series = [
     [c.ctl, "ctl", "random"],
-    [c.on, "on", engine.features[[...ui.on][0]]?.name || `#${[...ui.on][0]}`],
+    [c.on, "on", "this switch"],
   ];
   const ends = [];
   for (const [m, cls, label] of series) {
@@ -1000,7 +1352,8 @@ function fillCurve(box) {
   // The names sit at the right end, the switch's above its line, the random one's below unless
   // that would leave the chart.
   const [ctl, on] = ends;
-  on.y = Math.max(T + 2, on.y - 7);
+  // Near the top there is no room above the line: the name goes under it.
+  on.y = on.y - 7 >= T + 4 ? on.y - 7 : on.y + 15;
   ctl.y = ctl.y + 15 <= H ? ctl.y + 15 : ctl.y - 7;
   if (Math.abs(on.y - ctl.y) < 13) on.y = Math.max(T + 2, ctl.y - 14);
   for (const e of ends) root.append(svg("text", { x: e.x, y: e.y, class: `lab ${e.cls}`, "text-anchor": "end" }, e.text));
@@ -1021,16 +1374,16 @@ function switchView(word) {
     strengthSlider(),
     el(
       "div",
-      { class: "sw", "data-feature": id },
-      el("h3", { class: "sw-name" }, `The ${switchName(id)} switch`),
-      saysView(id),
+      { class: "sw section", "data-feature": id },
+      el("h3", { class: "sw-name" }, title(id)),
       el("div", { class: "examples", id: "examples", "data-feature": id }, examplesView(id)),
+      el("p", { class: "row-actions" }, el("button", { class: "back", type: "button", onclick: () => openFeature(id) }, "More about this switch →")),
     ),
     others.length
       ? el(
           "p",
-          { class: "chips others" },
-          el("span", { class: "muted" }, "Other switches:"),
+          { class: "chips pills others" },
+          el("span", { class: "cap" }, "Other switches"),
           others.map((r) => el("button", { class: "chip", type: "button", "data-feature": r.id, onclick: () => pickSwitch(r.id) }, fname(r.id))),
         )
       : null,
@@ -1039,14 +1392,17 @@ function switchView(word) {
 }
 
 // Strength, under the chart and as wide as it: from off to twice the switch's usual top.
-function strengthSlider() {
-  const out = el("output", {}, ui.push ? `×${ui.push}` : "off");
-  const input = el("input", { type: "range", min: 0, max: 2, step: 0.25, value: ui.push, "aria-label": "Strength", "data-testid": "strength" });
+// Used for every strength in the playground (make it see, a switch's own card), so they look and
+// move the same. `apply(v)` runs after each move, one at a time; the last move always runs.
+function strengthSlider(value = ui.push, set = (v) => (ui.push = v), apply = setPush, testid = "strength") {
+  const out = el("output", {}, value ? `×${value}` : "off");
+  const input = el("input", { type: "range", min: 0, max: 2, step: 0.25, value, "aria-label": "Strength", "data-testid": testid });
   let queued = false;
   let running = false;
   input.addEventListener("input", async () => {
-    ui.push = Number(input.value);
-    out.textContent = ui.push ? `×${ui.push}` : "off";
+    const v = Number(input.value);
+    set(v);
+    out.textContent = v ? `×${v}` : "off";
     if (running) {
       queued = true;
       return;
@@ -1054,7 +1410,7 @@ function strengthSlider() {
     running = true;
     do {
       queued = false;
-      await setPush(ui.push);
+      await apply(v);
     } while (queued);
     running = false;
   });
@@ -1078,39 +1434,94 @@ function saysView(id) {
   );
 }
 
-// Where a switch lights up most on the other example pictures, by itself (at least a quarter of
-// its strongest in training, so a faint flicker does not pass for what it stands for).
-function examplesView(id) {
-  const here = ui.picture?.sample;
-  const live = ui.gallery.length === engine.pack.samples.length;
-  let list;
-  if (live) list = examplesFor(id).filter((g) => g.sample.clip_id !== here).map((g) => ({ key: g.sample.clip_id, map: engine.featureMap(g, id) }));
-  else {
-    const baked = ui.instant?.examples?.[id];
-    if (!baked) return null;
-    list = baked.filter(([key]) => key !== here).map(([key, b64, peak]) => ({ key, map: unq8(b64, peak) }));
-  }
+// Where a switch lights up most by itself (at least a quarter of its strongest in training, so a
+// faint flicker does not pass for what it stands for): from the pack's gallery of a few thousand
+// photos (ii gallery-live) when it has one, else from the example pictures.
+function examplesView(id, n = N_EXAMPLES) {
   const peak = engine.features[id]?.max || 1;
-  list = list.filter(({ map }) => Math.max(...map) >= 0.25 * peak).slice(0, N_EXAMPLES);
+  let list;
+  if (engine.pack.files?.gallery) {
+    list = gallery.tops.get(id);
+    if (!list) {
+      galleryTops(id).then(() => {
+        const box = document.querySelector(`.examples[data-feature="${id}"]`);
+        if (box) box.replaceChildren(...[examplesView(id, Number(box.dataset.n) || N_EXAMPLES)].flat().filter(Boolean));
+      });
+      return null;
+    }
+    const here = ui.picture?.sample ?? ui.picture?.gallery;
+    list = list.filter((g) => (g.pic.sample ?? g.pic.file) !== here);
+  } else {
+    const here = ui.picture?.sample;
+    const live = ui.gallery.length === engine.pack.samples.length;
+    if (live) list = examplesFor(id).filter((g) => g.sample.clip_id !== here).map((g) => ({ pic: g.sample, map: engine.featureMap(g, id) }));
+    else {
+      const baked = ui.instant?.examples?.[id];
+      if (!baked) return null;
+      list = baked.filter(([key]) => key !== here).map(([key, b64, p]) => ({ pic: sampleOf(key), map: unq8(b64, p) }));
+    }
+    list = list.filter(({ map }) => Math.max(...map) >= 0.25 * peak);
+  }
+  list = list.slice(0, n);
   if (!list.length) return null;
+  const read = gallery.read;
   return [
-    el("p", { class: "muted small ex-cap" }, "Where it lights up by itself"),
+    el("p", { class: "cap" }, read ? `Top photos, of ${read.toLocaleString("en-GB")}` : "Where it lights up by itself"),
     el(
       "div",
-      { class: "ex-row" },
-      list.map(({ key, map }) => {
-        const sample = sampleOf(key);
+      { class: `ex-row${n > 4 ? " three" : ""}` },
+      list.map(({ pic, map }) => {
         const canvas = el("canvas", { width: engine.gridW * 10, height: engine.gridH * 10 });
-        paintLights(map, peak, canvas);
+        paintLights(map, Math.max(...map), canvas); // where, not how much: its own strongest patch is full
         return el(
           "button",
-          { class: "ex", type: "button", title: sample.credit || key, onclick: () => showSample(sample) },
-          el("img", { src: engine.base + sample.file, alt: "", loading: "lazy" }),
+          { class: "ex", type: "button", title: pic.credit || "", onclick: () => openExample(pic, id) },
+          el("img", { src: engine.base + pic.file, alt: "", loading: "lazy" }),
           canvas,
         );
       }),
     ),
   ];
+}
+
+// The pack's gallery (ii gallery-live): each switch's strongest pictures sit in one of a few
+// small files, fetched when that switch is first shown.
+const gallery = { index: null, shards: new Map(), tops: new Map() };
+
+async function galleryTops(id) {
+  const file = engine.pack.files.gallery;
+  gallery.index ||= fetch(engine.base + file).then((r) => r.json()).catch(() => null);
+  const index = await gallery.index;
+  if (!index) return gallery.tops.set(id, []).get(id);
+  gallery.read = index.read;
+  const s = id % index.shards;
+  const url = engine.base + file.replace(/[^/]*$/, "") + `top-${String(s).padStart(3, "0")}.json`;
+  if (!gallery.shards.has(s)) gallery.shards.set(s, fetch(url).then((r) => r.json()).catch(() => ({})));
+  const shard = await gallery.shards.get(s);
+  const list = (shard[id] || []).map((pic) => ({ pic, map: unq8(pic.map, pic.peak) }));
+  gallery.tops.set(id, list);
+  return list;
+}
+
+// Open an example picture with the same switch: still turned up for the word, or still open.
+async function openExample(pic, id) {
+  const opened = ui.feature === id;
+  const opts = { word: ui.word, on: opened || !ui.on.has(id) ? [] : [id] };
+  try {
+    if (pic.sample) await showSample(sampleOf(pic.sample), opts);
+    else {
+      const img = await loadImage(engine.base + pic.file);
+      stopCam();
+      ui.picture = { img, gallery: pic.file };
+      markThumb(null);
+      $("credit").textContent = pic.credit || "";
+      await showPicture(img, opts);
+    }
+  } catch (err) {
+    return flash(err.message);
+  }
+  $("stage").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (opened) await openFeature(id);
 }
 
 // A word it already sees most: the features that make it see that, to switch off.
@@ -1119,14 +1530,12 @@ function whyView(word) {
   // A switch's name is the word turning it up makes the model say on other pictures. Beside a
   // picture it is named only when that word is among what it might call this picture, so a
   // "camera" switch on a teddy bear's eye does not read as a camera in the picture.
-  const near = new Set([...seen.prob.keys()].sort((a, b) => seen.prob[b] - seen.prob[a]).slice(0, 20).map((w) => engine.vocab[w]));
-  const fits = (id) => engine.features[id]?.name && near.has(engine.features[id].name);
   const list = reasons();
-  const total = list.reduce((a, r) => a + r.score, 0) || 1;
+  const top = list[0]?.score || 1; // bars against the first, as in the list of what lights up
   const allOff = list.length && list.every((r) => ui.off.has(r.id));
   const waiting = !ui.live && ui.off.size && !ui.result;
   return [
-    el("p", { class: "muted" }, list.length ? `It already calls this “${word}”. These switches are why. Turn them off and watch it change its mind.` : `It already calls this “${word}”, and no switch on this picture stands out as the reason.`),
+    el("p", { class: "muted" }, list.length ? `These switches push it most towards “${word}”. Turn them off and watch it change its mind.` : `No switch on this picture stands out as the reason.`),
     resultCard(word),
     wordList(ui.result || seen, ui.result ? seen : null, { pick: false }),
     el(
@@ -1155,11 +1564,11 @@ function whyView(word) {
           ),
           el(
             "button",
-            { class: "fname-btn", type: "button", onclick: () => openFeature(r.id) },
-            thumbOf(r.id),
-            el("span", { class: fits(r.id) ? "fname" : "fname unnamed" }, fits(r.id) ? engine.features[r.id].name : `#${r.id}`),
+            { class: "fname-btn lit-mid", type: "button", onclick: () => openFeature(r.id) },
+            nameCell(r.id),
+            el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / top) * 100))}%` })),
           ),
-          el("span", { class: "fbar" }, el("span", { style: `width:${Math.max(4, Math.round((r.score / total) * 100))}%` })),
+          previewsOf(r.id),
         );
       }),
     ),
@@ -1182,71 +1591,78 @@ function resultCard(word) {
   const after = ui.result.prob[w];
   const n = ui.off.size;
   const control = ui.control;
-  return el(
-    "div",
-    { class: "result", "data-testid": "result" },
-    el("p", { class: "lead-num" }, `“${word}”: ${pct(before)} → ${pct(after)}`),
-    el(
-      "p",
-      { class: "muted small" },
-      `With ${n} switch${n === 1 ? "" : "es"} off. `,
-      control
-        ? `Turning off ${control.ids.length} random switch${control.ids.length === 1 ? "" : "es"} that are also on here leaves it at ${pct(control.seen.prob[w])}.`
-        : "",
-    ),
-  );
+  const sw = (k) => `${k} switch${k === 1 ? "" : "es"}`;
+  return beforeAfter({
+    word,
+    before,
+    after,
+    wasLabel: "as it is",
+    nowLabel: `${sw(n)} off`,
+    control: control ? control.seen.prob[w] : null,
+    controlLabel: control ? `${control.ids.length} random switch${control.ids.length === 1 ? "" : "es"} off instead` : "",
+    testid: "result",
+  });
 }
 
-// One switch on its own (from the list of why it sees a word): what it is, where it lights up,
-// and what turning it up on this picture does to every word.
+// One switch on its own: where it lights up on other photos, what turning it up did on other
+// pictures, and turning it up on this one beside a random switch turned up the same way.
 function featureView() {
   const id = ui.feature;
   return el(
     "div",
-    { class: "view" },
+    { class: "view", "data-testid": "feature", "data-feature": id },
     el(
       "button",
       {
         class: "back",
         type: "button",
+        "data-testid": "feature-back",
         onclick: () => {
           ui.feature = null;
-          ui.detail = null;
+          ui.detail = ui.detailControl = null;
           render();
         },
       },
-      "← Back",
+      `← ${backTo()}`,
     ),
-    el("h2", { class: "sw-name" }, `The ${switchName(id)} switch`),
+    el("h2", { class: "sw-name" }, title(id)),
+    title(id).startsWith("Switch #") ? null : el("p", { class: "lit-note" }, `#${id}`),
+    el("div", { class: "examples", id: "examples", "data-feature": id, "data-n": N_TOP }, examplesView(id, N_TOP)),
     saysView(id),
-    el("div", { class: "examples", id: "examples", "data-feature": id }, examplesView(id)),
-    el("h3", { class: "detail-h" }, "Turn it up on this picture"),
-    slider("Strength", 0, 2, 0.25, ui.strength.add, (v) => (v ? `×${v}` : "off"), (v) => (ui.strength.add = v), async () => {
-      await runDetail();
-      drawHeat();
-    }),
-    el("div", { id: "detail-words" }, ui.detail ? wordList(ui.detail, ui.state.seen, { pick: false }) : el("p", { class: "muted" }, "Running the model…")),
+    el(
+      "div",
+      { class: "section" },
+      el("p", { class: "cap" }, "Turn it up"),
+      strengthSlider(ui.strength.add, (v) => (ui.strength.add = v), () => runDetail(), "detail-strength"),
+      el("div", { id: "detail-words" }, detailView()),
+    ),
   );
 }
 
-function slider(label, min, max, step, value, fmt, set, run = runDetail) {
-  const out = el("output", {}, fmt(value));
-  const input = el("input", { type: "range", min, max, step, value, "aria-label": label });
-  let queued = false;
-  input.addEventListener("input", async () => {
-    const v = Number(input.value);
-    set(v);
-    out.textContent = fmt(v);
-    if (ui.busy) {
-      queued = true;
-      return;
-    }
-    do {
-      queued = false;
-      await run();
-    } while (queued);
-  });
-  return el("label", { class: "slider" }, el("span", {}, label), input, out);
+// The word turning the switch up moved most, before and after, the random switch beside it, and
+// every word it might call the picture.
+function detailView() {
+  if (!ui.detail) return el("p", { class: "muted" }, "Running the model…");
+  const before = ui.state.seen;
+  const after = ui.detail;
+  if (!ui.strength.add) return wordList(before, null, { pick: false });
+  let w = 0;
+  for (let i = 1; i < after.prob.length; i++) if (after.prob[i] - before.prob[i] > after.prob[w] - before.prob[w]) w = i;
+  const ctl = ui.detailControl;
+  const noMore = ctl && Math.abs(after.prob[w] - before.prob[w]) <= Math.abs(ctl.prob[w] - before.prob[w]);
+  return [
+    beforeAfter({
+      word: engine.vocab[w],
+      before: before.prob[w],
+      after: after.prob[w],
+      wasLabel: "as it is",
+      nowLabel: `turned up ×${ui.strength.add}`,
+      control: ctl ? ctl.prob[w] : null,
+      testid: "detail",
+      extra: [noMore ? el("p", { class: "atop" }, "This switch does no more than a random one here.") : null],
+    }),
+    wordList(after, before, { pick: false, skip: w }),
+  ];
 }
 
 // ------------------------------------------------------------------ gallery (in the background)
@@ -1332,6 +1748,7 @@ function wireInputs() {
     if (item) addFile(item.getAsFile());
   });
   $("cam-btn").addEventListener("click", () => (ui.cam ? snapCam() : startCam()));
+  wireStage();
   new ResizeObserver(() => drawHeat()).observe($("stage"));
 }
 
@@ -1344,7 +1761,7 @@ async function addFile(file) {
     ui.picture = { img };
     markThumb(null);
     $("credit").textContent = "";
-    await showPicture(img);
+    await showPicture(img, { word: ui.view === "word" ? ui.word : null });
   } catch (err) {
     flash(err.message);
   }
@@ -1374,7 +1791,7 @@ async function snapCam() {
   const img = await loadImage(canvas.toDataURL("image/jpeg", 0.9));
   ui.picture = { img };
   markThumb(null);
-  await showPicture(img);
+  await showPicture(img, { word: ui.view === "word" ? ui.word : null });
 }
 
 function stopCam() {

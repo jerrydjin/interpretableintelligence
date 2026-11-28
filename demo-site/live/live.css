@@ -239,7 +239,7 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 .wpct { font-size: var(--t-small); color: var(--ink-2); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 .why-head { margin-top: 28px; }
-.frow.why { grid-template-columns: auto minmax(0, 1fr) 22%; cursor: default; }
+.frow.why { grid-template-columns: auto minmax(0, 1fr) 18% auto; cursor: default; }
 .frow.why.off .fname, .frow.why.off .also { color: var(--ink-3); text-decoration: line-through; text-decoration-color: var(--line-2); }
 .fname-btn { display: flex; align-items: center; gap: 10px; min-width: 0; border: 0; background: none; padding: 0; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
 .fthumb { width: 44px; height: 44px; flex: none; border-radius: 6px; background: var(--well); }
@@ -330,3 +330,105 @@ button.wrow:hover, button.wrow:focus-visible { background: var(--well); }
 @media (max-width: 520px) { .anum { font-size: 36px; } }
 .detail-h { margin: 24px 0 6px; font-size: var(--t-body, 16px); font-family: var(--sans); font-weight: 500; letter-spacing: 0; }
 .view > .sw-name { margin-top: 12px; }
+
+/* What lights up inside: the switches on the picture, or at one spot (see.js insideView). */
+.stage.square { touch-action: manipulation; }
+.seen-line { margin: 0 0 22px; line-height: 1.6; }
+.seen-word { border: 0; background: none; padding: 0; font: inherit; color: var(--ink); cursor: pointer; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.seen-word:hover { text-decoration-color: var(--ink); }
+.seen-word small { font-size: var(--t-small); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.lit-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.lit-title { margin: 0; font-family: var(--serif); font-weight: 400; font-size: var(--t-head); letter-spacing: var(--serif-track); }
+.lit-note { margin: 4px 0 6px; min-height: 2.6em; }
+.frow.lit { grid-template-columns: minmax(0, 1fr) auto; font: inherit; color: var(--ink); }
+.lit-mid { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.frow.lit .fname.unnamed { font-variant-numeric: tabular-nums; }
+.frow.lit:hover .fname { text-decoration: underline; text-underline-offset: 3px; }
+.previews { display: flex; gap: 3px; }
+.previews canvas { width: 36px; height: 36px; border-radius: 4px; background: var(--well); }
+.more { margin-top: 6px; }
+.see-more { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.ex-row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 420px) { .previews canvas:nth-child(3) { display: none; } }
+.why-title { margin-top: 12px; }
+.frow.lit.on { background: var(--signal-wash); }
+.view > .examples + .says { margin-top: 14px; }
+
+/* One set of building blocks for every screen of the playground (see.js): a section starts with a
+   thin rule, a caption names it, headings share one serif size, a back link sits 12px above the
+   heading, and every experiment's answer is the same before → after block (.answer). */
+.section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.see-more.section, .sw.section { margin-top: 24px; padding-top: 20px; }
+.cap { margin: 0 0 8px; font-size: var(--t-small); font-weight: 500; color: var(--ink-2); letter-spacing: 0.01em; }
+.lit-title, .sw-name, .why-title { margin: 0; font-family: var(--serif); font-weight: 400; font-size: var(--t-head); letter-spacing: var(--serif-track); line-height: 1.2; }
+.view > .back + * { margin-top: 12px; }
+.view > .sw-name + .examples, .view > .why-title + p { margin-top: 14px; }
+.lit-note { margin: 4px 0 6px; min-height: 0; color: var(--ink-3); }
+.examples .cap { margin-top: 14px; }
+.answer { margin: 18px 0 4px; }
+.section > .cap + .strength { margin-top: 0; }
+.section .answer { margin-top: 16px; }
+.answer .atop { margin-top: 4px; }
+.others .cap { margin: 0 4px 0 0; }
+.frow.lit .fname.unnamed, .frow.why .fname.unnamed { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.says { margin: 14px 0 0; }
+.frow.why { grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; }
+.frow.why .fname-btn.lit-mid { align-items: stretch; flex-direction: column; gap: 7px; }
+.frow.why.off .fbar span { background: var(--line-2); }
+.sw-name + .examples .cap { margin-top: 12px; }
+.examples + .says { margin-top: 12px; }
+@media (max-width: 520px) { .wrow { grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) 6.2rem; gap: 10px; } }
+/* The panel's own padding is the only space above and below its content, the same on every side. */
+.see .panel { padding: 22px; }
+.see #panel-body > .view { margin-top: 0; }
+.see #panel-body > .view > :last-child { margin-bottom: 0; }
+
+/* No blue: words and controls in the site's ink, activations in ember. */
+.see input[type="range"] { accent-color: var(--ink); }
+.see .wbar .now { background: var(--ink-2); }
+.see .curve-svg .now-line { stroke: var(--ink-3); }
+/* A word's jump: hollow dot where it was, filled where it is, the jump between them. */
+.wtrack { position: relative; height: 12px; }
+.wtrack::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 2px; border-radius: 999px; background: var(--well); }
+.wtrack .jump { position: absolute; top: 4px; height: 4px; border-radius: 999px; background: var(--line-2); }
+.wtrack.up .jump { background: var(--signal); }
+.wtrack .dot { position: absolute; top: 1px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; box-sizing: border-box; }
+.wtrack .dot.now { background: var(--ink); }
+.wtrack .dot.was { background: var(--sheet); border: 1.5px solid var(--ink-3); }
+.wtrack.up .dot.now { background: var(--signal); }
+.wpct small { font-size: 11px; margin-left: 2px; }
+.wpct small.up { color: var(--signal); }
+.wpct small.down { color: var(--ink-3); }
+
+/* Make it see: a heading, a real text box with its button, and a few words to try as pills. */
+.see-label { display: block; font-family: var(--serif); font-size: 24px; letter-spacing: var(--serif-track); line-height: 1.2; margin: 0 0 12px; }
+.see-field { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 14px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--sheet); }
+.see-field:focus-within { border-color: var(--ink-3); }
+.see-field .see-input { flex: 1 1 auto; min-width: 0; padding: 8px 0; border: 0; font-family: var(--sans, inherit); font-size: 16px; color: var(--ink); }
+.see-field .see-input::placeholder { color: var(--ink-3); }
+.see-go { flex: none; padding: 8px 16px; border: 0; border-radius: 999px; background: var(--ink); color: var(--sheet); font: inherit; font-size: var(--t-small); cursor: pointer; }
+.see-go:hover { opacity: 0.88; }
+.see-head .chips.pills { gap: 8px; margin: 12px 0 0; }
+.chips.pills .chip { padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; font-size: var(--t-small); }
+.chips.pills .chip:hover { border-color: var(--ink-3); }
+/* Tighter between the list's "Show more" and the next section. */
+.view > #active + .see-more, .see-more.section { margin-top: 16px; }
+.more { margin: 6px 0 0; }
+.view .back.more { margin: 6px 0 0; }
+.chips.pills.others { align-items: center; gap: 8px; } .chips.pills.others .cap { margin-right: 4px; }
+/* The fine print folds away under one quiet line. */
+.see .how { margin-top: 32px; padding-top: 12px; }
+.about summary { cursor: pointer; color: var(--ink-3); list-style: none; }
+.about summary::-webkit-details-marker { display: none; }
+.about summary::after { content: " +"; }
+.about[open] summary::after { content: " −"; }
+.about summary:hover { color: var(--ink-2); }
+.about p { margin: 8px 0 0; max-width: 90ch; }
+/* The picture's credit: a quiet tag in its corner that opens on a click. */
+.credit-tag { position: absolute; right: 10px; bottom: 10px; z-index: 3; max-width: calc(100% - 20px); display: flex; flex-direction: column; align-items: flex-end; font-size: 12px; }
+.credit-tag:has(#credit:empty) { display: none; }
+.credit-tag summary { list-style: none; cursor: pointer; padding: 3px 9px; border-radius: 999px; background: rgb(0 0 0 / 0.45); color: #fff; opacity: 0.75; }
+.credit-tag summary::-webkit-details-marker { display: none; }
+.credit-tag summary:hover, .credit-tag[open] summary { opacity: 1; }
+.credit-tag #credit { order: -1; margin-bottom: 6px; padding: 8px 10px; border-radius: 10px; background: rgb(0 0 0 / 0.7); color: #fff; line-height: 1.4; overflow-wrap: anywhere; }
+.fname .fnum { margin-left: 6px; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }

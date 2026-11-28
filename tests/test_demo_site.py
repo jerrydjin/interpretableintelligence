@@ -134,9 +134,10 @@ def test_home_leads_with_the_switch():
     pack_dir = ROOT / "live" / "packs" / HERO_PACK
     samples = json.loads((pack_dir / "pack.json").read_text(encoding="utf-8"))["samples"]
     assert HERO_SAMPLE in {s["clip_id"] for s in samples}
-    assert 'href="/live/" data-testid="hero-picture"' in page
     flip = json.loads((pack_dir / "instant.json").read_text(encoding="utf-8"))["samples"][HERO_SAMPLE]["flip"]
     word = json.loads((pack_dir / "vocab.json").read_text(encoding="utf-8"))[flip["word"]]
+    # The picture opens the playground on that same switch; the button opens it on what lights up.
+    assert f'href="/live/#p={HERO_SAMPLE}&amp;w={word}" data-testid="hero-picture"' in page
     w = str(flip["word"])
     assert f"Chance it calls this “{word}”" in text
     for value in (flip["prob"][w], flip["boost"][w], flip["control"]["prob"][w]):
